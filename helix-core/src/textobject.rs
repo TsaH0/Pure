@@ -228,7 +228,12 @@ fn textobject_pair_surround_impl(
     count: usize,
 ) -> Range {
     let pair_pos = match ch {
-        Some(ch) => surround::find_nth_pairs_pos(syntax, slice, ch, range, count),
+        Some(ch) => surround::find_nth_pairs_pos(syntax, slice, ch, range, count).or_else(|_| {
+            if slice.get_char(range.cursor(slice)) == Some(ch) {
+                return Err(surround::Error::PairNotFound);
+            }
+            surround::find_nth_pairs_pos_closest(syntax, slice, ch, range, count)
+        }),
         None => surround::find_nth_closest_pairs_pos(syntax, slice, range, count),
     };
     pair_pos
@@ -507,11 +512,11 @@ mod test {
             (
                 "simple (single) surround pairs",
                 vec![
-                    (3, Inside, (3, 3), '(', 1),
+                    (3, Inside, (8, 14), '(', 1),
                     (7, Inside, (8, 14), ')', 1),
                     (10, Inside, (8, 14), '(', 1),
                     (14, Inside, (8, 14), ')', 1),
-                    (3, Around, (3, 3), '(', 1),
+                    (3, Around, (7, 15), '(', 1),
                     (7, Around, (7, 15), ')', 1),
                     (10, Around, (7, 15), '(', 1),
                     (14, Around, (7, 15), ')', 1),
@@ -520,11 +525,11 @@ mod test {
             (
                 "samexx 'single' surround pairs",
                 vec![
-                    (3, Inside, (3, 3), '\'', 1),
+                    (3, Inside, (8, 14), '\'', 1),
                     (7, Inside, (7, 7), '\'', 1),
                     (10, Inside, (8, 14), '\'', 1),
                     (14, Inside, (14, 14), '\'', 1),
-                    (3, Around, (3, 3), '\'', 1),
+                    (3, Around, (7, 15), '\'', 1),
                     (7, Around, (7, 7), '\'', 1),
                     (10, Around, (7, 15), '\'', 1),
                     (14, Around, (14, 14), '\'', 1),

@@ -296,6 +296,73 @@ fn find_nth_close_pair(
     Some(pos)
 }
 
+/// Find the nearest pair for an explicit delimiter, even when the cursor is
+/// outside the pair. This is used by `mi`/`ma` so they behave like Vim text
+/// objects when invoked immediately before a pair.
+pub fn find_nth_pairs_pos_closest(
+    _syntax: Option<&Syntax>,
+    text: RopeSlice,
+    ch: char,
+    range: Range,
+    n: usize,
+) -> Result<(usize, usize)> {
+    let (open, close) = get_pair(ch);
+    let cursor = range.cursor(text);
+    let mut pairs = Vec::new();
+
+    if open == close {
+        let mut quote = None;
+        for (pos, current) in text.chars().enumerate() {
+            if current != open {
+                continue;
+            }
+            if let Some(start) = quote.take() {
+                pairs.push((start, pos));
+            } else {
+                quote = Some(pos);
+            }
+        }
+    } else {
+        let mut stack = Vec::new();
+        for (pos, current) in text.chars().enumerate() {
+            if current == open {
+                stack.push(pos);
+            } else if current == close {
+                if let Some(start) = stack.pop() {
+                    pairs.push((start, pos));
+                }
+            }
+        }
+    }
+
+    let mut ranked: Vec<_> = pairs
+        .into_iter()
+        .map(|(start, end)| {
+            let contains = start <= cursor && cursor <= end;
+            let distance = if contains {
+                0
+            } else if cursor < start {
+                start - cursor
+            } else {
+                cursor - end
+            };
+            (contains, distance, end - start, start, end)
+        })
+        .collect();
+    ranked
+        .sort_by_key(|(contains, distance, span, start, _)| (!*contains, *distance, *span, *start));
+    let (_, _, _, start, end) = ranked
+        .get(n.saturating_sub(1))
+        .copied()
+        .ok_or(Error::PairNotFound)?;
+
+    if range.direction() == Direction::Forward {
+        Ok((start, end))
+    } else {
+        Ok((end, start))
+    }
+}
+
 /// Find position of surround characters around every cursor. Returns None
 /// if any positions overlap. Note that the positions are in a flat Vec.
 /// Use get_surround_pos().chunks(2) to get matching pairs of surround positions.
@@ -336,6 +403,16 @@ mod test {
 
     use ropey::Rope;
     use smallvec::SmallVec;
+
+    #[test]
+    fn test_find_nth_pairs_pos_closest_before_pair() {
+        let doc = Rope::from("before (inside) after");
+        let range = Range::point(0);
+        assert_eq!(
+            find_nth_pairs_pos_closest(None, doc.slice(..), '(', range, 1),
+            Ok((7, 14))
+        );
+    }
 
     #[test]
     fn test_get_surround_pos() {
