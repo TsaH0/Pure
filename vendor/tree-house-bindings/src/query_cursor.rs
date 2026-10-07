@@ -144,7 +144,23 @@ impl InactiveQueryCursor {
         };
         this.set_byte_range(range);
         this.set_match_limit(limit);
+        // cursors are reused through a cache so reset any start depth limit from earlier use
+        this.set_max_start_depth(u32::MAX);
         this
+    }
+
+    /// Set the maximum start depth for a query cursor.
+    ///
+    /// This prevents cursors from exploring children nodes at a certain depth.
+    /// Note if a pattern includes many children, then they will still be checked.
+    ///
+    /// A depth of `0` restricts matches to patterns which start at the node the query is
+    /// executed on. `u32::MAX` (the default) removes the limit.
+    #[doc(alias = "ts_query_cursor_set_max_start_depth")]
+    pub fn set_max_start_depth(&mut self, max_start_depth: u32) {
+        unsafe {
+            ts_query_cursor_set_max_start_depth(self.ptr.as_ptr(), max_start_depth);
+        }
     }
 
     /// Return the maximum number of in-progress matches for this cursor.
@@ -344,6 +360,7 @@ extern "C" {
     /// Set the range of bytes or (row, column) positions in which the query
     /// will be executed.
     fn ts_query_cursor_set_byte_range(self_: *mut QueryCursorData, start_byte: u32, end_byte: u32);
+    fn ts_query_cursor_set_max_start_depth(self_: *mut QueryCursorData, max_start_depth: u32);
 
 }
 

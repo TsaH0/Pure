@@ -38,6 +38,9 @@ impl Syntax {
                 // Skip re-parsing and querying layers without any ranges.
                 continue;
             }
+            // The previous tree (with the edits applied) is used to find which parts of the
+            // tree changed so that the injection query only needs to be re-run there.
+            let mut old_tree = None;
             if let Some(tree) = &mut layer_data.parse_tree {
                 if layer_data.flags.moved || layer_data.flags.modified {
                     for edit in edits.iter().rev() {
@@ -48,6 +51,7 @@ impl Syntax {
                     }
                 }
                 if layer_data.flags.modified {
+                    old_tree = Some(tree.clone());
                     // Re-parse the tree.
                     layer_data.parse(&mut parser, source, timeout, loader)?;
                 }
@@ -55,8 +59,10 @@ impl Syntax {
                 // always parse if this layer has never been parsed before
                 layer_data.parse(&mut parser, source, timeout, loader)?;
             }
-            self.run_injection_query(layer, edits, source, loader, |layer| queue.push(layer));
-            self.run_local_query(layer, source, loader);
+            self.run_injection_query(layer, edits, old_tree.as_ref(), source, loader, |layer| {
+                queue.push(layer)
+            });
+            self.run_local_query(layer, edits, old_tree.as_ref(), source, loader);
         }
 
         if self.layer(self.root).parse_tree.is_none() {
@@ -69,8 +75,11 @@ impl Syntax {
 
     /// Reset all `LayerUpdateFlags` and remove all untouched layers
     fn prune_dead_layers(&mut self) {
-        self.layers
-            .retain(|_, layer| take(&mut layer.flags).touched);
+        self.layers.retain(|_, layer| {
+            let flags = take(&mut layer.flags);
+            layer.flags.had_root_injection_match = flags.had_root_injection_match;
+            flags.touched
+        });
     }
 }
 
@@ -129,4 +138,7 @@ pub(crate) struct LayerUpdateFlags {
     pub modified: bool,
     pub moved: bool,
     pub touched: bool,
+    /// Whether an injection pattern matched starting at the root node of the layer during the
+    /// last update. Unlike the other flags this persists across updates.
+    pub had_root_injection_match: bool,
 }

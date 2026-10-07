@@ -1,8 +1,9 @@
+use std::ffi::c_void;
 use std::fmt;
 use std::ptr::NonNull;
 
 use crate::node::{Node, NodeRaw};
-use crate::{Point, TreeCursor};
+use crate::{Point, Range, TreeCursor};
 
 // opaque pointers
 pub(super) enum SyntaxTreeData {}
@@ -30,6 +31,26 @@ impl Tree {
 
     pub fn walk(&self) -> TreeCursor<'_> {
         self.root_node().walk()
+    }
+
+    /// Compares this (old, already edited) tree to `new_tree` and returns the ranges whose
+    /// syntactic structure changed. `self` must have been edited with [`Tree::edit`] to match
+    /// the source used to parse `new_tree`.
+    ///
+    /// Note that changes which only alter the text of a node (without altering the structure
+    /// of the tree) are *not* reported, callers should account for the edited ranges
+    /// themselves.
+    pub fn changed_ranges(&self, new_tree: &Tree) -> Vec<Range> {
+        unsafe {
+            let mut len = 0u32;
+            let ptr = ts_tree_get_changed_ranges(self.ptr, new_tree.ptr, &mut len);
+            if ptr.is_null() {
+                return Vec::new();
+            }
+            let ranges = std::slice::from_raw_parts(ptr, len as usize).to_vec();
+            (ts_current_free)(ptr as *mut c_void);
+            ranges
+        }
     }
 }
 
@@ -87,6 +108,15 @@ extern "C" {
     fn ts_tree_copy(self_: NonNull<SyntaxTreeData>) -> NonNull<SyntaxTreeData>;
     /// Delete the syntax tree, freeing all of the memory that it used.
     fn ts_tree_delete(self_: NonNull<SyntaxTreeData>);
+    /// Compare an old edited syntax tree to a new syntax tree representing the same document,
+    /// returning an array of ranges whose syntactic structure has changed. The returned array
+    /// is allocated with `ts_current_free`'s allocator and must be freed by the caller.
+    fn ts_tree_get_changed_ranges(
+        old_tree: NonNull<SyntaxTreeData>,
+        new_tree: NonNull<SyntaxTreeData>,
+        length: *mut u32,
+    ) -> *mut Range;
+    static ts_current_free: unsafe extern "C" fn(*mut c_void);
     /// Get the root node of the syntax tree.
     fn ts_tree_root_node<'tree>(self_: NonNull<SyntaxTreeData>) -> NodeRaw;
     /// Edit the syntax tree to keep it in sync with source code that has been

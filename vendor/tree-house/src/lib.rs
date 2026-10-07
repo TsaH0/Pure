@@ -1,4 +1,4 @@
-use locals::Locals;
+use locals::{LocalCaptures, Locals};
 use ropey::RopeSlice;
 
 use slab::Slab;
@@ -9,7 +9,9 @@ use std::time::Duration;
 use tree_sitter::{IncompatibleGrammarError, Node, Tree};
 
 pub use crate::config::{read_query, LanguageConfig, LanguageLoader};
-pub use crate::injections_query::{InjectionLanguageMarker, InjectionsQuery};
+pub use crate::injections_query::{
+    set_incremental_injections, InjectionLanguageMarker, InjectionsQuery,
+};
 use crate::parse::LayerUpdateFlags;
 pub use crate::query_iter::{CapturedMatch, QueryMatchIter, QueryMatchIterEvent};
 pub use crate::tree_cursor::TreeCursor;
@@ -108,6 +110,7 @@ impl Syntax {
             injections: Vec::new(),
             parent: None,
             locals: Locals::default(),
+            local_captures: None,
         };
         let mut layers = Slab::with_capacity(32);
         let root = layers.insert(root_layer);
@@ -224,6 +227,9 @@ pub struct LayerData {
     flags: LayerUpdateFlags,
     parent: Option<Layer>,
     locals: Locals,
+    /// The captures of the last run of the locals query, used to only re-run the query over
+    /// the changed parts of the document. `None` if they are not available.
+    local_captures: Option<LocalCaptures>,
 }
 
 /// This PartialEq implementation only checks if that
@@ -255,6 +261,12 @@ impl LayerData {
     /// returns `Some` when passed the layer's language in `LanguageLoader::get_config`.
     pub fn tree(&self) -> Option<&Tree> {
         self.parse_tree.as_ref()
+    }
+
+    /// A canonical textual representation of the locals of this layer, used in tests.
+    #[doc(hidden)]
+    pub fn debug_locals(&self) -> String {
+        self.locals.debug_canonical()
     }
 
     /// Returns the injection range **within this layers** that contains `idx`.
@@ -354,6 +366,7 @@ mod unit_tests {
             flags: LayerUpdateFlags::default(),
             parent: None,
             locals: Locals::default(),
+            local_captures: None,
         }
     }
 

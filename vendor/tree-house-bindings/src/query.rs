@@ -285,6 +285,20 @@ impl Query {
         unsafe { ts_query_start_byte_for_pattern(self.raw, pattern.0) as usize }
     }
 
+    /// Check if the given pattern in the query has a single root node.
+    ///
+    /// Patterns made of several sibling nodes (for example `((a) . (b))`) are not rooted.
+    #[doc(alias = "ts_query_is_pattern_rooted")]
+    #[must_use]
+    pub fn is_pattern_rooted(&self, pattern: Pattern) -> bool {
+        assert!(
+            pattern.0 < self.patterns.len() as u32,
+            "Pattern index is {pattern:?} but the pattern count is {}",
+            self.patterns.len(),
+        );
+        unsafe { ts_query_is_pattern_rooted(self.raw, pattern.0) }
+    }
+
     /// Get the number of patterns in the query.
     #[must_use]
     pub fn pattern_count(&self) -> usize {
@@ -503,7 +517,7 @@ extern "C" {
     /// source code strings.
     fn ts_query_start_byte_for_pattern(query: NonNull<QueryData>, pattern_index: u32) -> u32;
 
-    // fn ts_query_is_pattern_rooted(query: NonNull<QueryData>, pattern_index: u32) -> bool;
+    fn ts_query_is_pattern_rooted(query: NonNull<QueryData>, pattern_index: u32) -> bool;
     // fn ts_query_is_pattern_non_local(query: NonNull<QueryData>, pattern_index: u32) -> bool;
     // fn ts_query_is_pattern_guaranteed_at_step(query: NonNull<QueryData>, byte_offset: u32) -> bool;
     /// Get the name and length of one of the query's captures, or one of the
