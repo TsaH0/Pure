@@ -20,6 +20,7 @@ members = [
 default-members = [
   "helix-term"
 ]
+exclude = ["vendor"]
 
 [profile.release]
 lto = "thin"
@@ -72,3 +73,9 @@ repository = "https://github.com/helix-editor/helix"
 homepage = "https://helix-editor.com"
 license = "MPL-2.0"
 rust-version = "1.90"
+
+# Local fork of tree-house with incremental injection/locals queries.
+# See vendor/README.md.
+[patch.crates-io]
+tree-house = { path = "vendor/tree-house" }
+tree-house-bindings = { path = "vendor/tree-house-bindings" }
