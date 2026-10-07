@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::mem::replace;
+use std::sync::atomic::{self, AtomicBool};
 
 #[cfg(test)]
 mod test;
@@ -169,10 +170,27 @@ impl Default for TextFormat {
     }
 }
 
+static SKIP_PLAIN_TEXT: AtomicBool = AtomicBool::new(true);
+
+/// Enables or disables [`DocumentFormatter::skip_plain_text`]. When disabled the function never
+/// skips any text.
+///
+/// This is enabled by default and only exists to compare against the behaviour of traversing
+/// every grapheme in tests and benchmarks.
+#[doc(hidden)]
+pub fn set_skip_plain_text(enabled: bool) {
+    SKIP_PLAIN_TEXT.store(enabled, atomic::Ordering::Relaxed);
+}
+
 #[derive(Debug)]
 pub struct DocumentFormatter<'t> {
     text_fmt: &'t TextFormat,
     annotations: &'t TextAnnotations<'t>,
+
+    /// The text starting at the start of the block
+    block_text: RopeSlice<'t>,
+    /// The char index of the start of the block
+    block_char_idx: usize,
 
     /// The visual position at the end of the last yielded word boundary
     visual_pos: Position,
@@ -220,6 +238,8 @@ impl<'t> DocumentFormatter<'t> {
             text_fmt,
             annotations,
             visual_pos: Position { row: 0, col: 0 },
+            block_text: text.slice(block_char_idx..),
+            block_char_idx,
             graphemes: text.slice(block_char_idx..).graphemes(),
             char_pos: block_char_idx,
             exhausted: false,
@@ -417,6 +437,72 @@ impl<'t> DocumentFormatter<'t> {
                 return;
             }
         }
+    }
+
+    /// Skips over plain text that would be yielded next, without yielding it. Text is only
+    /// skipped when that results in exactly the same state as yielding it grapheme by grapheme:
+    ///
+    /// * softwrap is disabled,
+    /// * the text consists of printable ASCII characters (each is a single grapheme with a
+    ///   width of one) and the character after it is ASCII too (a non-ASCII character like a
+    ///   combining mark could extend the last grapheme),
+    /// * there are no annotations within the text.
+    ///
+    /// At most `max_chars` chars are skipped and the next visual column (see
+    /// [`DocumentFormatter::next_visual_pos`]) does not exceed `max_col`.
+    ///
+    /// Returns the number of skipped chars. Note that callers must not need to observe the
+    /// skipped graphemes.
+    pub fn skip_plain_text(&mut self, max_chars: usize, max_col: usize) -> usize {
+        if !SKIP_PLAIN_TEXT.load(atomic::Ordering::Relaxed)
+            || self.text_fmt.soft_wrap
+            || self.exhausted
+            || self
+                .inline_annotation_graphemes
+                .as_ref()
+                .is_some_and(|(graphemes, _)| graphemes.clone().next().is_some())
+        {
+            return 0;
+        }
+        let max_chars = max_chars
+            .min(max_col.saturating_sub(self.visual_pos.col))
+            .min(
+                self.annotations
+                    .next_annotation_char_idx()
+                    .saturating_sub(self.char_pos),
+            );
+        // Very short runs are not worth re-creating the graphemes iterator.
+        if max_chars < 16 {
+            return 0;
+        }
+
+        let block_byte = self
+            .block_text
+            .char_to_byte(self.char_pos - self.block_char_idx);
+        let mut bytes = self.block_text.bytes_at(block_byte).peekable();
+        let mut skipped = 0;
+        while skipped < max_chars {
+            let Some(&byte) = bytes.peek() else {
+                break;
+            };
+            if !(b' '..=b'~').contains(&byte) {
+                break;
+            }
+            bytes.next();
+            if bytes.peek().is_some_and(|next| !next.is_ascii()) {
+                break;
+            }
+            skipped += 1;
+        }
+        if skipped == 0 {
+            return 0;
+        }
+
+        self.char_pos += skipped;
+        self.visual_pos.col += skipped;
+        // all skipped chars are ASCII so the byte and char offsets match
+        self.graphemes = self.block_text.graphemes_at(block_byte + skipped);
+        skipped
     }
 
     /// returns the char index at the end of the last yielded grapheme

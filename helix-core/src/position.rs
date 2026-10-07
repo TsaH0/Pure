@@ -158,7 +158,12 @@ pub fn visual_offset_from_block(
         DocumentFormatter::new_at_prev_checkpoint(text, text_fmt, annotations, anchor);
     let block_start = formatter.next_char_pos();
 
-    while let Some(grapheme) = formatter.next() {
+    loop {
+        // the graphemes before `pos` don't need to be inspected
+        formatter.skip_plain_text(pos.saturating_sub(formatter.next_char_pos()), usize::MAX);
+        let Some(grapheme) = formatter.next() else {
+            break;
+        };
         last_pos = grapheme.visual_pos;
         if formatter.next_char_pos() > pos {
             return (grapheme.visual_pos, block_start);
@@ -205,9 +210,26 @@ pub fn visual_offset_from_anchor(
     if pos < block_start {
         return Err(VisualOffsetError::PosBeforeAnchorRow);
     }
+    // the row of the last yielded grapheme
+    let mut last_row = None;
 
-    while let Some(grapheme) = formatter.next() {
+    loop {
+        // Graphemes before `pos` (and before `anchor` while the row of the anchor is not
+        // known) don't need to be inspected. The first grapheme of each row must be inspected
+        // to check the row limit.
+        if last_row == Some(formatter.next_visual_pos().row) {
+            let limit = if anchor_line.is_none() {
+                pos.min(anchor)
+            } else {
+                pos
+            };
+            formatter.skip_plain_text(limit.saturating_sub(formatter.next_char_pos()), usize::MAX);
+        }
+        let Some(grapheme) = formatter.next() else {
+            break;
+        };
         last_pos = grapheme.visual_pos;
+        last_row = Some(grapheme.visual_pos.row);
 
         if formatter.next_char_pos() > pos {
             if let Some(anchor_line) = anchor_line {
@@ -421,7 +443,33 @@ pub fn char_idx_at_visual_block_offset(
     let mut last_char_idx = formatter.next_char_pos();
     let mut found_non_virtual_on_row = false;
     let mut last_row = 0;
-    for grapheme in &mut formatter {
+    // the row of the last yielded grapheme
+    let mut last_yielded_row = None;
+    loop {
+        // Skip the graphemes on the current row before `column` (or all of them on rows before
+        // `row`). The first grapheme of each row must be inspected.
+        let current_row = formatter.next_visual_pos().row;
+        if last_yielded_row == Some(current_row) && current_row <= row {
+            let max_col = if current_row == row {
+                column
+            } else {
+                usize::MAX
+            };
+            let skipped = formatter.skip_plain_text(usize::MAX, max_col);
+            if skipped != 0 {
+                // the skipped graphemes are not virtual
+                last_char_idx = formatter.next_char_pos() - 1;
+                if current_row == row {
+                    found_non_virtual_on_row = true;
+                } else {
+                    last_row = current_row;
+                }
+            }
+        }
+        let Some(grapheme) = formatter.next() else {
+            break;
+        };
+        last_yielded_row = Some(grapheme.visual_pos.row);
         match grapheme.visual_pos.row.cmp(&row) {
             Ordering::Equal => {
                 if grapheme.visual_pos.col + grapheme.width() > column {

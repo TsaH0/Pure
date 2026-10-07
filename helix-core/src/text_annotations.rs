@@ -390,6 +390,28 @@ impl<'a> TextAnnotations<'a> {
         overlay
     }
 
+    /// Returns the smallest char index at which an annotation (inline annotation, overlay or
+    /// line annotation anchor) still needs to be processed during the current traversal.
+    pub(crate) fn next_annotation_char_idx(&self) -> usize {
+        let inline_annotations = self.inline_annotations.iter().filter_map(|layer| {
+            let annotation = layer.annotations.get(layer.current_index.get())?;
+            Some(annotation.char_idx)
+        });
+        let overlays = self.overlays.iter().filter_map(|layer| {
+            let overlay = layer.annotations.get(layer.current_index.get())?;
+            Some(overlay.char_idx)
+        });
+        let line_annotations = self
+            .line_annotations
+            .iter()
+            .map(|(next_anchor, _)| next_anchor.get());
+        inline_annotations
+            .chain(overlays)
+            .chain(line_annotations)
+            .min()
+            .unwrap_or(usize::MAX)
+    }
+
     pub(crate) fn process_virtual_text_anchors(&self, grapheme: &FormattedGrapheme) {
         for (next_anchor, layer) in &self.line_annotations {
             loop {

@@ -91,6 +91,12 @@ fn setup_integration_logging() {
 }
 
 impl Application {
+    /// The contents of the terminal, used by integration tests to inspect what is rendered.
+    #[cfg(feature = "integration")]
+    pub fn terminal_buffer(&self) -> &tui::buffer::Buffer {
+        self.terminal.backend().buffer()
+    }
+
     pub fn new(
         args: Args,
         config: Config,
