@@ -141,11 +141,11 @@ async fn skipping_plain_text_renders_the_same() -> anyhow::Result<()> {
         "jjjglaabc<esc>",
         "jA end<esc>",
     ];
-    for soft_wrap in [false, true] {
-        for keys in keys {
-            assert_same_rendering(soft_wrap, keys).await?;
-        }
+    for keys in keys {
+        assert_same_rendering(false, keys).await?;
     }
+    // Plain text is never skipped when softwrapping, check that nothing changes there either.
+    assert_same_rendering(true, "jgl").await?;
     Ok(())
 }
 
@@ -172,13 +172,14 @@ async fn skipping_plain_text_renders_highlighted_code_the_same() -> anyhow::Resu
         "j6000l",
         "jglA, 1<esc>",
     ];
-    for soft_wrap in [false, true] {
-        for keys in lua_keys {
-            assert_same_rendering_of(&long_lua_lines(), "lua", soft_wrap, keys).await?;
-        }
-        for keys in rust_keys {
-            assert_same_rendering_of(&long_rust_lines(), "rs", soft_wrap, keys).await?;
-        }
+    for keys in lua_keys {
+        assert_same_rendering_of(&long_lua_lines(), "lua", false, keys).await?;
     }
+    for keys in rust_keys {
+        assert_same_rendering_of(&long_rust_lines(), "rs", false, keys).await?;
+    }
+    // Plain text is never skipped when softwrapping, check that nothing changes there either.
+    assert_same_rendering_of(&long_lua_lines(), "lua", true, "j3000l").await?;
+    assert_same_rendering_of(&long_rust_lines(), "rs", true, "3000l").await?;
     Ok(())
 }
