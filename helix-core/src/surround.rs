@@ -296,9 +296,21 @@ fn find_nth_close_pair(
     Some(pos)
 }
 
-/// Find the nearest pair for an explicit delimiter, even when the cursor is
-/// outside the pair. This is used by `mi`/`ma` so they behave like Vim text
-/// objects when invoked immediately before a pair.
+/// Find the pair of `ch` used by `mi`/`ma`, even when the cursor is outside
+/// the pair, so they behave like Vim/targets.vim text objects.
+///
+/// Resolution order:
+/// 1. The (n-th) pair enclosing the cursor.
+/// 2. A pair on the cursor's line: the nearest one after the cursor, then the
+///    nearest one before it.
+/// 3. The nearest pair anywhere else in the document.
+///
+/// Quote-like delimiters (where open == close, e.g. `"`, `'`, `` ` ``) are
+/// paired left to right from the start of the cursor's line, skipping
+/// backslash-escaped quotes. This way the closing quote of one string and the
+/// opening quote of the next string are never treated as a pair, and a pair is
+/// never formed from quotes on different lines when the cursor's line has a
+/// complete pair of its own.
 pub fn find_nth_pairs_pos_closest(
     _syntax: Option<&Syntax>,
     text: RopeSlice,
@@ -306,61 +318,208 @@ pub fn find_nth_pairs_pos_closest(
     range: Range,
     n: usize,
 ) -> Result<(usize, usize)> {
+    let n = n.max(1);
     let (open, close) = get_pair(ch);
     let cursor = range.cursor(text);
-    let mut pairs = Vec::new();
-
-    if open == close {
-        let mut quote = None;
-        for (pos, current) in text.chars().enumerate() {
-            if current != open {
-                continue;
-            }
-            if let Some(start) = quote.take() {
-                pairs.push((start, pos));
-            } else {
-                quote = Some(pos);
-            }
-        }
-    } else {
-        let mut stack = Vec::new();
-        for (pos, current) in text.chars().enumerate() {
-            if current == open {
-                stack.push(pos);
-            } else if current == close {
-                if let Some(start) = stack.pop() {
-                    pairs.push((start, pos));
-                }
-            }
-        }
+    if text.len_chars() == 0 {
+        return Err(Error::PairNotFound);
     }
 
-    let mut ranked: Vec<_> = pairs
-        .into_iter()
-        .map(|(start, end)| {
-            let contains = start <= cursor && cursor <= end;
-            let distance = if contains {
-                0
-            } else if cursor < start {
-                start - cursor
-            } else {
-                cursor - end
-            };
-            (contains, distance, end - start, start, end)
-        })
-        .collect();
-    ranked
-        .sort_by_key(|(contains, distance, span, start, _)| (!*contains, *distance, *span, *start));
-    let (_, _, _, start, end) = ranked
-        .get(n.saturating_sub(1))
-        .copied()
-        .ok_or(Error::PairNotFound)?;
+    let (start, end) = if open == close {
+        find_closest_quote_pair(text, open, cursor, n)
+    } else {
+        find_closest_bracket_pair(text, open, close, range, cursor, n)
+    }
+    .ok_or(Error::PairNotFound)?;
 
     if range.direction() == Direction::Forward {
         Ok((start, end))
     } else {
         Ok((end, start))
     }
+}
+
+/// Returns true if the char at `pos` is preceded by an odd number of
+/// backslashes, i.e. it is escaped.
+fn is_escaped(text: RopeSlice, pos: usize) -> bool {
+    let mut backslashes = 0;
+    let mut chars = text.chars_at(pos);
+    while chars.prev() == Some('\\') {
+        backslashes += 1;
+    }
+    backslashes % 2 == 1
+}
+
+/// Pair up unescaped occurrences of `quote` in `text[from..to]`, left to right.
+fn quote_pairs_in(text: RopeSlice, quote: char, from: usize, to: usize) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    let mut pending = None;
+    for (offset, current) in text.slice(from..to).chars().enumerate() {
+        let pos = from + offset;
+        if current != quote || is_escaped(text, pos) {
+            continue;
+        }
+        match pending.take() {
+            Some(start) => pairs.push((start, pos)),
+            None => pending = Some(pos),
+        }
+    }
+    pairs
+}
+
+/// Ranking key for a candidate pair relative to the cursor: enclosing pairs
+/// first (innermost first), then pairs after the cursor, then pairs before it,
+/// each ordered by distance.
+fn pair_rank(cursor: usize, (start, end): (usize, usize)) -> (u8, usize, usize) {
+    if start <= cursor && cursor <= end {
+        (0, end - start, start)
+    } else if cursor < start {
+        (1, start - cursor, start)
+    } else {
+        (2, cursor - end, start)
+    }
+}
+
+/// Like [`pair_rank`] but without a forward/backward preference, used when
+/// searching beyond the cursor's line.
+fn pair_rank_by_distance(cursor: usize, (start, end): (usize, usize)) -> (u8, usize, u8, usize) {
+    match pair_rank(cursor, (start, end)) {
+        (0, span, start) => (0, span, 0, start),
+        (dir, distance, start) => (1, distance, dir, start),
+    }
+}
+
+/// Find the `n`-th unescaped `quote` strictly before (`Backward`) or after
+/// (`Forward`) `pos`.
+fn find_nth_unescaped_quote(
+    text: RopeSlice,
+    quote: char,
+    mut pos: usize,
+    n: usize,
+    direction: Direction,
+) -> Option<usize> {
+    for _ in 0..n {
+        loop {
+            pos = match direction {
+                Direction::Backward => pos.checked_sub(1)?,
+                Direction::Forward => Some(pos + 1).filter(|&p| p < text.len_chars())?,
+            };
+            if text.char(pos) == quote && !is_escaped(text, pos) {
+                break;
+            }
+        }
+    }
+    Some(pos)
+}
+
+fn find_closest_quote_pair(
+    text: RopeSlice,
+    quote: char,
+    cursor: usize,
+    n: usize,
+) -> Option<(usize, usize)> {
+    // Quotes can't be told apart from each other, so a count expands outwards
+    // from the closest pair (`2mi'` on `'a 'b' c'` selects `a 'b' c`).
+    let (start, end) = find_closest_quote_pair_1(text, quote, cursor)?;
+    if n == 1 {
+        return Some((start, end));
+    }
+    Some((
+        find_nth_unescaped_quote(text, quote, start, n - 1, Direction::Backward)?,
+        find_nth_unescaped_quote(text, quote, end, n - 1, Direction::Forward)?,
+    ))
+}
+
+fn find_closest_quote_pair_1(
+    text: RopeSlice,
+    quote: char,
+    cursor: usize,
+) -> Option<(usize, usize)> {
+    let line = text.char_to_line(cursor.min(text.len_chars()));
+    let line_start = text.line_to_char(line);
+    let line_end = if line + 1 < text.len_lines() {
+        text.line_to_char(line + 1)
+    } else {
+        text.len_chars()
+    };
+
+    // Prefer pairs on the cursor's line. Quotes on the same line are
+    // unambiguous once paired from the start of the line.
+    let mut pairs = quote_pairs_in(text, quote, line_start, line_end);
+    if !pairs.is_empty() {
+        pairs.sort_by_key(|&pair| pair_rank(cursor, pair));
+        return pairs.first().copied();
+    }
+
+    // Otherwise (e.g. a string spanning multiple lines) pair quotes across the
+    // whole document and pick the nearest pair.
+    let pairs = quote_pairs_in(text, quote, 0, text.len_chars());
+    pairs
+        .into_iter()
+        .min_by_key(|&pair| pair_rank_by_distance(cursor, pair))
+}
+
+fn find_closest_bracket_pair(
+    text: RopeSlice,
+    open: char,
+    close: char,
+    range: Range,
+    cursor: usize,
+    n: usize,
+) -> Option<(usize, usize)> {
+    // An enclosing pair always wins.
+    if range.to() < text.len_chars() {
+        if let (Some(start), Some(end)) = (
+            find_nth_open_pair(text, open, close, cursor, n),
+            find_nth_close_pair(text, open, close, cursor, n),
+        ) {
+            return Some((start, end));
+        }
+    }
+
+    let mut pairs = Vec::new();
+    let mut stack = Vec::new();
+    for (pos, current) in text.chars().enumerate() {
+        if current == open {
+            stack.push(pos);
+        } else if current == close {
+            if let Some(start) = stack.pop() {
+                pairs.push((start, pos));
+            }
+        }
+    }
+
+    let (mut enclosing, mut pairs): (Vec<_>, Vec<_>) = pairs
+        .into_iter()
+        .partition(|&(start, end)| start <= cursor && cursor <= end);
+    enclosing.sort_by_key(|&(start, end)| end - start);
+    if let Some(&pair) = enclosing.get(n - 1) {
+        return Some(pair);
+    }
+    let n = n - enclosing.len();
+
+    let line = text.char_to_line(cursor.min(text.len_chars()));
+    let on_line = |pos: usize| text.char_to_line(pos) == line;
+
+    // Prefer pairs that start (or end) on the cursor's line.
+    let mut same_line: Vec<_> = pairs
+        .iter()
+        .copied()
+        .filter(|&(start, end)| {
+            if cursor < start {
+                on_line(start)
+            } else {
+                on_line(end)
+            }
+        })
+        .collect();
+    same_line.sort_by_key(|&pair| pair_rank(cursor, pair));
+    if let Some(&pair) = same_line.get(n - 1) {
+        return Some(pair);
+    }
+
+    pairs.sort_by_key(|&pair| pair_rank_by_distance(cursor, pair));
+    pairs.get(n - 1).copied()
 }
 
 /// Find position of surround characters around every cursor. Returns None
