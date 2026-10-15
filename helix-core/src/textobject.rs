@@ -228,12 +228,7 @@ fn textobject_pair_surround_impl(
     count: usize,
 ) -> Range {
     let pair_pos = match ch {
-        Some(ch) => surround::find_nth_pairs_pos(syntax, slice, ch, range, count).or_else(|_| {
-            if slice.get_char(range.cursor(slice)) == Some(ch) {
-                return Err(surround::Error::PairNotFound);
-            }
-            surround::find_nth_pairs_pos_closest(syntax, slice, ch, range, count)
-        }),
+        Some(ch) => surround::find_nth_pairs_pos_closest(syntax, slice, ch, range, count),
         None => surround::find_nth_closest_pairs_pos(syntax, slice, range, count),
     };
     pair_pos
@@ -526,13 +521,59 @@ mod test {
                 "samexx 'single' surround pairs",
                 vec![
                     (3, Inside, (8, 14), '\'', 1),
-                    (7, Inside, (7, 7), '\'', 1),
+                    (7, Inside, (8, 14), '\'', 1),
                     (10, Inside, (8, 14), '\'', 1),
-                    (14, Inside, (14, 14), '\'', 1),
+                    (14, Inside, (8, 14), '\'', 1),
                     (3, Around, (7, 15), '\'', 1),
-                    (7, Around, (7, 7), '\'', 1),
+                    (7, Around, (7, 15), '\'', 1),
                     (10, Around, (7, 15), '\'', 1),
-                    (14, Around, (14, 14), '\'', 1),
+                    (14, Around, (7, 15), '\'', 1),
+                ],
+            ),
+            (
+                // Cursor outside of the quotes on the same line must select
+                // the quoted text on that line, not the span between a quote
+                // on a previous line and the first quote on this line.
+                "a \"x\"\nfoo \"hello worl \" bar",
+                vec![
+                    (8, Inside, (11, 22), '"', 1),
+                    (25, Inside, (11, 22), '"', 1),
+                    (8, Around, (10, 23), '"', 1),
+                ],
+            ),
+            (
+                // Between two strings: never pair the closing quote of the
+                // first string with the opening quote of the second one.
+                "\"one\" mid \"two\" end",
+                vec![
+                    (7, Inside, (11, 14), '"', 1),
+                    (0, Inside, (1, 4), '"', 1),
+                    (4, Inside, (1, 4), '"', 1),
+                    (5, Inside, (11, 14), '"', 1),
+                    (10, Inside, (11, 14), '"', 1),
+                    (16, Inside, (11, 14), '"', 1),
+                ],
+            ),
+            (
+                // Escaped quotes are not delimiters.
+                "x \"a \\\" b\" y",
+                vec![(0, Inside, (3, 9), '"', 1), (5, Inside, (3, 9), '"', 1)],
+            ),
+            (
+                // A string spanning lines is still found when the cursor's
+                // line has no complete pair.
+                "s = \"abc\ndef\"",
+                vec![(10, Inside, (5, 12), '"', 1), (0, Inside, (5, 12), '"', 1)],
+            ),
+            (
+                // Brackets: prefer a pair on the cursor's line over a nearer
+                // pair on another line, and forward over backward.
+                "(a)\nfoo (b) bar (c)",
+                vec![
+                    (4, Inside, (9, 10), '(', 1),
+                    (12, Inside, (17, 18), '(', 1),
+                    (15, Inside, (17, 18), ')', 1),
+                    (1, Inside, (1, 2), '(', 1),
                 ],
             ),
             (
