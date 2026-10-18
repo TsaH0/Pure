@@ -117,6 +117,7 @@
 | `diagnostics_picker` | Open diagnostic picker | normal: `` <space>d ``, select: `` <space>d `` |
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
+| `yazi` | Pick files to open with the yazi file manager |  |
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
 | `normal_mode_or_hide_compilation` | Close the *compilation* window if it is open, otherwise enter normal mode | normal: `` <esc> `` |
 | `toggle_compilation` | Show or hide the *compilation* buffer (output of :compile) | normal: `` <space>X ``, select: `` <space>X `` |

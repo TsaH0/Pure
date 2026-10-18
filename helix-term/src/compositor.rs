@@ -81,6 +81,8 @@ pub struct Compositor {
 
     pub(crate) last_picker: Option<Box<dyn Component>>,
     pub(crate) full_redraw: bool,
+    /// An interactive program to hand the terminal to, see [`crate::interactive`].
+    pub(crate) interactive: Option<crate::interactive::Interactive>,
 }
 
 impl Compositor {
@@ -90,6 +92,7 @@ impl Compositor {
             area,
             last_picker: None,
             full_redraw: false,
+            interactive: None,
         }
     }
 
