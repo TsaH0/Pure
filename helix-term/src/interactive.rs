@@ -24,6 +24,8 @@ pub struct Interactive {
     /// Run on the terminal's normal screen, below the shell's scrollback,
     /// instead of on the editor's alternate screen (like Vim's `:!`).
     pub normal_screen: bool,
+    /// Clear the screen before the program runs.
+    pub clear_screen: bool,
     /// Printed before the program runs.
     pub banner: Option<String>,
     /// After the program exits, show its exit status and wait for a key press
@@ -40,6 +42,7 @@ impl Interactive {
             command,
             on_exit: Box::new(on_exit),
             normal_screen: false,
+            clear_screen: false,
             banner: None,
             wait_for_key: false,
         }
@@ -64,10 +67,10 @@ pub fn last_command() -> Option<String> {
     LAST_COMMAND.lock().unwrap().clone()
 }
 
-/// Run `cmd` like Vim's `:!cmd`: the editor steps aside, the command runs on
-/// the terminal's normal screen (output scrolls like in a shell and it can
-/// read keyboard input), then "Press any key to continue" returns to the
-/// editor. An empty `cmd` runs the previous command again.
+/// Run `cmd` like Vim's `:!cmd`: the editor steps aside, the screen is cleared
+/// and the command runs there (output scrolls like in a shell and it can read
+/// keyboard input), then "Press any key to continue" returns to the editor.
+/// An empty `cmd` runs the previous command again.
 pub fn shell_command_and_wait(editor: &Editor, cmd: &str) -> anyhow::Result<Interactive> {
     let cmd = if cmd.trim().is_empty() {
         last_command().ok_or_else(|| anyhow::anyhow!("No previous command to run"))?
@@ -78,8 +81,8 @@ pub fn shell_command_and_wait(editor: &Editor, cmd: &str) -> anyhow::Result<Inte
     let mut interactive = shell_command(editor, &cmd)?;
     // The exit status is shown in the terminal, no need to repeat it.
     interactive.on_exit = Box::new(|_, _, _| {});
-    interactive.normal_screen = true;
-    interactive.banner = Some(format!("\n:!{cmd}\n"));
+    interactive.clear_screen = true;
+    interactive.banner = Some(format!(":!{cmd}\n"));
     interactive.wait_for_key = true;
     Ok(interactive)
 }

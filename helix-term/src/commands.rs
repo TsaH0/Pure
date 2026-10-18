@@ -423,9 +423,9 @@ impl MappableCommand {
         last_picker, "Open last picker",
         yazi, "Pick files to open with the yazi file manager",
         compile, "Prompt for a shell command and run it like Emacs' M-x compile",
-        normal_mode_or_hide_compilation, "Close the *compilation* window if it is open, otherwise enter normal mode",
-        replay_macro_or_close_compilation, "Close the *compilation* buffer when in it, otherwise replay macro",
+        normal_mode_or_close_compilation, "Close the *compilation* buffer if it is open, otherwise enter normal mode",
         run_and_wait, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
+        hide_compilation, "Hide the *compilation* window, keeping the buffer",
         toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
@@ -3798,19 +3798,11 @@ fn compile(cx: &mut Context) {
     );
 }
 
-fn normal_mode_or_hide_compilation(cx: &mut Context) {
-    if !compilation::hide(cx.editor) {
+/// Esc in normal mode closes the `*compilation*` buffer for good when there is
+/// one, otherwise it just enters normal mode.
+fn normal_mode_or_close_compilation(cx: &mut Context) {
+    if !compilation::close(cx.editor) {
         normal_mode(cx);
-    }
-}
-
-/// `q` in the `*compilation*` buffer closes it for good (like in Emacs);
-/// elsewhere it replays a macro as usual.
-fn replay_macro_or_close_compilation(cx: &mut Context) {
-    if compilation::is_focused(cx.editor) {
-        compilation::close(cx.editor);
-    } else {
-        replay_macro(cx);
     }
 }
 
@@ -3843,6 +3835,13 @@ fn run_and_wait(cx: &mut Context) {
             }
         },
     );
+}
+
+fn hide_compilation(cx: &mut Context) {
+    if !compilation::hide(cx.editor) {
+        cx.editor
+            .set_status("The *compilation* buffer is not shown");
+    }
 }
 
 fn toggle_compilation(cx: &mut Context) {

@@ -311,7 +311,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `h`     | Select symbol references (**LSP**)                                      | `select_references_to_symbol_under_cursor` |
 | `'`     | Open last fuzzy picker                                                  | `last_picker`                              |
 | `x`     | Run a shell command, output in `*compilation*` (Emacs `M-x compile`)    | `compile`                                  |
-| `X`     | Show or hide `*compilation*` (`Esc` hides it, `q` in it closes it)      | `toggle_compilation`                       |
+| `X`     | Show or hide `*compilation*` (`C-j` hides it, `Esc` closes it)          | `toggle_compilation`                       |
 | `z`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |
 | `c`     | Comment/uncomment selections                                            | `toggle_comments`                          |
