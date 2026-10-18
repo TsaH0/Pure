@@ -312,7 +312,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `'`     | Open last fuzzy picker                                                  | `last_picker`                              |
 | `x`     | Run a shell command, output in `*compilation*` (Emacs `M-x compile`)    | `compile`                                  |
 | `X`     | Show or hide `*compilation*` (`Esc` hides it, `q` in it closes it)      | `toggle_compilation`                       |
-| `!`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
+| `z`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |
 | `c`     | Comment/uncomment selections                                            | `toggle_comments`                          |
 | `C`     | Block comment/uncomment selections                                      | `toggle_block_comments`                    |
