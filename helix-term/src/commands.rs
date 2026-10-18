@@ -1,3 +1,4 @@
+pub(crate) mod compilation;
 pub(crate) mod dap;
 pub(crate) mod lsp;
 pub(crate) mod syntax;
@@ -421,7 +422,11 @@ impl MappableCommand {
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
         yazi, "Pick files to open with the yazi file manager",
-        compile, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
+        compile, "Prompt for a shell command and run it like Emacs' M-x compile",
+        normal_mode_or_hide_compilation, "Close the *compilation* window if it is open, otherwise enter normal mode",
+        replay_macro_or_close_compilation, "Close the *compilation* buffer when in it, otherwise replay macro",
+        run_and_wait, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
+        toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
         open_below, "Open new line below selection",
@@ -1467,7 +1472,7 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
     }
 
     // Each target path, with an optional `:line[:col]` position after it (as
-    // printed by compilers).
+    // printed by compilers, e.g. in the `*compilation*` buffer).
     let paths: Vec<(String, Option<Position>)> =
         if fallback_ranges.len() == 1 && fallback_ranges[0].len() == 1 {
             let selection = fallback_ranges[0];
@@ -1506,6 +1511,28 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
                 .map(|sel| split_line_col(sel, None))
                 .collect()
         };
+
+    // In the `*compilation*` buffer open files in another window (like Emacs'
+    // `compile-goto-error`) so the output stays visible.
+    if matches!(action, Action::Replace)
+        && doc!(cx.editor).name.as_deref() == Some(compilation::BUFFER_NAME)
+    {
+        let current = view!(cx.editor).id;
+        let other = cx
+            .editor
+            .tree
+            .views()
+            .map(|(view, _)| view)
+            .find(|view| {
+                view.id != current
+                    && cx.editor.documents[&view.doc].name.as_deref()
+                        != Some(compilation::BUFFER_NAME)
+            })
+            .map(|view| view.id);
+        if let Some(other) = other {
+            cx.editor.focus(other);
+        }
+    }
 
     for (sel, position) in paths {
         if let Ok(url) = Url::parse(&sel) {
@@ -3741,9 +3768,55 @@ fn yazi(cx: &mut Context) {
     }));
 }
 
+/// Like Emacs' `M-x compile`: prompt for a command (defaulting to the previous
+/// one) and stream its output into the `*compilation*` buffer.
+fn compile(cx: &mut Context) {
+    const SIGNATURE: command_line::Signature = command_line::Signature {
+        positionals: (0, Some(2)),
+        ..SHELL_SIGNATURE
+    };
+    ui::prompt_with_input(
+        cx,
+        "Compile command: ".into(),
+        compilation::last_command().unwrap_or_default(),
+        Some('|'),
+        |editor, input| complete_command_args(editor, SIGNATURE, &SHELL_COMPLETER, input, 0),
+        |cx, input, event| {
+            if event != PromptEvent::Validate {
+                return;
+            }
+            let args = match Args::parse(input, SIGNATURE, true, |token| {
+                expansion::expand(cx.editor, token).map_err(|err| err.into())
+            }) {
+                Ok(args) => args,
+                Err(err) => return cx.editor.set_error(err.to_string()),
+            };
+            if let Err(err) = compilation::compile(cx.editor, &args.join(" ")) {
+                cx.editor.set_error(err.to_string());
+            }
+        },
+    );
+}
+
+fn normal_mode_or_hide_compilation(cx: &mut Context) {
+    if !compilation::hide(cx.editor) {
+        normal_mode(cx);
+    }
+}
+
+/// `q` in the `*compilation*` buffer closes it for good (like in Emacs);
+/// elsewhere it replays a macro as usual.
+fn replay_macro_or_close_compilation(cx: &mut Context) {
+    if compilation::is_focused(cx.editor) {
+        compilation::close(cx.editor);
+    } else {
+        replay_macro(cx);
+    }
+}
+
 /// Like Vim's `:!`: prompt for a shell command (defaulting to the previous one)
 /// and run it on the terminal's normal screen, then press any key to return.
-fn compile(cx: &mut Context) {
+fn run_and_wait(cx: &mut Context) {
     const SIGNATURE: command_line::Signature = command_line::Signature {
         positionals: (0, Some(2)),
         ..SHELL_SIGNATURE
@@ -3770,6 +3843,10 @@ fn compile(cx: &mut Context) {
             }
         },
     );
+}
+
+fn toggle_compilation(cx: &mut Context) {
+    compilation::toggle(cx.editor);
 }
 
 fn last_picker(cx: &mut Context) {

@@ -158,7 +158,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "P" => paste_before,
 
         "Q" => record_macro,
-        "q" => replay_macro,
+        "q" => replay_macro_or_close_compilation,
 
         ">" => indent,
         "<" => unindent,
@@ -184,7 +184,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
 
         "A-:" => ensure_selections_forward,
 
-        "esc" => normal_mode,
+        "esc" => normal_mode_or_hide_compilation,
         "C-b" | "pageup" => page_up,
         "C-f" | "pagedown" => page_down,
         "C-u" => page_cursor_half_up,
@@ -237,6 +237,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "a" => code_action,
             "'" => last_picker,
             "x" => compile,
+            "X" => toggle_compilation,
+            "!" => run_and_wait,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
                 "r" => dap_restart,

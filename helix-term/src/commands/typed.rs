@@ -2698,15 +2698,28 @@ fn run_interactive(
     Ok(())
 }
 
+fn run_and_wait(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    // Like Vim's `:!`. Without arguments the previous command is run again.
+    let interactive = crate::interactive::shell_command_and_wait(cx.editor, &args.join(" "))?;
+    crate::interactive::request(cx.jobs, interactive);
+    Ok(())
+}
+
 fn compile(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
 
-    // Like Vim's `:!`. Without arguments the previous command is run again.
-    let interactive = crate::interactive::shell_command_and_wait(cx.editor, &args.join(" "))?;
-    crate::interactive::request(cx.jobs, interactive);
-    Ok(())
+    // Like Emacs' `M-x compile`: stream the output into a `*compilation*`
+    // buffer. Without arguments the previous command is run again.
+    super::compilation::compile(cx.editor, &args.join(" "))
 }
 
 fn reset_diff_change(
@@ -4007,9 +4020,20 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: SHELL_SIGNATURE,
     },
     TypableCommand {
+        name: "run-and-wait",
+        aliases: &["bang"],
+        doc: "Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.",
+        fun: run_and_wait,
+        completer: SHELL_COMPLETER,
+        signature: Signature {
+            positionals: (0, Some(2)),
+            ..SHELL_SIGNATURE
+        },
+    },
+    TypableCommand {
         name: "compile",
         aliases: &[],
-        doc: "Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.",
+        doc: "Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again.",
         fun: compile,
         completer: SHELL_COMPLETER,
         signature: Signature {
