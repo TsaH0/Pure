@@ -2685,6 +2685,16 @@ fn run_shell_command(
     Ok(())
 }
 
+fn compile(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
+    // Like Emacs' `M-x compile`: stream the output into a `*compilation*`
+    // buffer. Without arguments the previous command is run again.
+    super::compilation::compile(cx.editor, &args.join(" "))
+}
+
 fn reset_diff_change(
     cx: &mut compositor::Context,
     _args: Args,
@@ -3973,6 +3983,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: run_shell_command,
         completer: SHELL_COMPLETER,
         signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "compile",
+        aliases: &[],
+        doc: "Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again.",
+        fun: compile,
+        completer: SHELL_COMPLETER,
+        signature: Signature {
+            positionals: (0, Some(2)),
+            ..SHELL_SIGNATURE
+        },
     },
     TypableCommand {
         name: "reset-diff-change",

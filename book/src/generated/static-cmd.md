@@ -117,11 +117,14 @@
 | `diagnostics_picker` | Open diagnostic picker | normal: `` <space>d ``, select: `` <space>d `` |
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
+| `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
+| `normal_mode_or_hide_compilation` | Close the *compilation* window if it is open, otherwise enter normal mode | normal: `` <esc> `` |
+| `toggle_compilation` | Show or hide the *compilation* buffer (output of :compile) | normal: `` <space>X ``, select: `` <space>X `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |
 | `insert_at_line_end` | Insert at end of line | normal: `` A ``, select: `` A `` |
 | `open_below` | Open new line below selection | normal: `` o ``, select: `` o `` |
 | `open_above` | Open new line above selection | normal: `` O ``, select: `` O `` |
-| `normal_mode` | Enter normal mode | normal: `` <esc> ``, select: `` v ``, insert: `` <esc> `` |
+| `normal_mode` | Enter normal mode | select: `` v ``, insert: `` <esc> `` |
 | `select_mode` | Enter selection extend mode | normal: `` v `` |
 | `exit_select_mode` | Exit selection mode | select: `` <esc> `` |
 | `goto_definition` | Goto definition | normal: `` gd ``, select: `` gd `` |
