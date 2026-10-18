@@ -81,8 +81,8 @@ pub fn shell_command_and_wait(editor: &Editor, cmd: &str) -> anyhow::Result<Inte
     let mut interactive = shell_command(editor, &cmd)?;
     // The exit status is shown in the terminal, no need to repeat it.
     interactive.on_exit = Box::new(|_, _, _| {});
+    // Only the program's output is shown on the cleared screen.
     interactive.clear_screen = true;
-    interactive.banner = Some(format!(":!{cmd}\n"));
     interactive.wait_for_key = true;
     Ok(interactive)
 }
