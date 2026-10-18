@@ -2694,13 +2694,21 @@ fn run_interactive(
         return Ok(());
     }
     let interactive = crate::interactive::shell_command(cx.editor, &args.join(" "))?;
-    cx.jobs.callback(async move {
-        Ok(Callback::EditorCompositor(Box::new(
-            move |_editor: &mut Editor, compositor: &mut Compositor| {
-                compositor.interactive = Some(interactive);
-            },
-        )))
-    });
+    crate::interactive::request(cx.jobs, interactive);
+    Ok(())
+}
+
+fn run_and_wait(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    // Like Vim's `:!`. Without arguments the previous command is run again.
+    let interactive = crate::interactive::shell_command_and_wait(cx.editor, &args.join(" "))?;
+    crate::interactive::request(cx.jobs, interactive);
     Ok(())
 }
 
@@ -4010,6 +4018,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: run_interactive,
         completer: SHELL_COMPLETER,
         signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "run-and-wait",
+        aliases: &["bang"],
+        doc: "Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.",
+        fun: run_and_wait,
+        completer: SHELL_COMPLETER,
+        signature: Signature {
+            positionals: (0, Some(2)),
+            ..SHELL_SIGNATURE
+        },
     },
     TypableCommand {
         name: "compile",

@@ -73,6 +73,22 @@ pub fn toggle(editor: &mut Editor) {
     }
 }
 
+/// Whether the compilation buffer is the one being edited.
+pub fn is_focused(editor: &Editor) -> bool {
+    find_buffer(editor) == Some(editor.tree.get(editor.tree.focus).doc)
+}
+
+/// Close the compilation window and delete the buffer for good (Emacs' `q`).
+/// A command that is still running is killed.
+pub fn close(editor: &mut Editor) {
+    let Some(doc_id) = find_buffer(editor) else {
+        return;
+    };
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+    hide(editor);
+    let _ = editor.close_document(doc_id, true);
+}
+
 /// Close the window showing the compilation buffer (the buffer itself is
 /// kept). Returns false if it wasn't shown.
 pub fn hide(editor: &mut Editor) -> bool {

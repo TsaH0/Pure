@@ -158,7 +158,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "P" => paste_before,
 
         "Q" => record_macro,
-        "q" => replay_macro,
+        "q" => replay_macro_or_close_compilation,
 
         ">" => indent,
         "<" => unindent,
@@ -238,6 +238,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "'" => last_picker,
             "x" => compile,
             "X" => toggle_compilation,
+            "z" => run_and_wait,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
                 "r" => dap_restart,

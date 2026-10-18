@@ -424,6 +424,8 @@ impl MappableCommand {
         yazi, "Pick files to open with the yazi file manager",
         compile, "Prompt for a shell command and run it like Emacs' M-x compile",
         normal_mode_or_hide_compilation, "Close the *compilation* window if it is open, otherwise enter normal mode",
+        replay_macro_or_close_compilation, "Close the *compilation* buffer when in it, otherwise replay macro",
+        run_and_wait, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
         toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
@@ -3800,6 +3802,47 @@ fn normal_mode_or_hide_compilation(cx: &mut Context) {
     if !compilation::hide(cx.editor) {
         normal_mode(cx);
     }
+}
+
+/// `q` in the `*compilation*` buffer closes it for good (like in Emacs);
+/// elsewhere it replays a macro as usual.
+fn replay_macro_or_close_compilation(cx: &mut Context) {
+    if compilation::is_focused(cx.editor) {
+        compilation::close(cx.editor);
+    } else {
+        replay_macro(cx);
+    }
+}
+
+/// Like Vim's `:!`: prompt for a shell command (defaulting to the previous one)
+/// and run it on the terminal's normal screen, then press any key to return.
+fn run_and_wait(cx: &mut Context) {
+    const SIGNATURE: command_line::Signature = command_line::Signature {
+        positionals: (0, Some(2)),
+        ..SHELL_SIGNATURE
+    };
+    ui::prompt_with_input(
+        cx,
+        "!".into(),
+        crate::interactive::last_command().unwrap_or_default(),
+        Some('|'),
+        |editor, input| complete_command_args(editor, SIGNATURE, &SHELL_COMPLETER, input, 0),
+        |cx, input, event| {
+            if event != PromptEvent::Validate {
+                return;
+            }
+            let args = match Args::parse(input, SIGNATURE, true, |token| {
+                expansion::expand(cx.editor, token).map_err(|err| err.into())
+            }) {
+                Ok(args) => args,
+                Err(err) => return cx.editor.set_error(err.to_string()),
+            };
+            match crate::interactive::shell_command_and_wait(cx.editor, &args.join(" ")) {
+                Ok(interactive) => crate::interactive::request(cx.jobs, interactive),
+                Err(err) => cx.editor.set_error(err.to_string()),
+            }
+        },
+    );
 }
 
 fn toggle_compilation(cx: &mut Context) {

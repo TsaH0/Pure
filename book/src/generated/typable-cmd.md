@@ -88,6 +88,7 @@
 | `:pipe-to` | Pipe each selection to the shell command, ignoring output. |
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
 | `:run-interactive`, `:term` | Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor. |
+| `:run-and-wait`, `:bang` | Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again. |
 | `:compile` | Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again. |
 | `:reset-diff-change`, `:diffget`, `:diffg` | Reset the diff change at the cursor position. |
 | `:clear-register` | Clear given register. If no argument is provided, clear all registers. |

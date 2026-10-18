@@ -1278,16 +1278,35 @@ impl Application {
         let crate::interactive::Interactive {
             mut command,
             on_exit,
+            normal_screen,
+            banner,
+            wait_for_key,
         } = interactive;
         use helix_view::graphics::CursorKind;
         self.terminal
             .backend_mut()
             .show_cursor(CursorKind::Block)
             .ok();
-        let status = match self.terminal.release() {
-            Ok(()) => command.status().await,
+        let released = if normal_screen {
+            self.terminal.restore()
+        } else {
+            self.terminal.release()
+        };
+        let status = match released {
+            Ok(()) => {
+                if let Some(banner) = banner {
+                    use std::io::Write;
+                    let mut stdout = std::io::stdout();
+                    let _ = stdout.write_all(banner.as_bytes());
+                    let _ = stdout.flush();
+                }
+                command.status().await
+            }
             Err(err) => Err(err),
         };
+        if wait_for_key {
+            crate::interactive::wait_for_key(&status);
+        }
 
         for retries in 1..=10 {
             match self.terminal.claim() {
