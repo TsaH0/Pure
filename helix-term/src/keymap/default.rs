@@ -185,6 +185,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "A-:" => ensure_selections_forward,
 
         "esc" => normal_mode_or_close_compilation,
+        "C-j" => hide_compilation,
         "C-b" | "pageup" => page_up,
         "C-f" | "pagedown" => page_down,
         "C-u" => page_cursor_half_up,

@@ -121,6 +121,7 @@
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
 | `normal_mode_or_close_compilation` | Close the *compilation* buffer if it is open, otherwise enter normal mode | normal: `` <esc> `` |
 | `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>z ``, select: `` <space>z `` |
+| `hide_compilation` | Hide the *compilation* window, keeping the buffer | normal: `` <C-j> ``, select: `` <C-j> `` |
 | `toggle_compilation` | Show or hide the *compilation* buffer (output of :compile) | normal: `` <space>X ``, select: `` <space>X `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |
 | `insert_at_line_end` | Insert at end of line | normal: `` A ``, select: `` A `` |
