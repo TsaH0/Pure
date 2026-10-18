@@ -2658,6 +2658,38 @@ fn run_shell_command(
         return Ok(());
     }
 
+    let shell = cx.editor.config().shell.clone();
+    let args = args.join(" ");
+
+    let callback = async move {
+        let output = shell_impl_async(&shell, &args, None).await?;
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if !output.trim().is_empty() {
+                    let contents = ui::Markdown::new(
+                        format!("```sh\n{}\n```", output.trim_end()),
+                        editor.syn_loader.clone(),
+                    );
+                    let popup = Popup::new("shell", contents).position(Some(
+                        helix_core::Position::new(editor.cursor().0.unwrap_or_default().row, 2),
+                    ));
+                    compositor.replace_or_push("shell", popup);
+                }
+                editor.set_status("Command run");
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
+
+    Ok(())
+}
+
+fn compile(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+
     // Like Emacs' `M-x compile`: stream the output into a `*compilation*`
     // buffer. Without arguments the previous command is run again.
     super::compilation::compile(cx.editor, &args.join(" "))
@@ -3947,8 +3979,16 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "run-shell-command",
         aliases: &["sh", "!"],
-        doc: "Run a shell command and show its output in the *compilation* buffer. Without arguments, run the previous command again.",
+        doc: "Run a shell command",
         fun: run_shell_command,
+        completer: SHELL_COMPLETER,
+        signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "compile",
+        aliases: &[],
+        doc: "Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again.",
+        fun: compile,
         completer: SHELL_COMPLETER,
         signature: Signature {
             positionals: (0, Some(2)),

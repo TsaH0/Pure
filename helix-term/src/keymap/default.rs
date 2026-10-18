@@ -236,6 +236,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "g" => changed_file_picker,
             "a" => code_action,
             "'" => last_picker,
+            "x" => compile,
             "X" => toggle_compilation,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,

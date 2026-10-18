@@ -1,4 +1,4 @@
-//! An Emacs `M-x compile`-like runner used by `:sh`.
+//! An Emacs `M-x compile`-like runner used by `:compile`.
 //!
 //! The command's output (stdout and stderr) is streamed into a `*compilation*`
 //! buffer that is shown in a split below the current view, while focus stays
@@ -65,7 +65,7 @@ fn show(editor: &mut Editor) -> DocumentId {
 /// Toggle the window showing the compilation buffer.
 pub fn toggle(editor: &mut Editor) {
     let Some(doc_id) = find_buffer(editor) else {
-        editor.set_error("No compilation buffer, run a command with :sh first");
+        editor.set_error("No compilation buffer, run a command with :compile first");
         return;
     };
     let Some(view_id) = view_showing(editor, doc_id) else {
@@ -315,6 +315,11 @@ fn at_now() -> String {
     } else {
         format!(" at {now}")
     }
+}
+
+/// The command run last, offered as the default by the `compile` prompt.
+pub fn last_command() -> Option<String> {
+    LAST_COMMAND.lock().unwrap().clone()
 }
 
 /// Run `cmd` (or the previous command if `cmd` is empty) and show its output

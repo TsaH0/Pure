@@ -421,7 +421,8 @@ impl MappableCommand {
         diagnostics_picker, "Open diagnostic picker",
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
-        toggle_compilation, "Show or hide the *compilation* buffer (output of :sh)",
+        compile, "Prompt for a shell command and run it like Emacs' M-x compile",
+        toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
         open_below, "Open new line below selection",
@@ -3748,6 +3749,36 @@ pub fn command_palette(cx: &mut Context) {
             compositor.push(Box::new(overlaid(picker)));
         },
     ));
+}
+
+/// Like Emacs' `M-x compile`: prompt for a command (defaulting to the previous
+/// one) and stream its output into the `*compilation*` buffer.
+fn compile(cx: &mut Context) {
+    const SIGNATURE: command_line::Signature = command_line::Signature {
+        positionals: (0, Some(2)),
+        ..SHELL_SIGNATURE
+    };
+    ui::prompt_with_input(
+        cx,
+        "Compile command: ".into(),
+        compilation::last_command().unwrap_or_default(),
+        Some('|'),
+        |editor, input| complete_command_args(editor, SIGNATURE, &SHELL_COMPLETER, input, 0),
+        |cx, input, event| {
+            if event != PromptEvent::Validate {
+                return;
+            }
+            let args = match Args::parse(input, SIGNATURE, true, |token| {
+                expansion::expand(cx.editor, token).map_err(|err| err.into())
+            }) {
+                Ok(args) => args,
+                Err(err) => return cx.editor.set_error(err.to_string()),
+            };
+            if let Err(err) = compilation::compile(cx.editor, &args.join(" ")) {
+                cx.editor.set_error(err.to_string());
+            }
+        },
+    );
 }
 
 fn toggle_compilation(cx: &mut Context) {
