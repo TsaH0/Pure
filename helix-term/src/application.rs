@@ -1279,6 +1279,7 @@ impl Application {
             mut command,
             on_exit,
             normal_screen,
+            clear_screen,
             banner,
             wait_for_key,
         } = interactive;
@@ -1294,12 +1295,16 @@ impl Application {
         };
         let status = match released {
             Ok(()) => {
-                if let Some(banner) = banner {
-                    use std::io::Write;
-                    let mut stdout = std::io::stdout();
-                    let _ = stdout.write_all(banner.as_bytes());
-                    let _ = stdout.flush();
+                use std::io::Write;
+                let mut stdout = std::io::stdout();
+                if clear_screen {
+                    // Clear and move the cursor to the top left.
+                    let _ = stdout.write_all(b"\x1b[H\x1b[2J");
                 }
+                if let Some(banner) = banner {
+                    let _ = stdout.write_all(banner.as_bytes());
+                }
+                let _ = stdout.flush();
                 command.status().await
             }
             Err(err) => Err(err),

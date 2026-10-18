@@ -158,7 +158,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "P" => paste_before,
 
         "Q" => record_macro,
-        "q" => replay_macro_or_close_compilation,
+        "q" => replay_macro,
 
         ">" => indent,
         "<" => unindent,
@@ -184,7 +184,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
 
         "A-:" => ensure_selections_forward,
 
-        "esc" => normal_mode_or_hide_compilation,
+        "esc" => normal_mode_or_close_compilation,
         "C-b" | "pageup" => page_up,
         "C-f" | "pagedown" => page_down,
         "C-u" => page_cursor_half_up,

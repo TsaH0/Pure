@@ -119,9 +119,8 @@
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
 | `yazi` | Pick files to open with the yazi file manager |  |
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
-| `normal_mode_or_hide_compilation` | Close the *compilation* window if it is open, otherwise enter normal mode | normal: `` <esc> `` |
-| `replay_macro_or_close_compilation` | Close the *compilation* buffer when in it, otherwise replay macro | normal: `` q ``, select: `` q `` |
-| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>! ``, select: `` <space>! `` |
+| `normal_mode_or_close_compilation` | Close the *compilation* buffer if it is open, otherwise enter normal mode | normal: `` <esc> `` |
+| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>z ``, select: `` <space>z `` |
 | `toggle_compilation` | Show or hide the *compilation* buffer (output of :compile) | normal: `` <space>X ``, select: `` <space>X `` |
 | `insert_at_line_start` | Insert at start of line | normal: `` I ``, select: `` I `` |
 | `insert_at_line_end` | Insert at end of line | normal: `` A ``, select: `` A `` |
@@ -311,7 +310,7 @@
 | `increment` | Increment item under cursor | normal: `` <C-a> ``, select: `` <C-a> `` |
 | `decrement` | Decrement item under cursor | normal: `` <C-x> ``, select: `` <C-x> `` |
 | `record_macro` | Record macro | normal: `` Q ``, select: `` Q `` |
-| `replay_macro` | Replay macro |  |
+| `replay_macro` | Replay macro | normal: `` q ``, select: `` q `` |
 | `command_palette` | Open command palette | normal: `` <space>? ``, select: `` <space>? `` |
 | `goto_word` | Jump to a two-character label | normal: `` gw `` |
 | `extend_to_word` | Extend to a two-character label | select: `` gw `` |
