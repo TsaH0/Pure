@@ -18,6 +18,9 @@ function or block of code.
 | `p`                    | Paragraph                |
 | `(`, `[`, `'`, etc.    | Specified surround pairs |
 | `m`                    | The closest surround pair    |
+| `b` / `B` / `r` / `A`  | `( )` / `{ }` / `[ ]` / `< >` |
+| `d` / `s`              | `" "` / `' '`            |
+| `q`                    | The closest quotes (`"`, `'` or `` ` ``) |
 | `f`                    | Function                 |
 | `t`                    | Type (or Class)          |
 | `a`                    | Argument/parameter       |
@@ -25,6 +28,9 @@ function or block of code.
 | `T`                    | Test                     |
 | `g`                    | Change                   |
 | `x`                    | (X)HTML element          |
+
+> 💡 The pair letters `b`, `B`, `r`, `A`, `d` and `s` also work with the surround
+commands `ms`, `md` and `mr` (e.g. `msb` adds parentheses).
 
 > 💡 `f`, `t`, etc. need a tree-sitter grammar active for the current
 document and a special tree-sitter query file to work properly. [Only
