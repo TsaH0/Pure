@@ -1,3 +1,4 @@
+pub(crate) mod compilation;
 pub(crate) mod dap;
 pub(crate) mod lsp;
 pub(crate) mod syntax;
@@ -420,6 +421,7 @@ impl MappableCommand {
         diagnostics_picker, "Open diagnostic picker",
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
+        toggle_compilation, "Show or hide the *compilation* buffer (output of :sh)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
         open_below, "Open new line below selection",
@@ -1464,38 +1466,70 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
         return;
     }
 
-    let paths: Vec<_> = if fallback_ranges.len() == 1 && fallback_ranges[0].len() == 1 {
-        let selection = fallback_ranges[0];
-        // Cap the search at roughly 1k bytes around the cursor.
-        let lookaround = 1000;
-        let pos = text.char_to_byte(selection.cursor(text));
-        let search_start = text
-            .line_to_byte(text.byte_to_line(pos))
-            .max(text.floor_char_boundary(pos.saturating_sub(lookaround)));
-        let search_end = text
-            .line_to_byte(text.byte_to_line(pos) + 1)
-            .min(text.ceil_char_boundary(pos + lookaround));
-        let search_range = text.byte_slice(search_start..search_end);
-        // we also allow paths that are next to the cursor (can be ambiguous but
-        // rarely so in practice) so that gf on quoted/braced path works (not sure about this
-        // but apparently that is how gf has worked historically in helix)
-        let path = find_paths(search_range, true)
-            .take_while(|range| search_start + range.start <= pos + 1)
-            .find(|range| pos <= search_start + range.end)
-            .map(|range| Cow::from(search_range.byte_slice(range)));
-        log::debug!("goto_file auto-detected path: {path:?}");
-        let path = path.unwrap_or_else(|| selection.fragment(text));
-        vec![path.into_owned()]
-    } else {
-        // Otherwise use each selection, trimmed.
-        fallback_ranges
-            .iter()
-            .map(|range| range.fragment(text).trim().to_owned())
-            .filter(|sel| !sel.is_empty())
-            .collect()
-    };
+    // Each target path, with an optional `:line[:col]` position after it (as
+    // printed by compilers, e.g. in the `*compilation*` buffer).
+    let paths: Vec<(String, Option<Position>)> =
+        if fallback_ranges.len() == 1 && fallback_ranges[0].len() == 1 {
+            let selection = fallback_ranges[0];
+            // Cap the search at roughly 1k bytes around the cursor.
+            let lookaround = 1000;
+            let pos = text.char_to_byte(selection.cursor(text));
+            let search_start = text
+                .line_to_byte(text.byte_to_line(pos))
+                .max(text.floor_char_boundary(pos.saturating_sub(lookaround)));
+            let search_end = text
+                .line_to_byte(text.byte_to_line(pos) + 1)
+                .min(text.ceil_char_boundary(pos + lookaround));
+            let search_range = text.byte_slice(search_start..search_end);
+            // we also allow paths that are next to the cursor (can be ambiguous but
+            // rarely so in practice) so that gf on quoted/braced path works (not sure about this
+            // but apparently that is how gf has worked historically in helix)
+            let found = find_paths(search_range, true)
+                .take_while(|range| search_start + range.start <= pos + 1)
+                .find(|range| pos <= search_start + range.end);
+            let path = found
+                .clone()
+                .map(|range| Cow::from(search_range.byte_slice(range)));
+            log::debug!("goto_file auto-detected path: {path:?}");
+            let position = found.and_then(|range| {
+                let rest: Cow<str> = search_range.byte_slice(range.end..).into();
+                parse_line_col_suffix(&rest)
+            });
+            let path = path.unwrap_or_else(|| selection.fragment(text));
+            vec![split_line_col(path.into_owned(), position)]
+        } else {
+            // Otherwise use each selection, trimmed.
+            fallback_ranges
+                .iter()
+                .map(|range| range.fragment(text).trim().to_owned())
+                .filter(|sel| !sel.is_empty())
+                .map(|sel| split_line_col(sel, None))
+                .collect()
+        };
 
-    for sel in paths {
+    // In the `*compilation*` buffer open files in another window (like Emacs'
+    // `compile-goto-error`) so the output stays visible.
+    if matches!(action, Action::Replace)
+        && doc!(cx.editor).name.as_deref() == Some(compilation::BUFFER_NAME)
+    {
+        let current = view!(cx.editor).id;
+        let other = cx
+            .editor
+            .tree
+            .views()
+            .map(|(view, _)| view)
+            .find(|view| {
+                view.id != current
+                    && cx.editor.documents[&view.doc].name.as_deref()
+                        != Some(compilation::BUFFER_NAME)
+            })
+            .map(|view| view.id);
+        if let Some(other) = other {
+            cx.editor.focus(other);
+        }
+    }
+
+    for (sel, position) in paths {
         if let Ok(url) = Url::parse(&sel) {
             open_url(cx, url, action);
             continue;
@@ -1506,10 +1540,63 @@ fn goto_file_impl(cx: &mut Context, action: Action) {
         if path.is_dir() {
             let picker = ui::file_picker(cx.editor, path.into());
             cx.push_layer(Box::new(overlaid(picker)));
-        } else if let Err(e) = cx.editor.open(path, action) {
-            cx.editor.set_error(format!("Open file failed: {:?}", e));
+        } else {
+            match cx.editor.open(path, action) {
+                Ok(_) => {
+                    if let Some(position) = position {
+                        let (view, doc) = current!(cx.editor);
+                        let pos = pos_at_coords(doc.text().slice(..), position, true);
+                        doc.set_selection(view.id, Selection::point(pos));
+                        align_view(doc, view, Align::Center);
+                    }
+                }
+                Err(e) => cx.editor.set_error(format!("Open file failed: {:?}", e)),
+            }
         }
     }
+}
+
+/// Parse a `:line[:col]` suffix (1-based) at the start of `text`, as in
+/// `src/main.rs:10:5: error`.
+fn parse_line_col_suffix(text: &str) -> Option<Position> {
+    let mut parts = text.strip_prefix(':')?.splitn(3, ':');
+    let number = |part: Option<&str>| -> Option<usize> {
+        let part = part?;
+        let end = part
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(part.len());
+        part[..end].parse().ok()
+    };
+    let row = number(parts.next())?;
+    let col = number(parts.next()).unwrap_or(1);
+    Some(Position::new(row.saturating_sub(1), col.saturating_sub(1)))
+}
+
+/// Split a trailing `:line[:col]` off `path` if the path itself doesn't exist
+/// (e.g. when the whole `file.rs:10:5` was selected).
+fn split_line_col(path: String, position: Option<Position>) -> (String, Option<Position>) {
+    if position.is_some() || Path::new(&path).exists() {
+        return (path, position);
+    }
+    let is_number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let trimmed = path.trim_end_matches(':');
+    let mut parts = trimmed.rsplitn(3, ':');
+    let (last, middle, first) = (parts.next(), parts.next(), parts.next());
+    let (file, row, col) = match (first, middle, last) {
+        (Some(file), Some(row), Some(col)) if is_number(row) && is_number(col) => (file, row, col),
+        (_, Some(_), Some(row)) if is_number(row) => {
+            (trimmed.rsplit_once(':').unwrap().0, row, "1")
+        }
+        _ => return (path, None),
+    };
+    if file.is_empty() {
+        return (path, None);
+    }
+    let position = Position::new(
+        row.parse::<usize>().unwrap_or(1).saturating_sub(1),
+        col.parse::<usize>().unwrap_or(1).saturating_sub(1),
+    );
+    (file.to_owned(), Some(position))
 }
 
 /// Opens the given url. If the URL points to a valid textual file it is open in helix.
@@ -3661,6 +3748,10 @@ pub fn command_palette(cx: &mut Context) {
             compositor.push(Box::new(overlaid(picker)));
         },
     ));
+}
+
+fn toggle_compilation(cx: &mut Context) {
+    compilation::toggle(cx.editor);
 }
 
 fn last_picker(cx: &mut Context) {
@@ -7224,5 +7315,37 @@ fn lsp_or_syntax_workspace_symbol_picker(cx: &mut Context) {
         lsp::workspace_symbol_picker(cx);
     } else {
         syntax_workspace_symbol_picker(cx);
+    }
+}
+
+#[cfg(test)]
+mod goto_file_position_test {
+    use super::*;
+
+    #[test]
+    fn line_col_suffix() {
+        assert_eq!(
+            parse_line_col_suffix(":2:68: error: x"),
+            Some(Position::new(1, 67))
+        );
+        assert_eq!(parse_line_col_suffix(":10"), Some(Position::new(9, 0)));
+        assert_eq!(parse_line_col_suffix(" foo"), None);
+        assert_eq!(parse_line_col_suffix(":x"), None);
+    }
+
+    #[test]
+    fn split_path_line_col() {
+        assert_eq!(
+            split_line_col("no/such/main.cpp:2:68:".into(), None),
+            ("no/such/main.cpp".into(), Some(Position::new(1, 67)))
+        );
+        assert_eq!(
+            split_line_col("no/such/main.rs:7".into(), None),
+            ("no/such/main.rs".into(), Some(Position::new(6, 0)))
+        );
+        assert_eq!(
+            split_line_col("no/such/file".into(), None),
+            ("no/such/file".into(), None)
+        );
     }
 }
