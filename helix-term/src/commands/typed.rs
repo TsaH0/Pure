@@ -2694,13 +2694,7 @@ fn run_interactive(
         return Ok(());
     }
     let interactive = crate::interactive::shell_command(cx.editor, &args.join(" "))?;
-    cx.jobs.callback(async move {
-        Ok(Callback::EditorCompositor(Box::new(
-            move |_editor: &mut Editor, compositor: &mut Compositor| {
-                compositor.interactive = Some(interactive);
-            },
-        )))
-    });
+    crate::interactive::request(cx.jobs, interactive);
     Ok(())
 }
 
@@ -2709,9 +2703,10 @@ fn compile(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyh
         return Ok(());
     }
 
-    // Like Emacs' `M-x compile`: stream the output into a `*compilation*`
-    // buffer. Without arguments the previous command is run again.
-    super::compilation::compile(cx.editor, &args.join(" "))
+    // Like Vim's `:!`. Without arguments the previous command is run again.
+    let interactive = crate::interactive::shell_command_and_wait(cx.editor, &args.join(" "))?;
+    crate::interactive::request(cx.jobs, interactive);
+    Ok(())
 }
 
 fn reset_diff_change(
@@ -4014,7 +4009,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "compile",
         aliases: &[],
-        doc: "Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again.",
+        doc: "Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.",
         fun: compile,
         completer: SHELL_COMPLETER,
         signature: Signature {

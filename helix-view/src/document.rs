@@ -214,10 +214,6 @@ pub struct Document {
 
     pub readonly: bool,
 
-    /// Name shown instead of the path, used for special buffers such as
-    /// `*compilation*`.
-    pub name: Option<Cow<'static, str>>,
-
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
     /// Annotations for LSP document color swatches
@@ -768,7 +764,6 @@ impl Document {
             version_control_head: None,
             focused_at: std::time::Instant::now(),
             readonly: false,
-            name: None,
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
             code_action_hints: HashSet::new(),
@@ -1677,20 +1672,6 @@ impl Document {
         self.apply_inner(transaction, view_id, true)
     }
 
-    /// Apply a [`Transaction`] for an output-only buffer (such as
-    /// `*compilation*`): the change is not recorded in the undo history and
-    /// does not mark the document as modified. Any existing undo history is
-    /// discarded since it would no longer match the text.
-    pub fn apply_output(&mut self, transaction: &Transaction, view_id: ViewId) -> bool {
-        let success = self.apply_impl(transaction, view_id, false);
-        self.changes = ChangeSet::new(self.text().slice(..));
-        self.old_state = None;
-        self.history = Cell::new(History::default());
-        self.savepoints.clear();
-        self.last_saved_revision = 0;
-        success
-    }
-
     /// Apply a [`Transaction`] to the [`Document`] to change its text
     /// without notifying the language servers. This is useful for temporary transactions
     /// that must not influence the server.
@@ -2150,9 +2131,6 @@ impl Document {
     }
 
     pub fn display_name(&self) -> Cow<'_, str> {
-        if let Some(name) = &self.name {
-            return Cow::Borrowed(name);
-        }
         self.relative_path()
             .map_or_else(|| SCRATCH_BUFFER_NAME.into(), |path| path.to_string_lossy())
     }
