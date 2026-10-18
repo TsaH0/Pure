@@ -66,6 +66,61 @@ async fn insert_to_normal_mode_cursor_position() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn surround_by_alias_letter() -> anyhow::Result<()> {
+    // Letters can be used instead of the pair characters.
+    let cases = [
+        (
+            "(so [many {go#[o|]#d} <x> text] here)",
+            "mib",
+            "(#[so [many {good} <x> text] here|]#)",
+        ),
+        (
+            "(so [many {go#[o|]#d} <x> text] here)",
+            "miB",
+            "(so [many {#[good|]#} <x> text] here)",
+        ),
+        (
+            "(so [many {go#[o|]#d} <x> text] here)",
+            "mir",
+            "(so [#[many {good} <x> text|]#] here)",
+        ),
+        (
+            "(so [many {go#[o|]#d} <x> text] here)",
+            "maB",
+            "(so [many #[{good}|]# <x> text] here)",
+        ),
+        ("a <b#[c|]#d> e", "miA", "a <#[bcd|]#> e"),
+        ("say \"hel#[l|]#o\" 'x'", "mid", "say \"#[hello|]#\" 'x'"),
+        ("say \"x\" 'hel#[l|]#o'", "mis", "say \"x\" '#[hello|]#'"),
+        // The symbols keep working.
+        (
+            "(so [many {go#[o|]#d} <x> text] here)",
+            "mi(",
+            "(#[so [many {good} <x> text] here|]#)",
+        ),
+    ];
+    for case in cases {
+        test(case).await?;
+    }
+
+    // `q`: the closest quotes of any kind.
+    test(("say \"hel#[l|]#o\" ok", "miq", "say \"#[hello|]#\" ok")).await?;
+    test(("say 'hel#[l|]#o' ok", "miq", "say '#[hello|]#' ok")).await?;
+    test(("say `hel#[l|]#o` ok", "maq", "say #[`hello`|]# ok")).await?;
+    test(("#[s|]#ay 'a' \"b\"", "miq", "say '#[a|]#' \"b\"")).await?;
+    test(("\"a 'hel#[l|]#o' b\"", "miq", "\"a '#[hello|]#' b\"")).await?;
+
+    // Surround add / delete / replace accept the same letters.
+    test(("#[word|]#", "msb", "#[(word)|]#")).await?;
+    test(("#[word|]#", "msB", "#[{word}|]#")).await?;
+    test(("(wo#[r|]#d)", "mdb", "wo#[r|]#d")).await?;
+    test(("(wo#[r|]#d)", "mrbr", "[wo#[r|]#d]")).await?;
+    test(("\"wo#[r|]#d\"", "mrds", "'wo#[r|]#d'")).await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn surround_by_character() -> anyhow::Result<()> {
     // Only pairs matching the passed character count
     test((

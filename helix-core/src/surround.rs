@@ -32,6 +32,29 @@ impl Display for Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
+/// Letters that can be typed instead of a pair character, like Vim's `ib` /
+/// `iB` (`mib` is the same as `mi(`).
+pub const PAIR_ALIASES: [(char, char); 6] = [
+    ('b', '('),
+    ('B', '{'),
+    ('r', '['),
+    ('A', '<'),
+    ('d', '"'),
+    ('s', '\''),
+];
+
+/// Quote characters considered by the "any quote" text object (`miq`).
+pub const QUOTES: [char; 3] = ['"', '\'', '`'];
+
+/// Map a pair alias letter (see [`PAIR_ALIASES`]) to its pair character.
+/// Other characters are returned unchanged.
+pub fn resolve_pair_alias(ch: char) -> char {
+    PAIR_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == ch)
+        .map_or(ch, |&(_, pair)| pair)
+}
+
 /// Finds the position of surround pairs of any [`crate::match_brackets::PAIRS`]
 /// using tree-sitter when possible.
 ///

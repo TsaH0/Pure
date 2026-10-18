@@ -209,6 +209,46 @@ pub fn textobject_pair_surround(
     textobject_pair_surround_impl(syntax, slice, range, textobject, Some(ch), count)
 }
 
+/// Select inside/around the closest pair of quotes of any kind
+/// ([`surround::QUOTES`]).
+pub fn textobject_quote_closest(
+    syntax: Option<&Syntax>,
+    slice: RopeSlice,
+    range: Range,
+    textobject: TextObject,
+    count: usize,
+) -> Range {
+    let cursor = range.cursor(slice);
+    let cursor_line = slice.char_to_line(cursor.min(slice.len_chars()));
+    let best = surround::QUOTES
+        .into_iter()
+        .filter_map(|quote| {
+            let (anchor, head) =
+                surround::find_nth_pairs_pos_closest(syntax, slice, quote, range, count).ok()?;
+            Some((anchor.min(head), anchor.max(head), quote))
+        })
+        // Same preference as for a single quote character: an enclosing pair
+        // (innermost first), then a pair on the cursor's line (after the
+        // cursor first), then the nearest one.
+        .min_by_key(|&(start, end, _)| {
+            let on_line =
+                slice.char_to_line(start) == cursor_line || slice.char_to_line(end) == cursor_line;
+            if start <= cursor && cursor <= end {
+                (0, 0, 0, end - start)
+            } else if cursor < start {
+                (1, !on_line as u8, 0, start - cursor)
+            } else {
+                (1, !on_line as u8, 1, cursor - end)
+            }
+        });
+    match best {
+        Some((_, _, quote)) => {
+            textobject_pair_surround(syntax, slice, range, textobject, quote, count)
+        }
+        None => range,
+    }
+}
+
 pub fn textobject_pair_surround_closest(
     syntax: Option<&Syntax>,
     slice: RopeSlice,

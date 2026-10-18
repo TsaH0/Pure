@@ -6463,6 +6463,24 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                             count,
                         ),
                         'g' => textobject_change(range),
+                        'q' => textobject::textobject_quote_closest(
+                            doc.syntax(),
+                            text,
+                            range,
+                            objtype,
+                            count,
+                        ),
+                        // Letters standing for a pair: `mib` is `mi(`, `miB` is `mi{`, ...
+                        ch if surround::resolve_pair_alias(ch) != ch => {
+                            textobject::textobject_pair_surround(
+                                doc.syntax(),
+                                text,
+                                range,
+                                objtype,
+                                surround::resolve_pair_alias(ch),
+                                count,
+                            )
+                        }
                         // TODO: cancel new ranges if inconsistent surround matches across lines
                         ch if !ch.is_ascii_alphanumeric() => textobject::textobject_pair_surround(
                             doc.syntax(),
@@ -6499,18 +6517,27 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
         ("m", "Closest surrounding pair (tree-sitter)"),
         ("g", "Change"),
         ("x", "(X)HTML element (tree-sitter)"),
+        ("b or ( )", "Parentheses"),
+        ("B or { }", "Curly braces"),
+        ("r or [ ]", "Square brackets"),
+        ("A or < >", "Angled brackets"),
+        ("d or \"", "Double quotes"),
+        ("s or '", "Single quotes"),
+        ("q", "Closest quotes (\" ' `)"),
         (" ", "... or any character acting as a pair"),
     ];
 
     cx.editor.autoinfo = Some(Info::new(title, &help_text));
 }
 
-static SURROUND_HELP_TEXT: [(&str, &str); 6] = [
+static SURROUND_HELP_TEXT: [(&str, &str); 8] = [
     ("m", "Nearest matching pair"),
-    ("( or )", "Parentheses"),
-    ("{ or }", "Curly braces"),
-    ("< or >", "Angled brackets"),
-    ("[ or ]", "Square brackets"),
+    ("b or ( )", "Parentheses"),
+    ("B or { }", "Curly braces"),
+    ("r or [ ]", "Square brackets"),
+    ("A or < >", "Angled brackets"),
+    ("d or \"", "Double quotes"),
+    ("s or '", "Single quotes"),
     (" ", "... or any character"),
 ];
 
@@ -6521,7 +6548,7 @@ fn surround_add(cx: &mut Context) {
         // surround_len is the number of new characters being added.
         let (open, close, surround_len) = match event.char() {
             Some(ch) => {
-                let (o, c) = match_brackets::get_pair(ch);
+                let (o, c) = match_brackets::get_pair(surround::resolve_pair_alias(ch));
                 let mut open = Tendril::new();
                 open.push(o);
                 let mut close = Tendril::new();
@@ -6571,7 +6598,7 @@ fn surround_replace(cx: &mut Context) {
         cx.editor.autoinfo = None;
         let surround_ch = match event.char() {
             Some('m') => None, // m selects the closest surround pair
-            Some(ch) => Some(ch),
+            Some(ch) => Some(surround::resolve_pair_alias(ch)),
             None => return,
         };
         let (view, doc) = current!(cx.editor);
@@ -6601,7 +6628,7 @@ fn surround_replace(cx: &mut Context) {
                 Some(to) => to,
                 None => return doc.set_selection(view.id, selection),
             };
-            let (open, close) = match_brackets::get_pair(to);
+            let (open, close) = match_brackets::get_pair(surround::resolve_pair_alias(to));
 
             // the changeset has to be sorted to allow nested surrounds
             let mut sorted_pos: Vec<(usize, char)> = Vec::new();
@@ -6642,7 +6669,7 @@ fn surround_delete(cx: &mut Context) {
         cx.editor.autoinfo = None;
         let surround_ch = match event.char() {
             Some('m') => None, // m selects the closest surround pair
-            Some(ch) => Some(ch),
+            Some(ch) => Some(surround::resolve_pair_alias(ch)),
             None => return,
         };
         let (view, doc) = current!(cx.editor);
