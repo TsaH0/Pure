@@ -64,17 +64,27 @@ fn show(editor: &mut Editor) -> DocumentId {
 
 /// Toggle the window showing the compilation buffer.
 pub fn toggle(editor: &mut Editor) {
-    let Some(doc_id) = find_buffer(editor) else {
+    if find_buffer(editor).is_none() {
         editor.set_error("No compilation buffer, run a command with :compile first");
         return;
+    }
+    if !hide(editor) {
+        show(editor);
+    }
+}
+
+/// Close the window showing the compilation buffer (the buffer itself is
+/// kept). Returns false if it wasn't shown.
+pub fn hide(editor: &mut Editor) -> bool {
+    let Some(doc_id) = find_buffer(editor) else {
+        return false;
     };
     let Some(view_id) = view_showing(editor, doc_id) else {
-        show(editor);
-        return;
+        return false;
     };
     if editor.tree.views().count() > 1 {
         editor.close(view_id);
-        return;
+        return true;
     }
     // It is the only window: switch it back to another buffer instead.
     let other = editor
@@ -97,6 +107,7 @@ pub fn toggle(editor: &mut Editor) {
             editor.new_file(Action::Replace);
         }
     }
+    true
 }
 
 /// Replace (`replace_all`) or append to the contents of the compilation

@@ -422,6 +422,7 @@ impl MappableCommand {
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
         compile, "Prompt for a shell command and run it like Emacs' M-x compile",
+        normal_mode_or_hide_compilation, "Close the *compilation* window if it is open, otherwise enter normal mode",
         toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
         insert_at_line_end, "Insert at end of line",
@@ -3779,6 +3780,12 @@ fn compile(cx: &mut Context) {
             }
         },
     );
+}
+
+fn normal_mode_or_hide_compilation(cx: &mut Context) {
+    if !compilation::hide(cx.editor) {
+        normal_mode(cx);
+    }
 }
 
 fn toggle_compilation(cx: &mut Context) {
