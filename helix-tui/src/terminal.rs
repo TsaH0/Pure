@@ -130,10 +130,6 @@ where
         self.backend.restore()
     }
 
-    pub fn release(&mut self) -> io::Result<()> {
-        self.backend.release()
-    }
-
     // /// Get a Frame object which provides a consistent view into the terminal state for rendering.
     // pub fn get_frame(&mut self) -> Frame<B> {
     //     Frame {

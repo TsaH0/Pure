@@ -451,24 +451,6 @@ impl Backend for TerminaBackend {
         Ok(())
     }
 
-    fn release(&mut self) -> io::Result<()> {
-        self.disable_extensions()?;
-        self.disable_mouse_capture()?;
-        write!(
-            self.terminal,
-            "{}{}{}",
-            &self.reset_cursor_command,
-            decreset!(BracketedPaste),
-            decreset!(FocusTracking),
-        )?;
-        if self.background_color.is_some() {
-            self.reset_background_color()?;
-        }
-        self.terminal.flush()?;
-        self.terminal.enter_cooked_mode()?;
-        Ok(())
-    }
-
     fn restore(&mut self) -> io::Result<()> {
         self.disable_extensions()?;
         self.disable_mouse_capture()?;

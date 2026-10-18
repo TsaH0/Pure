@@ -30,12 +30,6 @@ pub trait Backend {
     fn reconfigure(&mut self, config: Config) -> Result<(), io::Error>;
     /// Restores the terminal to a normal state, undoes `claim`
     fn restore(&mut self) -> Result<(), io::Error>;
-    /// Like `restore` but, where supported, stays on the alternate screen.
-    /// Used to hand the terminal to another full screen program without
-    /// flashing the shell's screen in between.
-    fn release(&mut self) -> Result<(), io::Error> {
-        self.restore()
-    }
     /// Draws styled text to the terminal
     fn draw<'a, I>(&mut self, content: I) -> Result<(), io::Error>
     where

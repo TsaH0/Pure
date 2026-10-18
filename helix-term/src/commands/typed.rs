@@ -2685,25 +2685,6 @@ fn run_shell_command(
     Ok(())
 }
 
-fn run_interactive(
-    cx: &mut compositor::Context,
-    args: Args,
-    event: PromptEvent,
-) -> anyhow::Result<()> {
-    if event != PromptEvent::Validate {
-        return Ok(());
-    }
-    let interactive = crate::interactive::shell_command(cx.editor, &args.join(" "))?;
-    cx.jobs.callback(async move {
-        Ok(Callback::EditorCompositor(Box::new(
-            move |_editor: &mut Editor, compositor: &mut Compositor| {
-                compositor.interactive = Some(interactive);
-            },
-        )))
-    });
-    Ok(())
-}
-
 fn compile(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4000,14 +3981,6 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         aliases: &["sh", "!"],
         doc: "Run a shell command",
         fun: run_shell_command,
-        completer: SHELL_COMPLETER,
-        signature: SHELL_SIGNATURE,
-    },
-    TypableCommand {
-        name: "run-interactive",
-        aliases: &["term"],
-        doc: "Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor.",
-        fun: run_interactive,
         completer: SHELL_COMPLETER,
         signature: SHELL_SIGNATURE,
     },

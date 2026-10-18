@@ -312,10 +312,6 @@ impl Application {
             if self.editor.should_close() {
                 return false;
             }
-            // Let `run` hand the terminal to the requested program.
-            if self.compositor.interactive.is_some() {
-                return true;
-            }
 
             use futures_util::StreamExt;
 
@@ -1274,37 +1270,6 @@ impl Application {
         lsp::ShowDocumentResult { success: true }
     }
 
-    async fn run_interactive(&mut self, interactive: crate::interactive::Interactive) {
-        let crate::interactive::Interactive {
-            mut command,
-            on_exit,
-        } = interactive;
-        use helix_view::graphics::CursorKind;
-        self.terminal
-            .backend_mut()
-            .show_cursor(CursorKind::Block)
-            .ok();
-        let status = match self.terminal.release() {
-            Ok(()) => command.status().await,
-            Err(err) => Err(err),
-        };
-
-        for retries in 1..=10 {
-            match self.terminal.claim() {
-                Ok(()) => break,
-                Err(err) if retries == 10 => panic!("Failed to claim terminal: {}", err),
-                Err(_) => continue,
-            }
-        }
-        // Redraw everything right away, the program left a different screen behind.
-        let area = self.terminal.size();
-        self.compositor.resize(area);
-        self.terminal.clear().expect("couldn't clear terminal");
-
-        on_exit(&mut self.editor, &mut self.compositor, status);
-        self.render().await;
-    }
-
     fn restore_term(&mut self) -> std::io::Result<()> {
         use helix_view::graphics::CursorKind;
         self.terminal
@@ -1354,30 +1319,13 @@ impl Application {
         DummyEventStream
     }
 
-    /// Run the editor. `make_input_stream` creates the stream of terminal
-    /// events; it is called again after running an interactive program since
-    /// the stream has to be dropped while the program owns the terminal.
-    pub async fn run<S, F>(&mut self, mut make_input_stream: F) -> Result<i32, Error>
+    pub async fn run<S>(&mut self, input_stream: &mut S) -> Result<i32, Error>
     where
         S: Stream<Item = std::io::Result<TerminalEvent>> + Unpin,
-        F: FnMut(&Self) -> S,
     {
         self.terminal.claim()?;
 
-        let mut input_stream = make_input_stream(self);
-        self.render().await;
-        loop {
-            if !self.event_loop_until_idle(&mut input_stream).await {
-                break;
-            }
-            if let Some(interactive) = self.compositor.interactive.take() {
-                // Dropping the stream stops its reader thread, otherwise it
-                // would compete with the program for terminal input.
-                drop(input_stream);
-                self.run_interactive(interactive).await;
-                input_stream = make_input_stream(self);
-            }
-        }
+        self.event_loop(input_stream).await;
 
         let close_errs = self.close().await;
 
