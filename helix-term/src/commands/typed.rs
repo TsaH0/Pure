@@ -1331,6 +1331,7 @@ fn apply_directory_change(cx: &mut compositor::Context, dir: &Path) -> anyhow::R
             dir.display()
         )
     })?;
+    crate::plugins::directory_changed(cx.editor);
 
     cx.editor.set_status(format!(
         "Current working directory is now {}",

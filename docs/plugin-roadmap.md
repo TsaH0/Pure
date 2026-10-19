@@ -421,8 +421,8 @@ Small, self-contained; each one is a good single task.
   cached as a document; SDK `Item::with_text_preview`.
 - [x] ~~Per-program process prompt~~: the owner decided against it;
   `allow-process` in `plugins.toml` is the only gate.
-- [ ] **Stale preopens**: plugins see the workspace from load time; reload
-  their WASI context (or warn) after `:cd`.
+- [x] **Stale preopens**: after `:cd` changes the workspace, plugins with
+  an `allow-files` grant are reloaded (`plugins::directory_changed`).
 - [x] **Parallel compilation on a cold cache**, and plugins load in the
   background after startup (see "Performance" in `plugin-progress.md`).
 - [x] **A `plugins` cargo feature** (on by default): `cargo build

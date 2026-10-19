@@ -1144,6 +1144,11 @@ impl PluginHost {
         self.data_root = data_root;
     }
 
+    /// The workspace plugins with `allow-files` were given (see `set_dirs`).
+    pub fn workspace(&self) -> Option<&Path> {
+        self.workspace.as_deref()
+    }
+
     /// Load every plugin in the subdirectories of `dir`. `settings` gives the
     /// settings for a plugin, or `None` if it is disabled. Returns the
     /// actions of the plugins' `init` calls and the errors of plugins that

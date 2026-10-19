@@ -300,8 +300,8 @@ needs the `filesystem` permission and the user's grant:
 allow-files = "read"    # or "write"
 ```
 
-Paths are the real ones (as `document-path` returns them). Plugins see the
-workspace from when they were loaded: after `:cd`, `:plugin-reload`. Also
+Paths are the real ones (as `document-path` returns them). When `:cd` moves
+to another workspace, plugins with `allow-files` are reloaded to see it. Also
 available: `editor::cwd()`, `editor::config_dir()` and
 `editor::document_modified(doc)`.
 

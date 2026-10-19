@@ -60,6 +60,8 @@ runtime_local! {
     static WANTED: AtomicU32 = AtomicU32::new(0);
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+    /// The plugin directory and settings loaded last, to reload them.
+    static LOADED: Mutex<Option<(PathBuf, toml::Table)>> = Mutex::new(None);
 }
 
 fn event_bit(kind: EventKind) -> u32 {
@@ -146,6 +148,7 @@ pub fn load_in_background() {
     }
     tokio::spawn(async move {
         let (settings, error) = read_settings();
+        *LOADED.lock() = Some((dir.clone(), settings.clone()));
         let built = tokio::task::spawn_blocking(move || {
             let (host, actions, mut errors) = build_host(&dir, &settings);
             errors.extend(error);
@@ -247,6 +250,7 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     // The old plugins' programs are of no use to the new ones.
     process::kill_all();
     *HOST.lock() = None;
+    *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
     let (host, actions, errors) = build_host(dir, settings);
     install(editor, host, actions, errors);
 }
@@ -329,6 +333,24 @@ pub fn command_names() -> Vec<String> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// The working directory changed (`:cd`). Plugins with access to the
+/// workspace keep the directory they were started with (WASI preopens are
+/// fixed when a plugin starts), so reload them if the workspace changed.
+pub fn directory_changed(editor: &mut Editor) {
+    let stale = with_host(|host| {
+        host.workspace() != Some(workspace().as_path())
+            && host
+                .info()
+                .iter()
+                .any(|plugin| plugin.files != FileGrant::None)
+    })
+    .unwrap_or(false);
+    let loaded = LOADED.lock().clone();
+    if let (true, Some((dir, settings))) = (stale, loaded) {
+        load_from(editor, &dir, &settings);
+    }
 }
 
 /// How many plugins are loaded.
