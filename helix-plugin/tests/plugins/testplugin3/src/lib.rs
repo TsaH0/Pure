@@ -6,6 +6,11 @@ thread_local! {
     static POPUPS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static CLOSED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static POPUP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
+    static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+fn record(event: String) {
+    host::log(&format!("event:{event}"));
+    EVENTS.with_borrow_mut(|events| events.push(event));
 }
 struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
@@ -20,6 +25,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "popup-close-now",
                 "two-popups",
                 "popup-events",
+                "events",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -27,11 +33,26 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 doc: name.into(),
             })
             .collect(),
-            events: vec![types::EventKind::DocumentOpen],
+            events: {
+                let mut events = vec![types::EventKind::DocumentOpen];
+                if config.contains("extended-events") {
+                    events.extend([
+                        types::EventKind::PostCommand,
+                        types::EventKind::FocusGained,
+                        types::EventKind::FocusLost,
+                        types::EventKind::EditorIdle,
+                    ]);
+                }
+                events
+            },
         })
     }
     fn run_command(name: String, args: Vec<String>) -> Result<(), String> {
         match name.as_str() {
+            "events" => {
+                EVENTS.with_borrow(|events| host::set_status(&events.join(",")));
+                Ok(())
+            }
             "popup" | "popup-close-now" => {
                 let id = helix::plugin::ui::show_popup(&helix::plugin::ui::Popup {
                     markdown: args.iter().skip(1).cloned().collect::<Vec<_>>().join(" "),
@@ -137,9 +158,17 @@ impl exports::helix::plugin::events::Guest for TestPlugin {
     fn on_document_save(_doc: u32) {}
     fn on_document_close(_doc: u32) {}
     fn on_selection_change(_doc: u32) {}
-    fn on_post_command(_command: String) {}
-    fn on_focus_gained() {}
-    fn on_focus_lost() {}
-    fn on_editor_idle() {}
+    fn on_post_command(command: String) {
+        record(format!("command:{command}"));
+    }
+    fn on_focus_gained() {
+        record("focus:gained".into());
+    }
+    fn on_focus_lost() {
+        record("focus:lost".into());
+    }
+    fn on_editor_idle() {
+        record("idle".into());
+    }
 }
 export!(TestPlugin);

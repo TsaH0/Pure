@@ -336,6 +336,9 @@ async fn slow_event_handlers_are_disabled() -> anyhow::Result<()> {
     keys(&mut app, "ix<esc>").await;
     deliver_events(&mut app).await;
     assert_error(&app, "took longer than");
+    assert!(!helix_term::plugins::wants(
+        helix_plugin::EventKind::DocumentChange
+    ));
     // The editor keeps working and the plugin isn't called anymore.
     keys(&mut app, "iy<esc>").await;
     deliver_events(&mut app).await;
@@ -824,6 +827,81 @@ fn app_with_v3() -> (Application, tempfile::TempDir) {
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "").unwrap();
     (app, dir)
+}
+
+async fn v3_focus(app: &mut Application, focused: bool) {
+    #[cfg(not(windows))]
+    let event = if focused {
+        termina::Event::FocusIn
+    } else {
+        termina::Event::FocusOut
+    };
+    #[cfg(windows)]
+    let event = if focused {
+        crossterm::event::Event::FocusGained
+    } else {
+        crossterm::event::Event::FocusLost
+    };
+    app.handle_terminal_events(Ok(event)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_command_focus_and_idle_events_do_not_rearm_idle() -> anyhow::Result<()> {
+    use helix_plugin::EventKind;
+    use helix_term::plugins;
+    let (mut app, dir) = app_with_v3();
+    plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin3]\nextended-events = true\n",
+    )?;
+    keys(&mut app, "hl").await;
+    v3_focus(&mut app, false).await;
+    v3_focus(&mut app, true).await;
+    deliver_events(&mut app).await;
+    let lines = plugins::log_lines("testplugin3")?;
+    for expected in [
+        "event:command:move_char_left",
+        "event:command:move_char_right",
+        "event:focus:lost",
+        "event:focus:gained",
+        "event:idle",
+    ] {
+        assert!(
+            lines.iter().any(|line| line.contains(expected)),
+            "{lines:?}"
+        );
+    }
+    let focus: Vec<_> = lines
+        .iter()
+        .filter(|line| line.contains("event:focus:"))
+        .collect();
+    assert!(focus[0].contains("lost"));
+    assert!(focus[1].contains("gained"));
+    // No input: the consumed idle timer must stay consumed. A new timer
+    // would make this return early and produce another idle notification.
+    assert!(tokio::time::timeout(
+        Duration::from_millis(700),
+        run_event_loop_until_idle(&mut app)
+    )
+    .await
+    .is_err());
+    assert_eq!(plugins::log_lines("testplugin3")?, lines);
+
+    plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    for kind in [
+        EventKind::PostCommand,
+        EventKind::FocusGained,
+        EventKind::FocusLost,
+        EventKind::EditorIdle,
+    ] {
+        assert!(!plugins::wants(kind));
+    }
+    keys(&mut app, "hl").await;
+    v3_focus(&mut app, false).await;
+    deliver_events(&mut app).await;
+    assert!(plugins::log_lines("testplugin3")?.is_empty());
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]

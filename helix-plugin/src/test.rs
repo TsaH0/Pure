@@ -2148,6 +2148,50 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
 }
 
 #[test]
+fn api_03_extended_events_are_opt_in_and_preserve_dispatch_order() {
+    let (mut host, root) = testplugin2();
+    load_v3(&mut host, root.path(), ALL);
+    let kinds = [
+        EventKind::PostCommand,
+        EventKind::FocusGained,
+        EventKind::FocusLost,
+        EventKind::EditorIdle,
+    ];
+    for kind in kinds {
+        assert!(!host.wants(kind));
+    }
+    host.clear();
+    host.load(
+        &root.path().join("testplugin3"),
+        "{\"extended-events\":true}",
+    )
+    .unwrap();
+    for kind in kinds {
+        assert_eq!(host.subscribers(kind), ["testplugin3"]);
+    }
+    for event in [
+        Event::PostCommand("move_char_left".into()),
+        Event::FocusLost,
+        Event::FocusGained,
+        Event::EditorIdle,
+    ] {
+        let results = host.dispatch(event, &Snapshot::default());
+        assert_eq!(results.len(), 1);
+        for (name, result) in results {
+            assert_eq!(name, "testplugin3");
+            assert!(result.unwrap().is_empty());
+        }
+    }
+    let actions = host
+        .run_command("testplugin3", "events", vec![], Snapshot::default())
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["command:move_char_left,focus:lost,focus:gained,idle"]
+    );
+}
+
+#[test]
 fn three_api_worlds_run_side_by_side_with_frozen_02_components() {
     let (mut host, root) = testplugin2();
     let legacy = plugin_dir(root.path(), "testplugin", &testplugin_wasm(), ALL);

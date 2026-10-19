@@ -698,6 +698,7 @@ impl Application {
             EditorEvent::IdleTimer => {
                 self.editor.clear_idle_timer();
                 self.handle_idle_timeout().await;
+                crate::plugins::editor_idle(&mut self.editor);
 
                 #[cfg(feature = "integration")]
                 {
@@ -778,7 +779,15 @@ impl Application {
             }) => false,
             #[cfg(not(windows))]
             event if event.is_escape() => false,
-            event => self.compositor.handle_event(&event.into(), &mut cx),
+            event => {
+                let event = event.into();
+                match event {
+                    Event::FocusGained => crate::plugins::focus_changed(true),
+                    Event::FocusLost => crate::plugins::focus_changed(false),
+                    _ => {}
+                }
+                self.compositor.handle_event(&event, &mut cx)
+            }
         };
 
         if should_redraw && !self.editor.should_close() {

@@ -149,6 +149,11 @@ pub enum EventKind {
     DocumentSave,
     DocumentClose,
     SelectionChange,
+    /// API 0.3 and later.
+    PostCommand,
+    FocusGained,
+    FocusLost,
+    EditorIdle,
 }
 
 /// Most programs a plugin may run at once.
@@ -413,7 +418,7 @@ impl CallContext {
 static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 /// What happened in the editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     DocumentOpen(DocumentId),
     DocumentChange(DocumentId),
@@ -421,6 +426,10 @@ pub enum Event {
     DocumentSave(DocumentId),
     DocumentClose(DocumentId),
     SelectionChange(DocumentId),
+    PostCommand(String),
+    FocusGained,
+    FocusLost,
+    EditorIdle,
 }
 
 impl Event {
@@ -432,6 +441,10 @@ impl Event {
             Event::DocumentSave(_) => EventKind::DocumentSave,
             Event::DocumentClose(_) => EventKind::DocumentClose,
             Event::SelectionChange(_) => EventKind::SelectionChange,
+            Event::PostCommand(_) => EventKind::PostCommand,
+            Event::FocusGained => EventKind::FocusGained,
+            Event::FocusLost => EventKind::FocusLost,
+            Event::EditorIdle => EventKind::EditorIdle,
         }
     }
 }
@@ -1611,7 +1624,7 @@ impl PluginHost {
         self.subscribers(event.kind())
             .into_iter()
             .filter_map(|name| {
-                let result = self.dispatch_to(&name, event, snapshot)?;
+                let result = self.dispatch_to(&name, event.clone(), snapshot)?;
                 Some((name, result))
             })
             .collect()

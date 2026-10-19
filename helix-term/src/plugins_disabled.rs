@@ -23,6 +23,10 @@ pub fn register_hooks() {}
 
 pub fn document_saved(_doc: DocumentId) {}
 
+pub fn focus_changed(_focused: bool) {}
+
+pub fn editor_idle(_editor: &mut Editor) {}
+
 pub fn directory_changed(_editor: &mut Editor) {}
 
 pub fn count() -> usize {

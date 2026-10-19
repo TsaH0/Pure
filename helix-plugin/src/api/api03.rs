@@ -245,7 +245,7 @@ pub(super) async fn init(
         .helix_plugin_plugin()
         .call_init(store, config)
         .await?
-        .and_then(|registration| {
+        .map(|registration| {
             use v0_3::helix::plugin::types::EventKind as E;
             let commands = registration
                 .commands
@@ -258,19 +258,20 @@ pub(super) async fn init(
             let events = registration
                 .events
                 .into_iter()
-                .map(|event| {
-                    Ok(match event {
-                        E::DocumentOpen => EventKind::DocumentOpen,
-                        E::DocumentChange => EventKind::DocumentChange,
-                        E::ModeSwitch => EventKind::ModeSwitch,
-                        E::DocumentSave => EventKind::DocumentSave,
-                        E::DocumentClose => EventKind::DocumentClose,
-                        E::SelectionChange => EventKind::SelectionChange,
-                        _ => return Err("API 0.3 extended events are not enabled yet".to_owned()),
-                    })
+                .map(|event| match event {
+                    E::DocumentOpen => EventKind::DocumentOpen,
+                    E::DocumentChange => EventKind::DocumentChange,
+                    E::ModeSwitch => EventKind::ModeSwitch,
+                    E::DocumentSave => EventKind::DocumentSave,
+                    E::DocumentClose => EventKind::DocumentClose,
+                    E::SelectionChange => EventKind::SelectionChange,
+                    E::PostCommand => EventKind::PostCommand,
+                    E::FocusGained => EventKind::FocusGained,
+                    E::FocusLost => EventKind::FocusLost,
+                    E::EditorIdle => EventKind::EditorIdle,
                 })
-                .collect::<std::result::Result<Vec<_>, String>>()?;
-            Ok((commands, events))
+                .collect();
+            (commands, events)
         }))
 }
 
@@ -319,6 +320,30 @@ pub(super) async fn event(
 ) -> Result<()> {
     let guest = instance.helix_plugin_plugin();
     match event {
+        Event::PostCommand(command) => {
+            instance
+                .helix_plugin_events()
+                .call_on_post_command(store, &command)
+                .await
+        }
+        Event::FocusGained => {
+            instance
+                .helix_plugin_events()
+                .call_on_focus_gained(store)
+                .await
+        }
+        Event::FocusLost => {
+            instance
+                .helix_plugin_events()
+                .call_on_focus_lost(store)
+                .await
+        }
+        Event::EditorIdle => {
+            instance
+                .helix_plugin_events()
+                .call_on_editor_idle(store)
+                .await
+        }
         Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
         Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
         Event::ModeSwitch { old, new } => {

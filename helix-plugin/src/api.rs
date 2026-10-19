@@ -359,7 +359,11 @@ impl Instance {
                     // 0.1 plugins can't subscribe to these.
                     Event::DocumentSave(_)
                     | Event::DocumentClose(_)
-                    | Event::SelectionChange(_) => Ok(()),
+                    | Event::SelectionChange(_)
+                    | Event::PostCommand(_)
+                    | Event::FocusGained
+                    | Event::FocusLost
+                    | Event::EditorIdle => Ok(()),
                 }
             }
             Self::V0_2(instance) => {
@@ -390,6 +394,10 @@ impl Instance {
                             .call_on_selection_change(store, doc)
                             .await
                     }
+                    Event::PostCommand(_)
+                    | Event::FocusGained
+                    | Event::FocusLost
+                    | Event::EditorIdle => Ok(()),
                 }
             }
         }

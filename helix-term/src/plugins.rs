@@ -43,7 +43,7 @@ use parking_lot::Mutex;
 
 use crate::commands::{self, MappableCommand};
 use crate::compositor::Compositor;
-use crate::events::OnModeSwitch;
+use crate::events::{OnModeSwitch, PostCommand};
 use crate::job::{self, Jobs};
 
 /// Events are delivered after this delay, so a burst of changes (typing)
@@ -78,16 +78,24 @@ fn event_bit(kind: EventKind) -> u32 {
         EventKind::DocumentSave => 3,
         EventKind::DocumentClose => 4,
         EventKind::SelectionChange => 5,
+        EventKind::PostCommand => 6,
+        EventKind::FocusGained => 7,
+        EventKind::FocusLost => 8,
+        EventKind::EditorIdle => 9,
     }
 }
 
-const EVENT_KINDS: [EventKind; 6] = [
+const EVENT_KINDS: [EventKind; 10] = [
     EventKind::DocumentOpen,
     EventKind::DocumentChange,
     EventKind::ModeSwitch,
     EventKind::DocumentSave,
     EventKind::DocumentClose,
     EventKind::SelectionChange,
+    EventKind::PostCommand,
+    EventKind::FocusGained,
+    EventKind::FocusLost,
+    EventKind::EditorIdle,
 ];
 
 /// The workspace root for the current working directory.
@@ -454,8 +462,15 @@ pub fn run_command(
         anyhow::bail!("plugin commands nested too deeply (running {name})");
     }
     let snapshot = snapshot(editor);
-    let actions = with_host(|host| host.run_command(plugin, command, args, snapshot))
-        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))??;
+    let result = with_host(|host| host.run_command(plugin, command, args, snapshot))
+        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))?;
+    let actions = match result {
+        Ok(actions) => actions,
+        Err(error) => {
+            refresh_wanted();
+            return Err(error);
+        }
+    };
     DEPTH.fetch_add(1, Ordering::Relaxed);
     apply(editor, Some(jobs), actions);
     DEPTH.fetch_sub(1, Ordering::Relaxed);
@@ -715,7 +730,10 @@ fn deliver(editor: &mut Editor, jobs: &mut Jobs, plugin: &str, callback: Callbac
     let snapshot = snapshot(editor);
     match with_host(|host| host.callback(plugin, callback, &snapshot)) {
         Some(Ok(actions)) => apply(editor, Some(jobs), actions),
-        Some(Err(err)) => editor.set_error(err.to_string()),
+        Some(Err(err)) => {
+            refresh_wanted();
+            editor.set_error(err.to_string());
+        }
         None => {}
     }
 }
@@ -751,6 +769,13 @@ fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
 
 /// Register the hooks that turn editor events into plugin events.
 pub fn register_hooks() {
+    register_hook!(move |event: &mut PostCommand<'_, '_>| {
+        // Do not allocate a command name or lock anything unless requested.
+        if wants(EventKind::PostCommand) && APPLYING.load(Ordering::Relaxed) == 0 {
+            queue(Event::PostCommand(event.command.name().to_owned()));
+        }
+        Ok(())
+    });
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
         queue(Event::DocumentOpen(plugin_doc_id(event.doc)));
         Ok(())
@@ -778,6 +803,35 @@ pub fn register_hooks() {
         });
         Ok(())
     });
+}
+
+/// Terminal focus notifications (no work unless subscribed).
+pub fn focus_changed(focused: bool) {
+    queue(if focused {
+        Event::FocusGained
+    } else {
+        Event::FocusLost
+    });
+}
+
+/// Called by the editor's existing idle timer. Dispatch immediately: adding
+/// another debounce timer here would wake the editor again while idle.
+pub fn editor_idle(editor: &mut Editor) {
+    if wants(EventKind::EditorIdle) {
+        deliver_event(editor, Event::EditorIdle);
+    }
+}
+
+fn refresh_wanted() {
+    let mask = with_host(|host| {
+        EVENT_KINDS
+            .into_iter()
+            .filter(|kind| host.wants(*kind))
+            .map(event_bit)
+            .fold(0, |mask, bit| mask | bit)
+    })
+    .unwrap_or(0);
+    WANTED.store(mask, Ordering::Relaxed);
 }
 
 /// A document was written to disk.
@@ -814,27 +868,33 @@ pub fn deliver_events(editor: &mut Editor) {
         std::mem::take(&mut pending.events)
     };
     for event in events {
-        if let Event::DocumentChange(doc)
-        | Event::DocumentOpen(doc)
-        | Event::DocumentSave(doc)
-        | Event::SelectionChange(doc) = event
-        {
-            if editor_doc_id(editor, doc).is_none() {
-                continue; // closed in the meantime
-            }
-        }
-        let Some(plugins) = with_host(|host| host.subscribers(event.kind())) else {
+        deliver_event(editor, event);
+    }
+}
+
+fn deliver_event(editor: &mut Editor, event: Event) {
+    if let Event::DocumentChange(doc)
+    | Event::DocumentOpen(doc)
+    | Event::DocumentSave(doc)
+    | Event::SelectionChange(doc) = &event
+    {
+        if editor_doc_id(editor, *doc).is_none() {
             return;
-        };
-        // One plugin at a time, each seeing what the previous ones changed.
-        for plugin in plugins {
-            let snapshot = snapshot(editor);
-            let result = with_host(|host| host.dispatch_to(&plugin, event, &snapshot));
-            match result.flatten() {
-                Some(Ok(actions)) => apply(editor, None, actions),
-                Some(Err(err)) => editor.set_error(err.to_string()),
-                None => {}
+        }
+    }
+    let Some(plugins) = with_host(|host| host.subscribers(event.kind())) else {
+        return;
+    };
+    for plugin in plugins {
+        let snapshot = snapshot(editor);
+        let result = with_host(|host| host.dispatch_to(&plugin, event.clone(), &snapshot));
+        match result.flatten() {
+            Some(Ok(actions)) => apply(editor, None, actions),
+            Some(Err(error)) => {
+                refresh_wanted();
+                editor.set_error(error.to_string());
             }
+            None => {}
         }
     }
 }
@@ -886,7 +946,7 @@ pub fn describe() -> String {
 
 /// Whether any plugin subscribes to events of `kind`.
 pub fn wants(kind: EventKind) -> bool {
-    with_host(|host| host.wants(kind)).unwrap_or(false)
+    WANTED.load(Ordering::Relaxed) & event_bit(kind) != 0
 }
 
 #[cfg(test)]

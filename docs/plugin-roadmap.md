@@ -388,7 +388,7 @@ Do them together, as one version.
     columns and coordinate clamping; checked in tmux.
   - [ ] SDK/finder migration after the other 0.3 functionality works.
 - [x] **M10.3 Popup ids and `on-popup-close`**; centered popups.
-- [ ] **M10.4 More events:** `post-command(name)`, `focus-gained` /
+- [x] **M10.4 More events:** `post-command(name)`, `focus-gained` /
   `focus-lost`, `editor-idle` (from the idle timer). Add bits to
   `plugins::event_bit` and keep the "no cost when unused" rule.
 - [ ] **M10.5 Streaming output:** `stream: bool` in `spawn-options` and

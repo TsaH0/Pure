@@ -12,8 +12,9 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   (benchmarks).
 - Done: review-fix regression coverage and M11.1, M11.2, M11.4–M11.6.
 - Next: M10 (API 0.3), including M11.3 query generations. Frozen 0.2
-  fixtures, host/editor/SDK implementation, finder migration and guide updates
-  remain open. New follow-up findings are in the roadmap's Future TODOs.
+  fixtures, the third host world, positioned opens, popup lifecycle and event
+  hooks are implemented. Streaming, query generations, SDK/finder migration
+  and guide updates remain open. Follow-up findings are in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -170,7 +171,7 @@ Validation: 66 host tests, 32 editor library tests and 36 in-editor plugin tests
 passed; formatting, warning-free workspace Clippy and a normal build passed.
 
 Remaining 0.3 abilities return explicit pending-feature errors in the adapter
-until implemented: popups, streaming, extra events and live query generations.
+until implemented: streaming and live query generations.
 The SDK and examples remain on 0.2. M10.1/M10.2 stay open until the SDK/finder
 migration; then finish guide and full-suite validation. No older WIT changed.
 
@@ -190,9 +191,36 @@ targeted context tests also passed. Tmux confirmed centering before/after a
 terminal resize and the Esc close callback. Fixtures rebuilt; formatting,
 warning-free workspace Clippy and normal builds passed.
 
-Streaming, extra events and live generations remain before the SDK/finder/
+Streaming and live generations remain before the SDK/finder/
 guide migration. A pre-existing SDK picker-registry rollback issue found
 while reviewing callback ownership is recorded in the roadmap for SDK work.
+
+## M10.4 Command, focus and idle events
+
+API 0.3 subscribers receive post-command names, terminal focus gained/lost
+and editor-idle notifications. Focus is captured before compositor dispatch,
+so overlays cannot hide it. Idle uses the editor's existing one-shot timer
+and dispatches directly; it creates no debounce timer or polling task.
+Legacy guests cannot subscribe to these events.
+
+Performance: command hooks check the atomic subscription mask before
+allocating a name or locking the queue. Faulting plugins now refresh that
+mask immediately, stopping unnecessary hook work for disabled subscribers.
+The in-editor regression test verifies all four notifications, unsubscribing
+on reload, and no second idle notification without input over 700 ms.
+Tmux confirmed command names, real terminal focus notifications and idle
+delivery. After input settled, sampling all nine editor threads' scheduler
+counters for 1.2 seconds found zero additional scheduled timeslices. This is
+a quiet-session observation, alongside the one-shot timer regression test.
+Validation: 68 host tests, 32 editor library tests and 40 in-editor plugin
+tests passed. Fixtures rebuilt; formatting, warning-free workspace Clippy,
+the build without plugins, and a normal build passed.
+Release benchmark after the event hooks (1 / 5 / 20 plugins): cold cache
+56.5 / 230.9 / 955.6 ms; warm cache 1.8 / 3.9 / 15.9 ms; one event to one
+plugin 0.075 ms. These are a quiet rerun of the same executable: the first
+run immediately after compilation had a 633.9 ms single-plugin cold outlier
+(warm 2.4 / 5.1 / 22.3 ms). Warm loads remain within 5 ms per plugin;
+microbenchmarks do not establish a whole-editor comparison with vanilla Helix.
 
 ## M0 API 0.2 groundwork (done)
 
