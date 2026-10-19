@@ -19,8 +19,7 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 
 ## Open questions for the owner
 
-- Should Pure also ask once per program the first time a plugin runs it, on
-  top of `allow-process` in `plugins.toml`? Only the config grant exists now.
+- ~~Per-program prompt~~: decided no; `allow-process` is the only gate.
 - Should a plugin's `run-command` (API 0.1's `run-commands` permission, which
   can run `:sh`, `:write`, ...) also need the `process` grant? Unchanged for
   now.

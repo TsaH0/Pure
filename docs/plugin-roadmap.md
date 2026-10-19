@@ -419,17 +419,8 @@ Small, self-contained; each one is a good single task.
 
 - [x] **Text previews in pickers** (`preview::text`): `PathOrId::Text`,
   cached as a document; SDK `Item::with_text_preview`.
-- [ ] **Streaming program output**: `on-process-output(id, chunk)` behind a
-  `stream: bool` spawn option, so a picker can fill as `rg` runs. Needs
-  the next API version once 0.2 is released.
-- [ ] **Popup ids and `on-popup-close`**, and popups placed centered.
-- [ ] **More events**: `post-command(name)`, `focus-gained` / `focus-lost`,
-  `editor-idle`.
-- [ ] **Open with a split from plugins**: `open-file` only replaces the
-  view; `examples/finder` works around it with `:vsplit` through
-  `run-command`. Add an `open-action` (and a position) to `open-file`.
-- [ ] **Per-program process prompt** (owner's open question): ask once the
-  first time a plugin runs a program, remember the answer.
+- [x] ~~Per-program process prompt~~: the owner decided against it;
+  `allow-process` in `plugins.toml` is the only gate.
 - [ ] **Stale preopens**: plugins see the workspace from load time; reload
   their WASI context (or warn) after `:cd`.
 - [x] **Parallel compilation on a cold cache**, and plugins load in the
