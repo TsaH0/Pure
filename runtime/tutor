@@ -393,8 +393,8 @@
  --> 6) Sugar is sweet,
  --> 7) And so are you.
 
- Note: X works similarly to x although it doesn't extend to
-       subsequent lines. X on an empty line does nothing.
+ Note: X works like x but upwards: it selects the line, then
+       extends the selection to the lines above.
 
 =================================================================
 =                   3.8 COLLAPSING SELECTIONS                   =

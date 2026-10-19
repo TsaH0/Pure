@@ -321,6 +321,30 @@ async fn test_undo_redo() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_extend_line_above_with_x() -> anyhow::Result<()> {
+    // `X` is `x` upwards: the line, then the lines above.
+    test((
+        "lorem\nipsum\ndo#[l|]#or\n",
+        "X",
+        "lorem\nipsum\n#[|dolor\n]#",
+    ))
+    .await?;
+    test((
+        "lorem\nipsum\ndo#[l|]#or\n",
+        "XX",
+        "lorem\n#[|ipsum\ndolor\n]#",
+    ))
+    .await?;
+    test((
+        "lorem\nipsum\ndo#[l|]#or\n",
+        "X2X",
+        "#[|lorem\nipsum\ndolor\n]#",
+    ))
+    .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_extend_line() -> anyhow::Result<()> {
     // extend with line selected then count
     test((

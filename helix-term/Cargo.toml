@@ -16,8 +16,8 @@ homepage.workspace = true
 # generate a .deb in target/debian/ with the command: cargo deb --no-build
 name = "helix"
 assets = [
-  { source = "target/release/hx", dest = "/usr/lib/helix/", mode = "755" },
-  { source = "../contrib/hx_launcher.sh", dest = "/usr/bin/hx", mode = "755" },
+  { source = "target/release/pure", dest = "/usr/lib/helix/", mode = "755" },
+  { source = "../contrib/hx_launcher.sh", dest = "/usr/bin/pure", mode = "755" },
   { source = "../runtime/*", dest = "/usr/lib/helix/runtime/", mode = "644" },
   { source = "../runtime/grammars/*", dest = "/usr/lib/helix/runtime/grammars/", mode = "644" }, # to avoid sources/
   { source = "../runtime/queries/**/*", dest = "/usr/lib/helix/runtime/queries/", mode = "644" },
@@ -39,11 +39,6 @@ git = ["helix-vcs/git"]
 [[bin]]
 name = "pure"
 path = "src/main.rs"
-
-# The original name, so existing scripts and habits keep working.
-[[bin]]
-name = "hx"
-path = "src/hx.rs"
 
 [dependencies]
 helix-stdx = { path = "../helix-stdx" }

@@ -26,7 +26,7 @@ inspired editor, written in Rust) that keeps up with Helix and adds:
 - **Smarter text objects**: `mi(`/`ma"` find the nearest pair on the line,
   and letters work for pairs (`mib`, `miB`, `mir`, `miA`, `mid`, `mis`, `miq`).
 
-Run it with `pure` (`hx` still works). Configuration lives where Helix keeps
+Run it with `pure`. Configuration lives where Helix keeps
 it, in `~/.config/helix/`.
 
 # Features (from Helix)
@@ -45,7 +45,7 @@ Note: Only certain languages have indentation definitions at the moment. Check
 cargo install --path helix-term --locked
 ```
 
-installs `pure` and `hx`. See Helix's
+installs `pure`. See Helix's
 [installation documentation](https://docs.helix-editor.com/install.html) for
 the runtime files and grammars.
 

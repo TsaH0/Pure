@@ -6,7 +6,7 @@ Pure is installed by [building it from source](./building-from-source.md):
 cargo install --path helix-term --locked
 ```
 
-installs the `pure` binary (and `hx`, which is the same program).
+installs the `pure` binary.
 
 Note that:
 
