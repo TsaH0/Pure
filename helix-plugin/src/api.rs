@@ -162,12 +162,14 @@ impl process::Host for State {
         _argv: Vec<String>,
         _options: process::InteractiveOptions,
     ) -> std::result::Result<u32, String> {
+        self.need_ui("run-interactive")?;
         Err("interactive process support is not implemented yet".into())
     }
     fn kill(&mut self, _id: u32) {}
 }
 impl ui::Host for State {
     fn show_picker(&mut self, _picker: ui::Picker) -> std::result::Result<u32, String> {
+        self.need_ui("show-picker")?;
         Err("picker support is not implemented yet".into())
     }
     fn push_items(&mut self, _id: u32, _items: Vec<ui::Item>) -> std::result::Result<(), String> {
@@ -244,6 +246,30 @@ impl Instance {
                 .call_run_command(store, name, args),
         }
     }
+    pub fn call_callback(
+        &self,
+        store: &mut Store<State>,
+        callback: &super::Callback,
+    ) -> Result<()> {
+        let Self::V0_2(instance) = self else {
+            anyhow::bail!("callbacks require API 0.2")
+        };
+        let callbacks = instance.helix_plugin_callbacks();
+        match callback {
+            super::Callback::ProcessDone { id, result } => callbacks.call_on_process_done(
+                store,
+                *id,
+                result.as_ref().map_err(|err| err.as_str()),
+            ),
+            super::Callback::PickerDone { id, result } => {
+                callbacks.call_on_picker_done(store, *id, result)
+            }
+            super::Callback::PromptDone { .. } => {
+                anyhow::bail!("API 0.2 does not export prompt callbacks")
+            }
+        }
+    }
+
     pub fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
         match self {
             Self::V0_1(instance) => {

@@ -121,7 +121,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     versions.
   - Done when: the 0.1 test plugin and `text-tools` load and pass every
     existing test, and a minimal 0.2 test plugin loads.
-- [ ] **M0.3 Request ids and callbacks.** Depends on: M0.2.
+- [x] **M0.3 Request ids and callbacks.** Depends on: M0.2.
   - In `State`/`Plugin`: a `next_id` counter and `pending: HashMap<u32,
     PendingKind>`. Add `pub enum Callback { ProcessDone { id, result },
     PickerDone { id, result }, PromptDone { .. } }` and

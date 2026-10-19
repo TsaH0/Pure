@@ -787,3 +787,183 @@ fn manifest_selects_the_component_world() {
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
     assert!(err.to_string().contains("supports 0.1 and 0.2"));
 }
+
+fn testplugin2() -> (PluginHost, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(path, source).unwrap();
+    let mut host = host();
+    host.load(&dir, "{}").unwrap();
+    (host, root)
+}
+
+fn process_done(id: u32, stdout: &str) -> Callback {
+    Callback::ProcessDone {
+        id,
+        result: Ok(ProcessOutput {
+            exit_code: Some(0),
+            stdout: stdout.into(),
+            stderr: String::new(),
+        }),
+    }
+}
+
+#[test]
+fn callbacks_are_delivered_once_and_check_their_kind() {
+    let (mut host, _root) = testplugin2();
+    let id = host
+        .register_request("testplugin2", PendingKind::Process)
+        .unwrap();
+    let wrong_kind = Callback::PickerDone {
+        id,
+        result: PickerResult::Cancelled,
+    };
+    assert!(host
+        .callback("testplugin2", wrong_kind, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "hello"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    let messages = statuses(&actions);
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages[0].starts_with(&format!("process:{id}:")),
+        "{messages:?}"
+    );
+    assert!(messages[0].contains("hello"), "{messages:?}");
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(id, "duplicate"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    assert!(host
+        .callback("missing", process_done(id, "late"), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    let picker = host
+        .register_request("testplugin2", PendingKind::Picker)
+        .unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id: picker,
+                result: PickerResult::Cancelled,
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(statuses(&actions)[0].starts_with(&format!("picker:{picker}:")));
+}
+
+#[test]
+fn request_ids_are_not_reused_after_clear_or_host_recreation() {
+    let (mut host, root) = testplugin2();
+    let old = host
+        .register_request("testplugin2", PendingKind::Process)
+        .unwrap();
+    host.clear();
+    host.load(&root.path().join("testplugin2"), "{}").unwrap();
+    let new = host
+        .register_request("testplugin2", PendingKind::Process)
+        .unwrap();
+    assert_ne!(old, new);
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(old, "stale"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    drop(host);
+    let (mut host, _root) = testplugin2();
+    let recreated = host
+        .register_request("testplugin2", PendingKind::Process)
+        .unwrap();
+    assert_ne!(new, recreated);
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(new, "stale"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn ui_is_restricted_to_commands_and_callbacks() {
+    use v0_2::helix::plugin::{process, ui};
+    let (mut host, _root) = testplugin2();
+    let state = host.plugins[0].store.data_mut();
+    for context in [
+        CallContext::Init,
+        CallContext::Event,
+        CallContext::Command,
+        CallContext::Callback,
+    ] {
+        state.context = context;
+        let command = state.run_command("goto_line_end".into());
+        let interactive = process::Host::run_interactive(
+            state,
+            vec!["true".into()],
+            process::InteractiveOptions {
+                cwd: None,
+                chooser_file: false,
+                wait_for_key: false,
+            },
+        );
+        let picker = ui::Host::show_picker(
+            state,
+            ui::Picker {
+                title: "Test".into(),
+                columns: vec![],
+                items: vec![],
+                initial: None,
+            },
+        );
+        if context.allows_ui() {
+            assert!(command.is_ok());
+            assert!(interactive.unwrap_err().contains("not implemented"));
+            assert!(picker.unwrap_err().contains("not implemented"));
+        } else {
+            assert!(command.unwrap_err().contains("only available"));
+            assert!(interactive.unwrap_err().contains("only available"));
+            assert!(picker.unwrap_err().contains("only available"));
+        }
+    }
+}
+
+#[test]
+fn legacy_plugins_cannot_reserve_callbacks() {
+    let (mut host, _root) = testplugin("{}");
+    assert!(host
+        .register_request("testplugin", PendingKind::Process)
+        .is_err());
+    assert!(host
+        .callback(
+            "testplugin",
+            process_done(123, "ignored"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}

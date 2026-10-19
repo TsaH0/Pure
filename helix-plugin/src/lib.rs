@@ -13,10 +13,10 @@
 //! WASI, and every call runs with a time and memory limit. A plugin that traps
 //! or runs out of time is disabled.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -163,6 +163,66 @@ pub enum Action {
     Error(String),
 }
 
+/// Result of a background program or interactive chooser.
+pub use v0_2::helix::plugin::process::Output as ProcessOutput;
+/// A picker choice, including the requested split action.
+pub use v0_2::helix::plugin::ui::PickerResult;
+
+/// The completion expected for an outstanding request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingKind {
+    Process,
+    Picker,
+    /// Reserved for a future API version with prompt exports.
+    Prompt,
+}
+
+/// A result delivered after the original plugin call returned.
+#[derive(Debug, Clone)]
+pub enum Callback {
+    ProcessDone {
+        id: u32,
+        result: Result<ProcessOutput, String>,
+    },
+    PickerDone {
+        id: u32,
+        result: PickerResult,
+    },
+    /// Reserved: API 0.2 has no prompt callback export.
+    PromptDone {
+        id: u32,
+        result: Option<String>,
+    },
+}
+
+impl Callback {
+    fn request(&self) -> (u32, PendingKind) {
+        match self {
+            Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
+            Self::PickerDone { id, .. } => (*id, PendingKind::Picker),
+            Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallContext {
+    Init,
+    Command,
+    Event,
+    Callback,
+}
+
+impl CallContext {
+    fn allows_ui(self) -> bool {
+        matches!(self, Self::Command | Self::Callback)
+    }
+}
+
+// Never reuse an id, even after recreating the host on reload. Late results
+// must not reach a new instance of a plugin with the same name.
+static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+
 /// What happened in the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -214,9 +274,9 @@ struct State {
     permissions: HashSet<Permission>,
     snapshot: Snapshot,
     actions: Vec<Action>,
-    /// Whether the current call runs one of the plugin's commands (as opposed
-    /// to `init` or an event handler).
-    in_command: bool,
+    context: CallContext,
+    next_id: &'static AtomicU32,
+    pending: HashMap<u32, PendingKind>,
 }
 
 impl WasiView for State {
@@ -229,6 +289,28 @@ impl WasiView for State {
 }
 
 impl State {
+    fn request(&mut self, kind: PendingKind) -> Result<u32, String> {
+        if kind == PendingKind::Prompt {
+            return Err("API 0.2 does not export prompt callbacks".into());
+        }
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| "plugin request ids exhausted".to_string())?;
+        self.pending.insert(id, kind);
+        Ok(id)
+    }
+
+    fn need_ui(&self, function: &str) -> Result<(), String> {
+        if self.context.allows_ui() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{function} is only available from plugin commands and callbacks"
+            ))
+        }
+    }
+
     fn need(&self, permission: Permission) -> Result<(), String> {
         if self.permissions.contains(&permission) {
             Ok(())
@@ -365,8 +447,10 @@ impl State {
 
     fn run_command(&mut self, command: String) -> Result<(), String> {
         self.need(Permission::RunCommands)?;
-        if !self.in_command {
-            return Err("run-command is only available while running a plugin command".into());
+        if !self.context.allows_ui() {
+            return Err(
+                "run-command is only available while running a plugin command or callback".into(),
+            );
         }
         if command.trim().is_empty() {
             return Err("empty command".into());
@@ -481,7 +565,7 @@ impl Plugin {
     fn call<R>(
         &mut self,
         snapshot: Snapshot,
-        in_command: bool,
+        context: CallContext,
         limit: Duration,
         f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R> + Send,
     ) -> anyhow::Result<(R, Vec<Action>)>
@@ -494,7 +578,7 @@ impl Plugin {
         let state = self.store.data_mut();
         state.snapshot = snapshot;
         state.actions.clear();
-        state.in_command = in_command;
+        state.context = context;
         let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
         self.store.set_epoch_deadline(ticks);
 
@@ -504,9 +588,11 @@ impl Plugin {
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
+        state.context = CallContext::Init;
         match result {
             Ok(value) => Ok((value, actions)),
             Err(err) => {
+                state.pending.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
                         format!("it took longer than {} ms", limit.as_millis())
@@ -697,7 +783,9 @@ impl PluginHost {
             permissions: manifest.permissions.iter().copied().collect(),
             snapshot: Snapshot::default(),
             actions: Vec::new(),
-            in_command: false,
+            context: CallContext::Init,
+            next_id: &NEXT_REQUEST_ID,
+            pending: HashMap::new(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -726,7 +814,7 @@ impl PluginHost {
         };
         let (registration, actions) = plugin.call(
             Snapshot::default(),
-            false,
+            CallContext::Init,
             self.limits.init,
             |guest, store| guest.call_init(store, config),
         )?;
@@ -836,11 +924,64 @@ impl PluginHost {
             );
         }
         let name = plugin.manifest.name.clone();
-        let (result, actions) = plugin.call(snapshot, true, limit, |guest, store| {
-            guest.call_run_command(store, command, &args)
-        })?;
-        result.map_err(|err| anyhow!("{name}/{command}: {err}"))?;
+        let pending = plugin.store.data().pending.clone();
+        let (result, actions) =
+            plugin.call(snapshot, CallContext::Command, limit, |guest, store| {
+                guest.call_run_command(store, command, &args)
+            })?;
+        if let Err(err) = result {
+            plugin.store.data_mut().pending = pending;
+            bail!("{name}/{command}: {err}");
+        }
         Ok(actions)
+    }
+
+    /// Reserve a result id for an API 0.2 host operation. Used by adapters
+    /// starting asynchronous operations; ids are never reused after reload.
+    pub fn register_request(&mut self, plugin: &str, kind: PendingKind) -> anyhow::Result<u32> {
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin)
+            .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
+        if plugin.manifest.api != "0.2" || plugin.disabled.is_some() {
+            bail!("requests require an enabled API 0.2 plugin");
+        }
+        plugin
+            .store
+            .data_mut()
+            .request(kind)
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// Deliver a completion with the command time limit and a fresh snapshot.
+    /// Unknown, duplicate, wrong-kind and late results are ignored.
+    pub fn callback(
+        &mut self,
+        plugin: &str,
+        callback: Callback,
+        snapshot: &Snapshot,
+    ) -> anyhow::Result<Vec<Action>> {
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none())
+        else {
+            return Ok(Vec::new());
+        };
+        let (id, kind) = callback.request();
+        if plugin.store.data().pending.get(&id) != Some(&kind) {
+            return Ok(Vec::new());
+        }
+        plugin.store.data_mut().pending.remove(&id);
+        plugin
+            .call(
+                snapshot.clone(),
+                CallContext::Callback,
+                self.limits.command,
+                |guest, store| guest.call_callback(store, &callback),
+            )
+            .map(|((), actions)| actions)
     }
 
     /// Send `event` to the plugins that subscribed to it. Returns the actions
@@ -857,9 +998,12 @@ impl PluginHost {
             .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
             .map(|plugin| {
                 let result = plugin
-                    .call(snapshot.clone(), false, limit, |guest, store| {
-                        guest.call_event(store, event)
-                    })
+                    .call(
+                        snapshot.clone(),
+                        CallContext::Event,
+                        limit,
+                        |guest, store| guest.call_event(store, event),
+                    )
                     .map(|((), actions)| actions);
                 (plugin.manifest.name.clone(), result)
             })

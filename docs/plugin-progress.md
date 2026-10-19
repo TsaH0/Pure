@@ -2,9 +2,9 @@
 
 ## Status
 
-- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds).
-- In progress: M0.3 (request ids and callbacks), on `plugin-api-0.2`.
-- Next: M0.4–M0.5, then M2.1 and the remaining authorized milestones in the requested order.
+- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks).
+- In progress: M0.4 (SDK 0.2), on `plugin-api-0.2`.
+- Next: M0.5, then M2.1 and the remaining authorized milestones in the requested order.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
 ## Open questions for the owner
@@ -32,5 +32,14 @@
 - `helix-plugin/src/api.rs` contains separate Wasmtime bindings for 0.1 and 0.2, thin adapters to the shared `State` methods, and the versioned instance enum. Manifest validation explicitly names both supported versions.
 - Added a minimal 0.2 fixture and its reproducible build step, needed to validate the second world. M0.5 will expand it and migrate it to the 0.2 SDK.
 - Tests prove both versions load together, 0.2 reads/edits/selections/mode events use shared state, a mismatched manifest fails, and unsupported versions name the supported APIs.
-- `cargo check`, formatting, workspace Clippy (no warnings), all 34 host tests and 21 editor library tests passed. Plugin integration rerun is in progress.
+- `cargo check`, formatting, workspace Clippy (no warnings), all 34 host tests and 21 editor library tests passed. All 18 plugin integration tests passed too.
 - Corrected the draft 0.2 WIT's callback parameter spelling to `%result`, as required by the WIT parser. API 0.1 remains unchanged. Process and picker imports explicitly report unsupported capabilities until their milestones implement them.
+
+
+## M0.3 Request ids and callbacks (done, 2026-10-19, PR pending)
+
+- Added typed pending requests, `PluginHost::register_request` for host adapters, and `PluginHost::callback` with fresh snapshots, command deadlines, kind validation and one-shot delivery. Traps clear pending requests; failed commands roll back requests reserved during that call.
+- Explicit init/command/event/callback contexts guard UI and editor-command imports. Both commands and callbacks may request UI; init and events are refused.
+- Request allocation uses a process-wide checked counter shared by stores, rather than resetting a counter per instance. This prevents a late result from matching a new request after host recreation or reload; exhaustion returns an error instead of wrapping.
+- The planned `PromptDone` variant is reserved. The supplied 0.2 WIT has no prompt export, so prompt reservation explicitly fails; M3 needs a new versioned interface rather than modifying the existing 0.2 ABI.
+- Added tests for process/picker delivery, wrong-kind/unknown/duplicate ids, clear/recreation, legacy refusal and all four UI contexts. All 38 host tests and workspace Clippy (no warnings) pass. Editor library and integration reruns are running.
