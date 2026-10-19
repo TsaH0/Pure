@@ -313,6 +313,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `x`     | Run a shell command, output in `*compilation*` (Emacs `M-x compile`)    | `compile`                                  |
 | `X`     | Show or hide `*compilation*` (`C-j` hides it, `Esc` closes it)          | `toggle_compilation`                       |
 | `z`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
+| `q`     | Open the quickfix list (`]q`/`[q` to step through it)                   | `quickfix_picker`                          |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |
 | `c`     | Comment/uncomment selections                                            | `toggle_comments`                          |
 | `C`     | Block comment/uncomment selections                                      | `toggle_block_comments`                    |
@@ -388,6 +389,10 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 | `[G`     | Go to first change                           | `goto_first_change`     |
 | `[x`     | Go to next (X)HTML element                   | `goto_next_xml_element` |
 | `]x`     | Go to previous (X)HTML element               | `goto_prev_xml_element` |
+| `]q`     | Go to next quickfix entry                    | `quickfix_next`         |
+| `[q`     | Go to previous quickfix entry                | `quickfix_prev`         |
+| `]Q`     | Go to last quickfix entry                    | `quickfix_last`         |
+| `[Q`     | Go to first quickfix entry                   | `quickfix_first`        |
 | `]Space` | Add newline below                            | `add_newline_below`     |
 | `[Space` | Add newline above                            | `add_newline_above`     |
 

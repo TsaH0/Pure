@@ -2806,6 +2806,183 @@ fn substitute_command(
     substitute(cx.editor, &format!("s{}", args[0].trim_start()))
 }
 
+fn quickfix_go(
+    cx: &mut compositor::Context,
+    event: PromptEvent,
+    target: super::quickfix::Target,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        super::quickfix::go(cx.editor, target);
+    }
+    Ok(())
+}
+
+fn count_arg(args: &Args) -> anyhow::Result<usize> {
+    match args.first() {
+        Some(count) => count
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or_else(|| anyhow!("expected a number, got '{count}'")),
+        None => Ok(1),
+    }
+}
+
+fn cnext(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let count = count_arg(&args)?;
+    quickfix_go(cx, event, super::quickfix::Target::Next(count))
+}
+
+fn cprev(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let count = count_arg(&args)?;
+    quickfix_go(cx, event, super::quickfix::Target::Previous(count))
+}
+
+fn cfirst(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    quickfix_go(cx, event, super::quickfix::Target::First)
+}
+
+fn clast(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    quickfix_go(cx, event, super::quickfix::Target::Last)
+}
+
+fn cc(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let target = match args.first() {
+        Some(_) => super::quickfix::Target::Nth(count_arg(&args)? - 1),
+        None => super::quickfix::Target::Current,
+    };
+    quickfix_go(cx, event, target)
+}
+
+fn copen(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    if super::quickfix::with(|list| list.entries.is_empty()) {
+        bail!("The quickfix list is empty");
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(picker) = super::quickfix::open(editor) {
+                    compositor.push(Box::new(picker));
+                }
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn cclear(_cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        super::quickfix::set("", Vec::new());
+    }
+    Ok(())
+}
+
+/// Report how many entries a new quickfix list has and go to the first one.
+fn quickfix_filled(editor: &mut Editor, title: &str, entries: Vec<super::quickfix::Entry>) {
+    let count = entries.len();
+    super::quickfix::set(title, entries);
+    if count == 0 {
+        editor.set_error(format!("{title}: no locations found"));
+    } else {
+        super::quickfix::go(editor, super::quickfix::Target::First);
+    }
+}
+
+fn cbuffer(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let text = doc!(cx.editor).text().to_string();
+    let entries = super::quickfix::parse(&text, &helix_stdx::env::current_working_dir());
+    quickfix_filled(cx.editor, "buffer", entries);
+    Ok(())
+}
+
+fn cdiagnostics(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut entries = Vec::new();
+    for (uri, diagnostics) in &cx.editor.diagnostics {
+        let Some(path) = uri.as_path() else {
+            continue;
+        };
+        let mut diagnostics: Vec<_> = diagnostics
+            .iter()
+            .map(|(diagnostic, _)| diagnostic)
+            .collect();
+        diagnostics.sort_by_key(|d| (d.range.start.line, d.range.start.character));
+        for diagnostic in diagnostics {
+            let severity = match diagnostic.severity {
+                Some(helix_lsp::lsp::DiagnosticSeverity::ERROR) => "error: ",
+                Some(helix_lsp::lsp::DiagnosticSeverity::WARNING) => "warning: ",
+                _ => "",
+            };
+            entries.push(super::quickfix::Entry {
+                path: path.to_path_buf(),
+                line: diagnostic.range.start.line as usize,
+                column: diagnostic.range.start.character as usize,
+                text: format!(
+                    "{severity}{}",
+                    diagnostic.message.lines().next().unwrap_or("")
+                ),
+            });
+        }
+    }
+    quickfix_filled(cx.editor, "diagnostics", entries);
+    Ok(())
+}
+
+/// Vim's `:grep`: search with ripgrep (or grep) and put the matches in the
+/// quickfix list.
+fn grep(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    let title = format!("grep {}", args.join(" "));
+    let cwd = helix_stdx::env::current_working_dir();
+    cx.editor
+        .set_status(format!("Searching: {}", args.join(" ")));
+    cx.jobs.callback(async move {
+        let mut rg = tokio::process::Command::new("rg");
+        rg.args(["--vimgrep", "--smart-case", "--"])
+            .args(&args)
+            .current_dir(&cwd);
+        let output = match rg.output().await {
+            Ok(output) => output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let mut grep = tokio::process::Command::new("grep");
+                grep.args(["-rnH", "--exclude-dir=.git", "-e"])
+                    .args(&args)
+                    .current_dir(&cwd);
+                if args.len() == 1 {
+                    grep.arg(".");
+                }
+                grep.output().await?
+            }
+            Err(err) => return Err(err.into()),
+        };
+        // grep tools exit with 1 when nothing matched.
+        if !output.status.success() && output.status.code() != Some(1) {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!("{title} failed: {message}");
+        }
+        let entries = super::quickfix::parse(&String::from_utf8_lossy(&output.stdout), &cwd);
+        Ok(Callback::Editor(Box::new(move |editor: &mut Editor| {
+            quickfix_filled(editor, &title, entries)
+        })))
+    });
+    Ok(())
+}
+
 fn plugin_run(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4184,6 +4361,116 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: Signature {
             positionals: (1, Some(1)),
             raw_after: Some(0),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "copen",
+        aliases: &["cope", "cw", "cwindow"],
+        doc: "Show the quickfix list in a picker.",
+        fun: copen,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cnext",
+        aliases: &["cn"],
+        doc: "Go to the next (or Nth next) quickfix entry.",
+        fun: cnext,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cprevious",
+        aliases: &["cprev", "cp", "cN"],
+        doc: "Go to the previous (or Nth previous) quickfix entry.",
+        fun: cprev,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cfirst",
+        aliases: &["cfir", "cr"],
+        doc: "Go to the first quickfix entry.",
+        fun: cfirst,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "clast",
+        aliases: &["cla"],
+        doc: "Go to the last quickfix entry.",
+        fun: clast,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cc",
+        aliases: &[],
+        doc: "Go to quickfix entry N (or the current one again).",
+        fun: cc,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cbuffer",
+        aliases: &["cb"],
+        doc: "Fill the quickfix list with the `file:line:col` locations in the current buffer.",
+        fun: cbuffer,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cdiagnostics",
+        aliases: &["cdiag"],
+        doc: "Fill the quickfix list with the workspace diagnostics.",
+        fun: cdiagnostics,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "grep",
+        aliases: &[],
+        doc: "Search with ripgrep (or grep) and put the matches in the quickfix list: `:grep <pattern> [paths...]`.",
+        fun: grep,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cclear",
+        aliases: &[],
+        doc: "Empty the quickfix list.",
+        fun: cclear,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
             ..Signature::DEFAULT
         },
     },

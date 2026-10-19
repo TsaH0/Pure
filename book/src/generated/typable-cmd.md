@@ -89,6 +89,16 @@
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
 | `:run-interactive`, `:term` | Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor. |
 | `:substitute` | Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Replacement: `\1`/`$1`/`${name}` groups, `&` the match, `\u` `\U..\E` `\l` `\L` case. Flags: g (all per line), i, I, n (count). |
+| `:copen`, `:cope`, `:cw`, `:cwindow` | Show the quickfix list in a picker. |
+| `:cnext`, `:cn` | Go to the next (or Nth next) quickfix entry. |
+| `:cprevious`, `:cprev`, `:cp`, `:cN` | Go to the previous (or Nth previous) quickfix entry. |
+| `:cfirst`, `:cfir`, `:cr` | Go to the first quickfix entry. |
+| `:clast`, `:cla` | Go to the last quickfix entry. |
+| `:cc` | Go to quickfix entry N (or the current one again). |
+| `:cbuffer`, `:cb` | Fill the quickfix list with the `file:line:col` locations in the current buffer. |
+| `:cdiagnostics`, `:cdiag` | Fill the quickfix list with the workspace diagnostics. |
+| `:grep` | Search with ripgrep (or grep) and put the matches in the quickfix list: `:grep <pattern> [paths...]`. |
+| `:cclear` | Empty the quickfix list. |
 | `:plugin-run` | Run a plugin command: `:plugin-run <plugin>/<command> [args...]`. |
 | `:plugin-list` | Show the loaded plugins and their commands. |
 | `:plugin-reload` | Reload all plugins and plugins.toml. |

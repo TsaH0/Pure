@@ -435,6 +435,20 @@ impl AppBuilder {
     }
 }
 
+/// Send `keys` and run the editor until it is idle, without quitting, so a
+/// test can go on with the same editor.
+pub async fn send_keys(app: &mut Application, keys: &str) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut stream = UnboundedReceiverStream::new(rx);
+    for key in parse_macro(keys).unwrap() {
+        tx.send(Ok(Event::Key(KeyEvent::from(key)))).unwrap();
+    }
+    assert!(
+        app.event_loop_until_idle(&mut stream).await,
+        "the editor exited"
+    );
+}
+
 pub async fn run_event_loop_until_idle(app: &mut Application) {
     let (_, rx) = tokio::sync::mpsc::unbounded_channel();
     let mut rx_stream = UnboundedReceiverStream::new(rx);

@@ -20,6 +20,7 @@ mod test {
     mod commands;
     mod movement;
     mod plugins;
+    mod quickfix;
     mod splits;
     mod substitute;
 }

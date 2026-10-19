@@ -6,13 +6,6 @@ use std::time::Duration;
 
 use helix_term::application::Application;
 use helix_view::editor::Severity;
-use helix_view::input::parse_macro;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-
-#[cfg(windows)]
-use crossterm::event::{Event, KeyEvent};
-#[cfg(not(windows))]
-use termina::event::{Event, KeyEvent};
 
 use super::*;
 
@@ -75,18 +68,8 @@ fn status(app: &Application) -> (String, Severity) {
     (message.to_string(), *severity)
 }
 
-/// Send `keys` and run the editor until it is idle (without quitting, so a
-/// test can go on with the same editor).
 async fn keys(app: &mut Application, keys: &str) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut stream = UnboundedReceiverStream::new(rx);
-    for key in parse_macro(keys).unwrap() {
-        tx.send(Ok(Event::Key(KeyEvent::from(key)))).unwrap();
-    }
-    assert!(
-        app.event_loop_until_idle(&mut stream).await,
-        "the editor exited"
-    );
+    send_keys(app, keys).await
 }
 
 /// Let debounced plugin events be delivered.
