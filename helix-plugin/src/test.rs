@@ -1610,7 +1610,7 @@ mod properties {
                     }
                     let mut result = rope.clone();
                     transaction.apply(&mut result);
-                    TestResult::from_bool(result.to_string() == model(&text, &edits))
+                    TestResult::from_bool(result == model(&text, &edits).as_str())
                 }
                 Err(_) => TestResult::from_bool(!valid(len, &edits)),
             }
