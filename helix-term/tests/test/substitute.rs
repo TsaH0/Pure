@@ -66,6 +66,23 @@ async fn capture_groups_and_case() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn one_eyed_kirby() -> anyhow::Result<()> {
+    // Vim's capture-everything group `\(.*\)`, and the same as `(.*)`.
+    test((
+        "#[a|]#lpha\nbeta\n",
+        ":%s/^\\(.*\\)$/\"\\1\",/<ret>",
+        "\"alpha\",\n#[\"|]#beta\",\n",
+    ))
+    .await?;
+    test((
+        "#[a|]#lpha\nbeta\n",
+        ":%s/(.*)/[$1]/<ret>",
+        "[alpha]\n#[[|]#beta]\n",
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn substitute_long_form() -> anyhow::Result<()> {
     test(("#[a|]#bc\n", ":substitute /b/X/<ret>", "#[a|]#Xc\n")).await
 }

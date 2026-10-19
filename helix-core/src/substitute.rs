@@ -1,7 +1,11 @@
 //! Vim-style `:s/pattern/replacement/flags`.
 //!
 //! The pattern uses Helix's regex syntax (the `regex` crate) plus Vim's `\<`
-//! and `\>` word boundaries. The replacement understands:
+//! and `\>` word boundaries. Vim's own syntax works too: a pattern with
+//! `\(...\)` groups and no plain `(` (like the "one-eyed Kirby" `\(.*\)`), or
+//! one starting with `\m`, is read the Vim way (`\(` `\)` `\|` `\+` `\?` `\=`
+//! `\{n,m}` are operators, plain `(` `+` ... are literal); `\v` at the start
+//! means the regex crate's syntax. The replacement understands:
 //!
 //! - `\1` .. `\9`, `$1`, `${1}`, `${name}`, `$name`: capture groups
 //! - `&`, `\0`, `$0`: the whole match
@@ -192,22 +196,103 @@ fn regex_syntax_char(c: char) -> bool {
     )
 }
 
-/// Translate Vim's `\<` and `\>` to `\b`.
-fn translate_pattern(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
+/// Whether `pattern` is written in Vim's default ("magic") syntax, where
+/// groups are `\(...\)`: it has an escaped group and no plain `(`.
+fn is_vim_magic(pattern: &str) -> bool {
+    let mut escaped_group = false;
+    let mut plain_group = false;
+    let mut in_class = false;
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
+        match c {
+            '\\' => {
+                if chars.next() == Some('(') && !in_class {
+                    escaped_group = true;
+                }
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '(' if !in_class => plain_group = true,
+            _ => {}
+        }
+    }
+    escaped_group && !plain_group
+}
+
+/// Translate a pattern to the regex crate's syntax:
+///
+/// - `\v` at the start ("very magic") is dropped: that syntax is already the
+///   regex crate's.
+/// - `\m` at the start, or a pattern using Vim's `\(...\)` groups (see
+///   [`is_vim_magic`]), is read as Vim's magic syntax: `\(` `\)` `\|` `\+` `\?`
+///   `\=` `\{` `\}` are the operators, plain `(` `)` `|` `+` `?` `{` `}` are
+///   literal.
+/// - Vim's `\<` and `\>` become `\b` either way.
+fn translate_pattern(pattern: &str) -> String {
+    let (pattern, magic) = if let Some(rest) = pattern.strip_prefix("\\v") {
+        (rest, false)
+    } else if let Some(rest) = pattern.strip_prefix("\\m") {
+        (rest, true)
+    } else {
+        (pattern, is_vim_magic(pattern))
+    };
+    let mut out = String::with_capacity(pattern.len());
+    let mut in_class = false;
+    // Inside Vim's `\{n,m}`, which ends with a plain `}`.
+    let mut in_count = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_class {
+            // Character classes are the same in both syntaxes.
+            out.push(c);
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else if c == ']' {
+                in_class = false;
+            }
+            continue;
+        }
+        match c {
+            '\\' => match chars.next() {
                 Some('<') | Some('>') => out.push_str("\\b"),
+                Some('{') if magic => {
+                    in_count = true;
+                    out.push('{');
+                }
+                Some('}') if magic => {
+                    in_count = false;
+                    out.push('}');
+                }
+                Some(op @ ('(' | ')' | '|' | '+' | '?')) if magic => out.push(op),
+                Some('=') if magic => out.push('?'),
                 Some(next) => {
                     out.push('\\');
                     out.push(next);
                 }
                 None => out.push('\\'),
+            },
+            '}' if magic && in_count => {
+                in_count = false;
+                out.push('}');
             }
-        } else {
-            out.push(c);
+            '(' | ')' | '|' | '+' | '?' | '{' | '}' if magic => {
+                out.push('\\');
+                out.push(c);
+            }
+            '[' => {
+                in_class = true;
+                out.push(c);
+                // `[]...]` and `[^]...]` start with a literal `]`.
+                if chars.peek() == Some(&'^') {
+                    out.push(chars.next().unwrap());
+                }
+                if chars.peek() == Some(&']') {
+                    out.push(chars.next().unwrap());
+                }
+            }
+            c => out.push(c),
         }
     }
     out
@@ -647,6 +732,42 @@ mod test {
         assert_eq!(outcome.matches, 2);
         assert_eq!(outcome.changes[0].0, 1);
         assert_eq!(outcome.changes[1].1, 3);
+    }
+
+    #[test]
+    fn one_eyed_kirby() {
+        // The capture-everything group, in both syntaxes.
+        assert_eq!(s("hello world", "s/(.*)/[\\1]/"), "[hello world]");
+        assert_eq!(s("hello world", "s/\\(.*\\)/[\\1]/"), "[hello world]");
+        assert_eq!(s("hello world", "s/\\v(.*)/<\\1>/"), "<hello world>");
+        // Per line, keeping the rest of the document.
+        assert_eq!(s("a\nb\n", "%s/^\\(.*\\)$/- \\1/"), "- a\n- b\n");
+        assert_eq!(
+            s("key = value", "s/\\(.*\\) = \\(.*\\)/\\2 = \\1/"),
+            "value = key"
+        );
+    }
+
+    #[test]
+    fn vim_magic_syntax() {
+        // Groups, alternation, repetition the Vim way.
+        assert_eq!(
+            s("John Smith", "s/\\(\\w\\+\\) \\(\\w\\+\\)/\\2 \\1/"),
+            "Smith John"
+        );
+        assert_eq!(s("cat dog", "s/\\(cat\\|dog\\)/pet/g"), "pet pet");
+        assert_eq!(s("color colour", "s/\\(colou\\=r\\)/X/g"), "X X");
+        assert_eq!(s("aaa b", "s/\\(a\\{2}\\)/X/"), "Xa b");
+        // In Vim's syntax plain parens, `+` and `|` are literal.
+        // A pattern mixing `\(` with a plain `(` needs `\m` to be read the Vim way.
+        assert_eq!(s("f(x) a+b", "s/\\m\\(f\\)(x)/\\1[x]/"), "f[x] a+b");
+        assert_eq!(s("a+b", "s/\\ma+b/X/"), "X");
+        // Character classes are untouched.
+        assert_eq!(s("a(b)", "s/\\(a\\)[()]/\\1-/"), "a-b)");
+        // `\(x\)` alone is Vim's syntax: a group.
+        assert_eq!(s("(x)", "s/\\(x\\)/y/"), "(y)");
+        // With a plain `(` it is the regex crate's syntax: `\(` is a literal paren.
+        assert_eq!(s("(x)", "s/\\((x)\\)/[$1]/"), "[x]");
     }
 
     #[test]
