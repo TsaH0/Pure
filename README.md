@@ -1,64 +1,62 @@
 <div align="center">
 
-<h1>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="logo_dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="logo_light.svg">
-  <img alt="Helix" height="128" src="logo_light.svg">
-</picture>
-</h1>
+<h1>Pure</h1>
 
-[![Build status](https://github.com/helix-editor/helix/actions/workflows/build.yml/badge.svg)](https://github.com/helix-editor/helix/actions)
-[![GitHub Release](https://img.shields.io/github/v/release/helix-editor/helix)](https://github.com/helix-editor/helix/releases/latest)
-[![Documentation](https://shields.io/badge/-documentation-452859)](https://docs.helix-editor.com/)
-[![GitHub contributors](https://img.shields.io/github/contributors/helix-editor/helix)](https://github.com/helix-editor/helix/graphs/contributors)
-[![Matrix Space](https://img.shields.io/matrix/helix-community:matrix.org)](https://matrix.to/#/#helix-community:matrix.org)
+<p><em>“Immortal enlightenment is repentant enlightenment, perhaps only by making
+a mountain using salt is fastest way to reach heavens.”</em></p>
 
 </div>
 
-![Screenshot](./screenshot.png)
+Pure is a modal text editor, a fork of [Helix](https://github.com/helix-editor/helix)
+(a [Kakoune](https://github.com/mawww/kakoune) / [Neovim](https://github.com/neovim/neovim)
+inspired editor, written in Rust) that keeps up with Helix and adds:
 
-A [Kakoune](https://github.com/mawww/kakoune) / [Neovim](https://github.com/neovim/neovim) inspired editor, written in Rust.
+- **WebAssembly plugins**: sandboxed plugins in any language that targets WASM
+  components, with permissions, time and memory limits. See
+  [`helix-plugin/README.md`](helix-plugin/README.md).
+- **Vim's `:s`**: `:%s/\(.*\)/"\1",/`, `:s/(\w+) (\w+)/\U\2\E \1/g`, ranges,
+  capture groups (Vim and regex syntax), case changes and flags.
+- **Quickfix list**: filled from compiler output, `:grep`, diagnostics or a
+  buffer; `]q` / `[q` / `]Q` / `[Q`, `space q`, `:cnext` and friends.
+- **Running commands**: `space x` streams a command's output into an
+  Emacs-style `*compilation*` buffer, `space z` runs it like Vim's `:!`,
+  `:run-interactive` hands the terminal to full-screen programs, and a
+  built-in `yazi` file picker.
+- **Smarter text objects**: `mi(`/`ma"` find the nearest pair on the line,
+  and letters work for pairs (`mib`, `miB`, `mir`, `miA`, `mid`, `mis`, `miq`).
 
-The editing model is very heavily based on Kakoune; during development I found
-myself agreeing with most of Kakoune's design decisions.
+Run it with `pure` (`hx` still works). Configuration lives where Helix keeps
+it, in `~/.config/helix/`.
 
-For more information, see the [website](https://helix-editor.com) or
-[documentation](https://docs.helix-editor.com/).
-
-All shortcuts/keymaps can be found [in the documentation on the website](https://docs.helix-editor.com/keymap.html).
-
-[Troubleshooting](https://github.com/helix-editor/helix/wiki/Troubleshooting)
-
-# Features
+# Features (from Helix)
 
 - Vim-like modal editing
 - Multiple selections
 - Built-in language server support
 - Smart, incremental syntax highlighting and code editing via tree-sitter
 
-Although it's primarily a terminal-based editor, I am interested in exploring
-a custom renderer (similar to Emacs) using wgpu.
-
 Note: Only certain languages have indentation definitions at the moment. Check
 `runtime/queries/<lang>/` for `indents.scm`.
 
 # Installation
 
-[Installation documentation](https://docs.helix-editor.com/install.html).
+```sh
+cargo install --path helix-term --locked
+```
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/helix-editor.svg?exclude_unsupported=1)](https://repology.org/project/helix-editor/versions)
+installs `pure` and `hx`. See Helix's
+[installation documentation](https://docs.helix-editor.com/install.html) for
+the runtime files and grammars.
 
-# Contributing
+# Documentation
 
-Contributing guidelines can be found [here](./docs/CONTRIBUTING.md).
-
-# Getting help
-
-Your question might already be answered on the [FAQ](https://github.com/helix-editor/helix/wiki/FAQ).
-
-Discuss the project on the community [Matrix Space](https://matrix.to/#/#helix-community:matrix.org) (make sure to join `#helix-editor:matrix.org` if you're on a client that doesn't support Matrix Spaces yet).
+Pure's own additions are documented in the [book](./book/src) (keymap, text
+objects, commands) and in [`helix-plugin/README.md`](helix-plugin/README.md).
+Everything else works as described in the
+[Helix documentation](https://docs.helix-editor.com/).
 
 # Credits
 
-Thanks to [@jakenvac](https://github.com/jakenvac) for designing the logo!
+Pure is built on [Helix](https://helix-editor.com) by Blaž Hrastnik and its
+contributors. Thanks to [@jakenvac](https://github.com/jakenvac) for designing
+the Helix logo.

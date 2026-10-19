@@ -2698,6 +2698,342 @@ fn run_interactive(
     Ok(())
 }
 
+/// Vim's `:s`: see `helix_core::substitute` for the syntax.
+fn substitute(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
+    use helix_core::substitute::{self, Scope, Substitution};
+
+    let command = substitute::parse(input).map_err(|err| anyhow!(err))?;
+    let last_search = editor.registers.first('/', editor).map(|s| s.into_owned());
+    let substitution =
+        Substitution::new(&command, last_search.as_deref()).map_err(|err| anyhow!(err))?;
+
+    let (view, doc) = current!(editor);
+    let text = doc.text();
+    let selection = doc.selection(view.id);
+    let line_span = |from_line: usize, to_line: usize| {
+        let last = text.len_lines() - 1;
+        let (from_line, to_line) = (from_line.min(last), to_line.min(last));
+        let (from_line, to_line) = (from_line.min(to_line), from_line.max(to_line));
+        (text.line_to_char(from_line), text.line_to_char(to_line + 1))
+    };
+    let mut scopes: Vec<(usize, usize)> = match command.scope {
+        Scope::Document => vec![(0, text.len_chars())],
+        Scope::Lines(from, to) => {
+            let current = text.char_to_line(selection.primary().cursor(text.slice(..)));
+            vec![line_span(from.unwrap_or(current), to.unwrap_or(current))]
+        }
+        Scope::Selections => selection
+            .ranges()
+            .iter()
+            .map(|range| {
+                if range.len() > 1 {
+                    (range.from(), range.to())
+                } else {
+                    // Just a cursor: its line.
+                    let line = text.char_to_line(range.cursor(text.slice(..)));
+                    line_span(line, line)
+                }
+            })
+            .collect(),
+    };
+    // Merge overlapping scopes (several cursors on one line).
+    scopes.sort_unstable();
+    scopes.dedup_by(|next, prev| {
+        if next.0 <= prev.1 {
+            prev.1 = prev.1.max(next.1);
+            true
+        } else {
+            false
+        }
+    });
+
+    let outcome = substitution.apply(text, &scopes);
+
+    // Like Vim, the pattern becomes the last search, so `n` finds the next match.
+    if !command.pattern.is_empty() {
+        let _ = editor.registers.push('/', command.pattern.clone());
+    }
+    if outcome.matches == 0 {
+        if command.flags.quiet {
+            return Ok(());
+        }
+        bail!("Pattern not found: {}", command.pattern);
+    }
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    if command.flags.count_only {
+        editor.set_status(format!(
+            "{} match{} on {} line{}",
+            outcome.matches,
+            if outcome.matches == 1 { "" } else { "es" },
+            outcome.lines,
+            plural(outcome.lines)
+        ));
+        return Ok(());
+    }
+
+    let scrolloff = editor.config().scrolloff;
+    let (view, doc) = current!(editor);
+    let last_line_start = outcome.last_line.map(|line| doc.text().line_to_char(line));
+    let transaction = Transaction::change(doc.text(), outcome.changes.into_iter());
+    doc.apply(&transaction, view.id);
+    // Like Vim, line-based substitutions leave the cursor at the start of the
+    // last changed line. With selections, the selections stay.
+    if let (Some(start), false) = (last_line_start, command.scope == Scope::Selections) {
+        let pos = transaction
+            .changes()
+            .map_pos(start, helix_core::Assoc::Before);
+        let text = doc.text();
+        let line_start = text.line_to_char(text.char_to_line(pos));
+        doc.set_selection(view.id, Selection::point(line_start));
+    }
+    doc.append_changes_to_history(view);
+    view.ensure_cursor_in_view(doc, scrolloff);
+    editor.set_status(format!(
+        "{} substitution{} on {} line{}",
+        outcome.matches,
+        plural(outcome.matches),
+        outcome.lines,
+        plural(outcome.lines)
+    ));
+    Ok(())
+}
+
+fn substitute_command(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    substitute(cx.editor, &format!("s{}", args[0].trim_start()))
+}
+
+fn quickfix_go(
+    cx: &mut compositor::Context,
+    event: PromptEvent,
+    target: super::quickfix::Target,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        super::quickfix::go(cx.editor, target);
+    }
+    Ok(())
+}
+
+fn count_arg(args: &Args) -> anyhow::Result<usize> {
+    match args.first() {
+        Some(count) => count
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0)
+            .ok_or_else(|| anyhow!("expected a number, got '{count}'")),
+        None => Ok(1),
+    }
+}
+
+fn cnext(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let count = count_arg(&args)?;
+    quickfix_go(cx, event, super::quickfix::Target::Next(count))
+}
+
+fn cprev(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let count = count_arg(&args)?;
+    quickfix_go(cx, event, super::quickfix::Target::Previous(count))
+}
+
+fn cfirst(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    quickfix_go(cx, event, super::quickfix::Target::First)
+}
+
+fn clast(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    quickfix_go(cx, event, super::quickfix::Target::Last)
+}
+
+fn cc(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    let target = match args.first() {
+        Some(_) => super::quickfix::Target::Nth(count_arg(&args)? - 1),
+        None => super::quickfix::Target::Current,
+    };
+    quickfix_go(cx, event, target)
+}
+
+fn copen(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    if super::quickfix::with(|list| list.entries.is_empty()) {
+        bail!("The quickfix list is empty");
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(picker) = super::quickfix::open(editor) {
+                    compositor.push(Box::new(picker));
+                }
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn cclear(_cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        super::quickfix::set("", Vec::new());
+    }
+    Ok(())
+}
+
+/// Report how many entries a new quickfix list has and go to the first one.
+fn quickfix_filled(editor: &mut Editor, title: &str, entries: Vec<super::quickfix::Entry>) {
+    let count = entries.len();
+    super::quickfix::set(title, entries);
+    if count == 0 {
+        editor.set_error(format!("{title}: no locations found"));
+    } else {
+        super::quickfix::go(editor, super::quickfix::Target::First);
+    }
+}
+
+fn cbuffer(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let text = doc!(cx.editor).text().to_string();
+    let entries = super::quickfix::parse(&text, &helix_stdx::env::current_working_dir());
+    quickfix_filled(cx.editor, "buffer", entries);
+    Ok(())
+}
+
+fn cdiagnostics(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut entries = Vec::new();
+    for (uri, diagnostics) in &cx.editor.diagnostics {
+        let Some(path) = uri.as_path() else {
+            continue;
+        };
+        let mut diagnostics: Vec<_> = diagnostics
+            .iter()
+            .map(|(diagnostic, _)| diagnostic)
+            .collect();
+        diagnostics.sort_by_key(|d| (d.range.start.line, d.range.start.character));
+        for diagnostic in diagnostics {
+            let severity = match diagnostic.severity {
+                Some(helix_lsp::lsp::DiagnosticSeverity::ERROR) => "error: ",
+                Some(helix_lsp::lsp::DiagnosticSeverity::WARNING) => "warning: ",
+                _ => "",
+            };
+            entries.push(super::quickfix::Entry {
+                path: path.to_path_buf(),
+                line: diagnostic.range.start.line as usize,
+                column: diagnostic.range.start.character as usize,
+                text: format!(
+                    "{severity}{}",
+                    diagnostic.message.lines().next().unwrap_or("")
+                ),
+            });
+        }
+    }
+    quickfix_filled(cx.editor, "diagnostics", entries);
+    Ok(())
+}
+
+/// Vim's `:grep`: search with ripgrep (or grep) and put the matches in the
+/// quickfix list.
+fn grep(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    let title = format!("grep {}", args.join(" "));
+    let cwd = helix_stdx::env::current_working_dir();
+    cx.editor
+        .set_status(format!("Searching: {}", args.join(" ")));
+    cx.jobs.callback(async move {
+        let mut rg = tokio::process::Command::new("rg");
+        rg.args(["--vimgrep", "--smart-case", "--"])
+            .args(&args)
+            .current_dir(&cwd);
+        let output = match rg.output().await {
+            Ok(output) => output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let mut grep = tokio::process::Command::new("grep");
+                grep.args(["-rnH", "--exclude-dir=.git", "-e"])
+                    .args(&args)
+                    .current_dir(&cwd);
+                if args.len() == 1 {
+                    grep.arg(".");
+                }
+                grep.output().await?
+            }
+            Err(err) => return Err(err.into()),
+        };
+        // grep tools exit with 1 when nothing matched.
+        if !output.status.success() && output.status.code() != Some(1) {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!("{title} failed: {message}");
+        }
+        let entries = super::quickfix::parse(&String::from_utf8_lossy(&output.stdout), &cwd);
+        Ok(Callback::Editor(Box::new(move |editor: &mut Editor| {
+            quickfix_filled(editor, &title, entries)
+        })))
+    });
+    Ok(())
+}
+
+fn plugin_run(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut args = args.iter();
+    let name = args.next().unwrap();
+    let rest = args.map(|arg| arg.to_string()).collect();
+    crate::plugins::run_command(cx.editor, cx.jobs, name, rest)
+}
+
+fn plugin_list(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let contents = crate::plugins::describe();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugins", contents).auto_close(true);
+                compositor.replace_or_push("plugins", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn plugin_reload(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.editor.clear_status();
+    crate::plugins::load(cx.editor);
+    if cx.editor.get_status().is_none() {
+        let count = crate::plugins::with_host(|host| host.plugins().len()).unwrap_or(0);
+        cx.editor.set_status(format!("Loaded {count} plugin(s)"));
+    }
+    Ok(())
+}
+
 fn run_and_wait(
     cx: &mut compositor::Context,
     args: Args,
@@ -4020,6 +4356,161 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: SHELL_SIGNATURE,
     },
     TypableCommand {
+        name: "substitute",
+        aliases: &[],
+        doc: "Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Patterns: Rust regex syntax or Vim's (`\\(.*\\)`, `\\v`, `\\{-}`, `\\zs`/`\\ze`, `\\<\\>`). Replacement: `\\1`/`$1`/`${name}` groups, `&` the match, `\\r` line break, `\\u` `\\U..\\E` `\\l` `\\L` case. Flags: g (all per line), i, I, n (count), e (no error).",
+        fun: substitute_command,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            raw_after: Some(0),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "copen",
+        aliases: &["cope", "cw", "cwindow"],
+        doc: "Show the quickfix list in a picker.",
+        fun: copen,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cnext",
+        aliases: &["cn"],
+        doc: "Go to the next (or Nth next) quickfix entry.",
+        fun: cnext,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cprevious",
+        aliases: &["cprev", "cp", "cN"],
+        doc: "Go to the previous (or Nth previous) quickfix entry.",
+        fun: cprev,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cfirst",
+        aliases: &["cfir", "cr"],
+        doc: "Go to the first quickfix entry.",
+        fun: cfirst,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "clast",
+        aliases: &["cla"],
+        doc: "Go to the last quickfix entry.",
+        fun: clast,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cc",
+        aliases: &[],
+        doc: "Go to quickfix entry N (or the current one again).",
+        fun: cc,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cbuffer",
+        aliases: &["cb"],
+        doc: "Fill the quickfix list with the `file:line:col` locations in the current buffer.",
+        fun: cbuffer,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cdiagnostics",
+        aliases: &["cdiag"],
+        doc: "Fill the quickfix list with the workspace diagnostics.",
+        fun: cdiagnostics,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "grep",
+        aliases: &[],
+        doc: "Search with ripgrep (or grep) and put the matches in the quickfix list: `:grep <pattern> [paths...]`.",
+        fun: grep,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "cclear",
+        aliases: &[],
+        doc: "Empty the quickfix list.",
+        fun: cclear,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-run",
+        aliases: &[],
+        doc: "Run a plugin command: `:plugin-run <plugin>/<command> [args...]`.",
+        fun: plugin_run,
+        completer: CommandCompleter::positional(&[completers::plugin_command]),
+        signature: Signature {
+            positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-list",
+        aliases: &[],
+        doc: "Show the loaded plugins and their commands.",
+        fun: plugin_list,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-reload",
+        aliases: &[],
+        doc: "Reload all plugins and plugins.toml.",
+        fun: plugin_reload,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "run-and-wait",
         aliases: &["bang"],
         doc: "Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.",
@@ -4194,6 +4685,14 @@ fn execute_command_line(
     input: &str,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
+    // `:s/pattern/replacement/flags` has no space after the command name.
+    if helix_core::substitute::is_substitute(input) {
+        if event == PromptEvent::Validate {
+            return substitute(cx.editor, input);
+        }
+        return Ok(());
+    }
+
     let (command, rest, _) = command_line::split(input);
     if command.is_empty() {
         return Ok(());

@@ -46,7 +46,7 @@ If the key contains a dot `'.'`, it must be quoted to prevent it being parsed as
 
 Color values must be either a [CSS hex RGB string](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/hex-color) or a name declared in the [`palette`](#color-palettes).
 
-> 💡 Note that Helix doesn't support transparency (alpha channel).
+> 💡 Note that Pure doesn't support transparency (alpha channel).
 
 For inspiration, you can find the default `theme.toml`
 [here](https://github.com/helix-editor/helix/blob/master/theme.toml) and

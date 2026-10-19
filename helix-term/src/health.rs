@@ -70,7 +70,21 @@ pub fn general() -> std::io::Result<()> {
     let lang_file = helix_loader::lang_config_file();
     let log_file = helix_loader::log_file();
     let rt_dirs = helix_loader::runtime_dirs();
+    let plugin_dir = crate::plugins::plugin_dir();
 
+    let plugins = std::fs::read_dir(&plugin_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.path().join("plugin.toml").is_file())
+                .count()
+        })
+        .unwrap_or(0);
+    writeln!(
+        stdout,
+        "Plugins: {} ({plugins} installed)",
+        plugin_dir.display()
+    )?;
     if config_file.exists() {
         writeln!(stdout, "Config file: {}", config_file.display())?;
     } else {
@@ -436,6 +450,12 @@ fn probe_treesitter_feature(lang: &str, feature: TsFeature) -> std::io::Result<(
 }
 
 pub fn print_health(health_arg: Option<String>) -> std::io::Result<()> {
+    writeln!(
+        std::io::stdout().lock(),
+        "{} health check\n“{}”\n",
+        crate::NAME,
+        crate::QUOTE
+    )?;
     match health_arg.as_deref() {
         Some("languages") => languages_selection()?,
         Some("all-languages") => languages_all()?,

@@ -2,7 +2,7 @@
 name = "helix-term"
 description = "A post-modern text editor."
 include = ["src/**/*", "README.md"]
-default-run = "hx"
+default-run = "pure"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -37,8 +37,13 @@ integration = ["helix-event/integration_test"]
 git = ["helix-vcs/git"]
 
 [[bin]]
-name = "hx"
+name = "pure"
 path = "src/main.rs"
+
+# The original name, so existing scripts and habits keep working.
+[[bin]]
+name = "hx"
+path = "src/hx.rs"
 
 [dependencies]
 helix-stdx = { path = "../helix-stdx" }
@@ -49,6 +54,7 @@ helix-lsp = { path = "../helix-lsp" }
 helix-dap = { path = "../helix-dap" }
 helix-vcs = { path = "../helix-vcs" }
 helix-loader = { path = "../helix-loader" }
+helix-plugin = { path = "../helix-plugin" }
 
 anyhow = "1"
 

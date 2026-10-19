@@ -1,6 +1,7 @@
 pub(crate) mod compilation;
 pub(crate) mod dap;
 pub(crate) mod lsp;
+pub(crate) mod quickfix;
 pub(crate) mod syntax;
 pub(crate) mod typed;
 
@@ -425,6 +426,11 @@ impl MappableCommand {
         compile, "Prompt for a shell command and run it like Emacs' M-x compile",
         normal_mode_or_close_compilation, "Close the *compilation* buffer if it is open, otherwise enter normal mode",
         run_and_wait, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
+        quickfix_next, "Go to the next quickfix entry",
+        quickfix_prev, "Go to the previous quickfix entry",
+        quickfix_first, "Go to the first quickfix entry",
+        quickfix_last, "Go to the last quickfix entry",
+        quickfix_picker, "Open the quickfix list",
         hide_compilation, "Hide the *compilation* window, keeping the buffer",
         toggle_compilation, "Show or hide the *compilation* buffer (output of :compile)",
         insert_at_line_start, "Insert at start of line",
@@ -3835,6 +3841,28 @@ fn run_and_wait(cx: &mut Context) {
             }
         },
     );
+}
+
+fn quickfix_next(cx: &mut Context) {
+    quickfix::go(cx.editor, quickfix::Target::Next(cx.count()));
+}
+
+fn quickfix_prev(cx: &mut Context) {
+    quickfix::go(cx.editor, quickfix::Target::Previous(cx.count()));
+}
+
+fn quickfix_first(cx: &mut Context) {
+    quickfix::go(cx.editor, quickfix::Target::First);
+}
+
+fn quickfix_last(cx: &mut Context) {
+    quickfix::go(cx.editor, quickfix::Target::Last);
+}
+
+fn quickfix_picker(cx: &mut Context) {
+    if let Some(picker) = quickfix::open(cx.editor) {
+        cx.push_layer(Box::new(picker));
+    }
 }
 
 fn hide_compilation(cx: &mut Context) {

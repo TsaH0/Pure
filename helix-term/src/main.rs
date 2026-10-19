@@ -34,11 +34,13 @@ async fn main_impl() -> Result<i32> {
         print!(
             "\
 {} {}
-{}
+A modal editor, forked from Helix (by Blaž Hrastnik and contributors)
 {}
 
+“{}”
+
 USAGE:
-    hx [FLAGS] [files]...
+    pure [FLAGS] [files]...   (`hx` works too)
 
 ARGS:
     <files>...    Set the input file to use, position can also be specified via file[:row[:col]]
@@ -64,17 +66,22 @@ FLAGS:
     +[N]                           Open the first given file at line number N, or the last line, if
                                    N is not specified.
 ",
-            env!("CARGO_PKG_NAME"),
+            helix_term::NAME,
             VERSION_AND_GIT_HASH,
-            env!("CARGO_PKG_AUTHORS"),
             env!("CARGO_PKG_DESCRIPTION"),
+            helix_term::QUOTE,
             helix_loader::default_log_file().display(),
         );
         std::process::exit(0);
     }
 
     if args.display_version {
-        println!("helix {}", VERSION_AND_GIT_HASH);
+        println!(
+            "{} {}",
+            helix_term::NAME.to_lowercase(),
+            VERSION_AND_GIT_HASH
+        );
+        println!("“{}”", helix_term::QUOTE);
         std::process::exit(0);
     }
 
@@ -145,7 +152,7 @@ FLAGS:
 
     // TODO: use the thread local executor to spawn the application task separately from the work pool
     let mut app = Application::new(args, config, lang_loader, workspace_trust)
-        .context("unable to start Helix")?;
+        .context(format!("unable to start {}", helix_term::NAME))?;
 
     let exit_code = app.run(|app| app.event_stream()).await?;
 

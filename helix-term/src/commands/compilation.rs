@@ -459,6 +459,19 @@ pub fn compile(editor: &mut Editor, cmd: &str) -> anyhow::Result<()> {
                 });
             write(editor, generation, &format!("{separator}{footer}\n"), false);
             if GENERATION.load(Ordering::SeqCst) == generation {
+                // Like Vim's `:make`: the locations in the output become the
+                // quickfix list (`]q` goes to the first one).
+                let output = find_buffer(editor)
+                    .map(|doc| editor.documents[&doc].text().to_string())
+                    .unwrap_or_default();
+                let entries = super::quickfix::parse(&output, &cwd);
+                let found = entries.len();
+                super::quickfix::set(format!("compile: {cmd}"), entries);
+                let footer = match found {
+                    0 => footer,
+                    1 => format!("{footer} (1 location in the quickfix list, ]q)"),
+                    n => format!("{footer} ({n} locations in the quickfix list, ]q)"),
+                };
                 if ok {
                     editor.set_status(footer);
                 } else {

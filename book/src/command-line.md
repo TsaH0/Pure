@@ -25,7 +25,7 @@ The `--` flag specifies the end of flags. All arguments after `--` are treated a
 
 ## Expansions
 
-Expansions are patterns that Helix recognizes and replaces within the command line. Helix recognizes anything starting with a percent token (`%`) as an expansion, for example `%sh{echo hi!}`. Expansions are particularly useful when used in commands like `:echo` or `:noop` for executing simple scripts. For example:
+Expansions are patterns that Pure recognizes and replaces within the command line. Pure recognizes anything starting with a percent token (`%`) as an expansion, for example `%sh{echo hi!}`. Expansions are particularly useful when used in commands like `:echo` or `:noop` for executing simple scripts. For example:
 
 ```toml
 [keys.normal]
@@ -37,7 +37,7 @@ Expansions take the form `%[<kind>]<open><contents><close>`. In `%sh{echo hi!}`,
 
 To escape a percent character instead of treating it as an expansion, use two percent characters consecutively. To execute a shell command like `date -u +'%Y-%m-%d'`, double the percent characters: `:echo %sh{date -u +'%%Y-%%m-%%d'}`.
 
-When no `<kind>` is provided, Helix will expand a **variable**. For example `%{cursor_line}` can be used as in argument to insert the line number. `:echo %{cursor_line}` for instance may print `1` to the statusline.
+When no `<kind>` is provided, Pure will expand a **variable**. For example `%{cursor_line}` can be used as in argument to insert the line number. `:echo %{cursor_line}` for instance may print `1` to the statusline.
 
 The following variables are supported:
 

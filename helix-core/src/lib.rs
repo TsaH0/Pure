@@ -25,6 +25,7 @@ mod position;
 pub mod search;
 pub mod selection;
 pub mod snippets;
+pub mod substitute;
 pub mod surround;
 pub mod syntax;
 pub mod test;

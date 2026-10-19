@@ -121,6 +121,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "T" => goto_prev_test,
             "p" => goto_prev_paragraph,
             "x" => goto_prev_xml_element,
+            "q" => quickfix_prev,
+            "Q" => quickfix_first,
             "space" => add_newline_above,
         },
         "]" => { "Right bracket"
@@ -136,6 +138,8 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "T" => goto_next_test,
             "p" => goto_next_paragraph,
             "x" => goto_next_xml_element,
+            "q" => quickfix_next,
+            "Q" => quickfix_last,
             "space" => add_newline_below,
         },
 
@@ -240,6 +244,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "x" => compile,
             "X" => toggle_compilation,
             "z" => run_and_wait,
+            "q" => quickfix_picker,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
                 "r" => dap_restart,

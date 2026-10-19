@@ -3,13 +3,13 @@
 See tree-sitter's documentation on [Code Navigation Systems] for more
 background on tags queries.
 
-Helix provides LSP-like features such as document and workspace symbol pickers
+Pure provides LSP-like features such as document and workspace symbol pickers
 out-of-the-box for languages with `tags.scm` queries based on syntax trees. To
 be analyzed a language must have a tree-sitter grammar and a `tags.scm` query
 file which pattern matches interesting nodes from syntax trees.
 
 Query files should be placed in `runtime/queries/{language}/tags.scm`
-when contributing to Helix. You may place these under your local runtime
+when contributing to Pure. You may place these under your local runtime
 directory (`~/.config/helix/runtime` in Linux for example) for the sake of
 testing.
 
