@@ -284,6 +284,7 @@ pub enum Action {
         cwd: Option<PathBuf>,
         stdin: Option<String>,
         timeout: Duration,
+        stream: bool,
     },
     /// Hand the terminal to a program, then deliver
     /// [`Callback::ProcessDone`].
@@ -359,6 +360,11 @@ pub enum PendingKind {
 /// A result delivered after the original plugin call returned.
 #[derive(Debug, Clone)]
 pub enum Callback {
+    /// A batch of stdout lines; the process request remains open.
+    ProcessOutput {
+        id: u32,
+        chunk: String,
+    },
     ProcessDone {
         id: u32,
         result: Result<ProcessOutput, String>,
@@ -385,7 +391,9 @@ pub enum Callback {
 impl Callback {
     fn request(&self) -> (u32, PendingKind) {
         match self {
-            Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
+            Self::ProcessDone { id, .. } | Self::ProcessOutput { id, .. } => {
+                (*id, PendingKind::Process)
+            }
             Self::PickerDone { id, .. } | Self::PickerQuery { id, .. } => {
                 (*id, PendingKind::Picker)
             }
@@ -395,7 +403,7 @@ impl Callback {
     }
 
     fn completes(&self) -> bool {
-        !matches!(self, Self::PickerQuery { .. })
+        !matches!(self, Self::PickerQuery { .. } | Self::ProcessOutput { .. })
     }
 }
 
@@ -486,6 +494,7 @@ struct State {
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
     picker_items: HashMap<u32, usize>,
+    streaming: HashSet<u32>,
     process: ProcessGrant,
     files: FileGrant,
     /// The plugin's own directory (`data-dir`), preopened read-write.
@@ -750,6 +759,7 @@ impl State {
         cwd: Option<String>,
         stdin: Option<String>,
         timeout_ms: Option<u32>,
+        stream: bool,
     ) -> Result<u32, String> {
         self.need_process(&argv)?;
         let timeout = timeout_ms
@@ -757,6 +767,9 @@ impl State {
             .unwrap_or(DEFAULT_PROCESS_TIMEOUT)
             .min(MAX_PROCESS_TIMEOUT);
         let id = self.request(PendingKind::Process)?;
+        if stream {
+            self.streaming.insert(id);
+        }
         self.actions.push(Action::Spawn {
             plugin: self.plugin.clone(),
             id,
@@ -764,6 +777,7 @@ impl State {
             cwd: cwd.map(PathBuf::from),
             stdin,
             timeout,
+            stream,
         });
         Ok(id)
     }
@@ -1059,6 +1073,7 @@ impl Plugin {
             Err(err) => {
                 state.pending.clear();
                 state.picker_items.clear();
+                state.streaming.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
                         format!("it took longer than {} ms", limit.as_millis())
@@ -1420,6 +1435,7 @@ impl PluginHost {
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
             picker_items: HashMap::new(),
+            streaming: HashSet::new(),
             process: settings.process,
             files: settings.files,
             data_dir,
@@ -1525,6 +1541,7 @@ impl PluginHost {
         let name = plugin.manifest.name.clone();
         let pending = plugin.store.data().pending.clone();
         let picker_items = plugin.store.data().picker_items.clone();
+        let streaming = plugin.store.data().streaming.clone();
         let command_name = command.to_owned();
         let (result, actions) = plugin.call(
             snapshot,
@@ -1537,6 +1554,7 @@ impl PluginHost {
         if let Err(err) = result {
             plugin.store.data_mut().pending = pending;
             plugin.store.data_mut().picker_items = picker_items;
+            plugin.store.data_mut().streaming = streaming;
             bail!("{name}/{command}: {err}");
         }
         Ok(actions)
@@ -1598,9 +1616,15 @@ impl PluginHost {
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
         }
+        if matches!(callback, Callback::ProcessOutput { .. })
+            && !plugin.store.data().streaming.contains(&id)
+        {
+            return Ok(Vec::new());
+        }
         if callback.completes() {
             plugin.store.data_mut().pending.remove(&id);
             plugin.store.data_mut().picker_items.remove(&id);
+            plugin.store.data_mut().streaming.remove(&id);
         }
         plugin
             .call(

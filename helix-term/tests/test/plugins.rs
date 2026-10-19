@@ -808,6 +808,10 @@ async fn plugins_blocked_in_wasi_return_control_to_the_editor() -> anyhow::Resul
 }
 
 fn app_with_v3() -> (Application, tempfile::TempDir) {
+    app_with_v3_settings(ALL, "")
+}
+
+fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, tempfile::TempDir) {
     let mut app = AppBuilder::new()
         .with_input_text("#[a|]#\n")
         .build()
@@ -822,11 +826,78 @@ fn app_with_v3() -> (Application, tempfile::TempDir) {
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{ALL}]\n"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n"),
     )
     .unwrap();
-    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "").unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
     (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_streams_before_exit_and_callbacks_see_edits_in_order() -> anyhow::Result<()> {
+    let (mut app, dir) =
+        app_with_v3_settings(WITH_PROCESS, "[testplugin3]\nallow-process = [\"sh\"]\n");
+    let script = dir.path().join("stream.sh");
+    let gate = dir.path().join("continue");
+    std::fs::write(&script, "printf 'first\\n'\nwhile [ ! -f \"$1\" ]; do sleep .01; done\nprintf 'second\\nend'\nprintf err >&2\n")?;
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/stream sh '{}' '{}'<ret>",
+            script.display(),
+            gate.display()
+        ),
+    )
+    .await;
+    let first = wait_for_status(&mut app, |message| message.starts_with("chunk:first")).await;
+    assert_eq!(first, "chunk:first\n:snapshot:a\n");
+    assert!(!gate.exists(), "the child is still waiting");
+    keys(&mut app, "ix<esc>").await;
+    std::fs::write(gate, "continue")?;
+    let done = wait_for_status(&mut app, |message| message.starts_with("done:")).await;
+    assert_eq!(done, "done:Some(0):end:err");
+    keys(&mut app, ":plugin-run testplugin3/output-events<ret>").await;
+    let output = status(&app).0;
+    assert!(output.contains("chunk:first\\n:snapshot:a\\n"), "{output}");
+    assert!(
+        output.contains("chunk:second\\n:snapshot:xa\\n"),
+        "{output}"
+    );
+    assert!(output.find("chunk:first").unwrap() < output.find("chunk:second").unwrap());
+    assert!(output.find("chunk:second").unwrap() < output.find("done:").unwrap());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_streams_finish_after_kill_and_spawn_errors() -> anyhow::Result<()> {
+    let (mut app, _dir) =
+        app_with_v3_settings(WITH_PROCESS, "[testplugin3]\nallow-process = true\n");
+    keys(
+        &mut app,
+        r#":plugin-run testplugin3/stream sh -c "sleep 30"<ret>"#,
+    )
+    .await;
+    let id = status(&app)
+        .0
+        .strip_prefix("stream-id:")
+        .unwrap()
+        .parse::<u32>()?;
+    keys(&mut app, &format!(":plugin-run testplugin3/kill {id}<ret>")).await;
+    assert_eq!(
+        wait_for_status(&mut app, |message| message.starts_with("done:")).await,
+        "done:None::[killed]"
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/stream /nonexistent/program<ret>",
+    )
+    .await;
+    assert!(
+        wait_for_status(&mut app, |message| message.starts_with("error:"))
+            .await
+            .contains("failed to run '/nonexistent/program'")
+    );
+    Ok(())
 }
 
 async fn v3_focus(app: &mut Application, focused: bool) {

@@ -157,10 +157,14 @@ impl process::Host for State {
         argv: Vec<String>,
         options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
-        if options.stream {
-            return Err("API 0.3 streaming output is not enabled yet".into());
-        }
-        State::spawn(self, argv, options.cwd, options.stdin, options.timeout_ms)
+        State::spawn(
+            self,
+            argv,
+            options.cwd,
+            options.stdin,
+            options.timeout_ms,
+            options.stream,
+        )
     }
     fn run_interactive(
         &mut self,
@@ -282,6 +286,9 @@ pub(super) async fn callback(
 ) -> Result<()> {
     let callbacks = instance.helix_plugin_callbacks();
     match callback {
+        Callback::ProcessOutput { id, chunk } => {
+            callbacks.call_on_process_output(store, *id, chunk).await
+        }
         Callback::PopupClosed { id } => callbacks.call_on_popup_close(store, *id).await,
         Callback::ProcessDone { id, result } => {
             let result = result.as_ref().map(|output| process::Output {

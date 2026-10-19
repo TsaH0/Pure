@@ -144,7 +144,9 @@ interface process {
     stdin: option<string>,
     timeout-ms: option<u32>,
     /// Also deliver stdout as it arrives (`callbacks.on-process-output`,
-    /// whole lines, batched); `on-process-done` still comes, with the rest.
+    /// whole lines including newlines, batched). The final on-process-done
+    /// contains only the unfinished stdout line and the full stderr.
+    /// The 16 MiB stdout cap counts delivered batches and the final tail.
     %stream: bool,
   }
   record interactive-options {

@@ -13,7 +13,7 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 - Done: review-fix regression coverage and M11.1, M11.2, M11.4–M11.6.
 - Next: M10 (API 0.3), including M11.3 query generations. Frozen 0.2
   fixtures, the third host world, positioned opens, popup lifecycle and event
-  hooks are implemented. Streaming, query generations, SDK/finder migration
+  hooks and streaming are implemented. Query generations, SDK/finder migration
   and guide updates remain open. Follow-up findings are in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
@@ -171,7 +171,7 @@ Validation: 66 host tests, 32 editor library tests and 36 in-editor plugin tests
 passed; formatting, warning-free workspace Clippy and a normal build passed.
 
 Remaining 0.3 abilities return explicit pending-feature errors in the adapter
-until implemented: streaming and live query generations.
+until implemented: live query generations.
 The SDK and examples remain on 0.2. M10.1/M10.2 stay open until the SDK/finder
 migration; then finish guide and full-suite validation. No older WIT changed.
 
@@ -191,7 +191,7 @@ targeted context tests also passed. Tmux confirmed centering before/after a
 terminal resize and the Esc close callback. Fixtures rebuilt; formatting,
 warning-free workspace Clippy and normal builds passed.
 
-Streaming and live generations remain before the SDK/finder/
+Live generations remain before the SDK/finder/
 guide migration. A pre-existing SDK picker-registry rollback issue found
 while reviewing callback ownership is recorded in the roadmap for SDK work.
 
@@ -221,6 +221,40 @@ plugin 0.075 ms. These are a quiet rerun of the same executable: the first
 run immediately after compilation had a 633.9 ms single-plugin cold outlier
 (warm 2.4 / 5.1 / 22.3 ms). Warm loads remain within 5 ms per plugin;
 microbenchmarks do not establish a whole-editor comparison with vanilla Helix.
+
+## M10.5 Streaming process output (host/editor)
+
+API 0.3 `spawn` can stream complete stdout lines, including their newlines.
+Batches keep their order before the final completion, whose stdout contains
+only the unfinished line; stderr is returned in full up to its existing cap.
+The stdout 16 MiB cap counts delivered batches and the tail together.
+Callbacks keep the request open and each receives a fresh editor snapshot;
+foreign, non-streaming, duplicate and late callbacks are ignored. Command
+failure rolls back the new streaming request state. Frozen 0.2 guests retain
+the original collected-output behavior.
+
+Performance: reads make batches without a flush timer or one task per line.
+A one-batch channel feeds the bounded editor queue, applying backpressure.
+Post-exit grace bounds pipe reads, while already-read batches can finish
+delivery to a slow consumer. Only new bytes are searched for line endings,
+avoiding quadratic scans of a long unfinished line. Disabled plugins now
+stop their running background processes as M1.2 intended; queued terminal
+requests still have the separate revalidation TODO in the roadmap.
+
+Real-component and editor tests cover callback order, editing between chunks,
+completion tails, kill, spawn failure, frozen 0.2 behavior, and request cleanup.
+Executor tests cover split UTF-8 bytes, cumulative output caps and delivery
+under backpressure beyond the pipe grace period. SDK/finder use remains open
+until query generations are implemented; the SDK still defaults to 0.2.
+Validation: 69 host tests, 36 editor library tests and 42 in-editor plugin
+tests passed; fixtures rebuilt, formatting, warning-free workspace Clippy
+and a normal build passed. Tmux confirmed the first batch before process
+exit, editing while it ran, updated snapshots, ordered batches and an
+unduplicated final tail. An initial quiet-window sample showed five scheduled
+timeslices; a per-thread rerun saw four across Tokio workers in the first
+1.2-second window, then zero in each of the next two windows. This records
+post-process settling activity separately from sustained idle polling;
+the latest release microbenchmarks remain the M10.4 measurements above.
 
 ## M0 API 0.2 groundwork (done)
 

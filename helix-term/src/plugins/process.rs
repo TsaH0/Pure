@@ -13,7 +13,7 @@ use helix_plugin::{Callback, ProcessOutput};
 use parking_lot::Mutex;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::interactive::Interactive;
 
@@ -37,13 +37,30 @@ pub fn spawn(
     cwd: Option<PathBuf>,
     stdin: Option<String>,
     timeout: Duration,
+    stream: bool,
 ) {
     let (kill_tx, kill_rx) = oneshot::channel();
     RUNNING.lock().insert((plugin.clone(), id), kill_tx);
     tokio::spawn(async move {
-        let result = run(argv, cwd, stdin, timeout, kill_rx).await;
+        let (output, forward) = stream
+            .then(|| {
+                let (sender, mut receiver) = mpsc::channel::<String>(1);
+                let plugin = plugin.clone();
+                let task = tokio::spawn(async move {
+                    while let Some(chunk) = receiver.recv().await {
+                        super::deliver_async(plugin.clone(), Callback::ProcessOutput { id, chunk })
+                            .await;
+                    }
+                });
+                (sender, task)
+            })
+            .unzip();
+        let result = run(argv, cwd, stdin, timeout, kill_rx, output).await;
+        if let Some(forward) = forward {
+            let _ = forward.await;
+        }
         RUNNING.lock().remove(&(plugin.clone(), id));
-        super::deliver_later(plugin, Callback::ProcessDone { id, result });
+        super::deliver_async(plugin, Callback::ProcessDone { id, result }).await;
     });
 }
 
@@ -58,12 +75,18 @@ pub fn kill_all() {
     RUNNING.lock().clear();
 }
 
+/// Stop work belonging to a plugin disabled by a trap or timeout.
+pub fn kill_plugin(plugin: &str) {
+    RUNNING.lock().retain(|(owner, _), _| owner != plugin);
+}
+
 async fn run(
     argv: Vec<String>,
     cwd: Option<PathBuf>,
     stdin: Option<String>,
     timeout: Duration,
     kill: oneshot::Receiver<()>,
+    output: Option<mpsc::Sender<String>>,
 ) -> Result<ProcessOutput, String> {
     let program = &argv[0];
     let mut command = Command::new(program);
@@ -91,8 +114,8 @@ async fn run(
             let _ = pipe.write_all(input.as_bytes()).await;
         });
     }
-    let stdout = Capture::start(child.stdout.take());
-    let stderr = Capture::start(child.stderr.take());
+    let stdout = Capture::start(child.stdout.take(), output);
+    let stderr = Capture::start(child.stderr.take(), None);
 
     let mut note = None;
     let status = tokio::select! {
@@ -143,52 +166,99 @@ async fn kill_group(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
 }
 
-/// Output of one stream, read in the background.
+/// Output of one pipe, read in the background. Stream mode retains only
+/// the unfinished line; the cap counts all bytes, including delivered ones.
 struct Capture {
     buffer: Arc<Mutex<Vec<u8>>>,
     truncated: Arc<AtomicBool>,
+    stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Capture {
-    fn start(reader: Option<impl AsyncRead + Unpin + Send + 'static>) -> Self {
+    fn start(
+        reader: Option<impl AsyncRead + Unpin + Send + 'static>,
+        output: Option<mpsc::Sender<String>>,
+    ) -> Self {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         let truncated = Arc::new(AtomicBool::new(false));
+        let (stop, mut stopped) = oneshot::channel();
         let task = reader.map(|mut reader| {
             let (buffer, truncated) = (buffer.clone(), truncated.clone());
             tokio::spawn(async move {
                 let mut chunk = [0; 8192];
-                while let Ok(n @ 1..) = reader.read(&mut chunk).await {
-                    let mut buffer = buffer.lock();
-                    let room = MAX_OUTPUT - buffer.len();
+                let mut accepted = 0;
+                let mut deadline = None;
+                loop {
+                    // Grace limits pipe reads after exit, not delivery to a
+                    // slow consumer. Backpressure must not discard batches.
+                    let read = if let Some(deadline) = deadline {
+                        match tokio::time::timeout_at(deadline, reader.read(&mut chunk)).await {
+                            Ok(read) => read,
+                            Err(_) => break,
+                        }
+                    } else {
+                        tokio::select! {
+                            _ = &mut stopped => {
+                                deadline = Some(tokio::time::Instant::now() + OUTPUT_GRACE);
+                                continue;
+                            }
+                            read = reader.read(&mut chunk) => read,
+                        }
+                    };
+                    let Ok(n @ 1..) = read else { break };
+                    let room = MAX_OUTPUT - accepted;
                     if n > room {
                         truncated.store(true, Ordering::Relaxed);
                     }
-                    buffer.extend_from_slice(&chunk[..n.min(room)]);
+                    let bytes = &chunk[..n.min(room)];
+                    accepted += bytes.len();
+                    let lines = {
+                        let mut buffer = buffer.lock();
+                        let old_len = buffer.len();
+                        buffer.extend_from_slice(bytes);
+                        // Search only the new bytes: rescanning an unfinished
+                        // long line on every read would be quadratic.
+                        output.as_ref().and_then(|_| {
+                            let end = old_len + bytes.iter().rposition(|byte| *byte == b'\n')? + 1;
+                            let rest = buffer.split_off(end);
+                            Some(std::mem::replace(&mut *buffer, rest))
+                        })
+                    };
+                    if let (Some(lines), Some(output)) = (lines, &output) {
+                        // One queued batch here; the editor job queue is also
+                        // bounded. No per-line tasks or flush timer.
+                        if output.send(decode(lines)).await.is_err() {
+                            break;
+                        }
+                    }
                 }
             })
         });
         Self {
             buffer,
             truncated,
+            stop: Some(stop),
             task,
         }
     }
 
-    /// What was read, waiting a little for the rest. Lossy UTF-8.
+    /// Signal the post-exit read deadline, then drain already-read batches.
     async fn finish(mut self) -> (String, bool) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
         if let Some(task) = self.task.take() {
-            let abort = task.abort_handle();
-            if tokio::time::timeout(OUTPUT_GRACE, task).await.is_err() {
-                abort.abort();
-            }
+            let _ = task.await;
         }
         let bytes = std::mem::take(&mut *self.buffer.lock());
-        (
-            String::from_utf8_lossy(&bytes).into_owned(),
-            self.truncated.load(Ordering::Relaxed),
-        )
+        (decode(bytes), self.truncated.load(Ordering::Relaxed))
     }
+}
+
+fn decode(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 /// Hand the terminal to `argv`, then deliver its exit code and, with
@@ -294,9 +364,16 @@ mod test {
 
     async fn run_sh(script: &str, stdin: Option<&str>, timeout: Duration) -> ProcessOutput {
         let (_kill, kill_rx) = oneshot::channel();
-        run(sh(script), None, stdin.map(str::to_owned), timeout, kill_rx)
-            .await
-            .unwrap()
+        run(
+            sh(script),
+            None,
+            stdin.map(str::to_owned),
+            timeout,
+            kill_rx,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -310,6 +387,97 @@ mod test {
         assert_eq!(out.exit_code, Some(3));
         assert_eq!(out.stdout, "hi\n");
         assert_eq!(out.stderr, "err\n");
+    }
+
+    #[tokio::test]
+    async fn streaming_delivers_lines_before_exit_and_keeps_utf8_and_tail() {
+        let (_kill, kill_rx) = oneshot::channel();
+        let (tx, mut rx) = mpsc::channel(1);
+        let task = tokio::spawn(run(
+            sh("printf 'first\\n'; sleep 1; printf '\\303'; sleep 0.02; printf '\\251\\nlast'; printf err >&2"),
+            None, None, Duration::from_secs(5), kill_rx, Some(tx),
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            "first\n"
+        );
+        assert!(
+            !task.is_finished(),
+            "the first line arrives while the child runs"
+        );
+        assert_eq!(rx.recv().await.unwrap(), "é\n");
+        assert!(rx.recv().await.is_none());
+        let out = task.await.unwrap().unwrap();
+        assert_eq!(out.exit_code, Some(0));
+        assert_eq!(out.stdout, "last");
+        assert_eq!(out.stderr, "err");
+    }
+
+    #[tokio::test]
+    async fn streamed_bytes_count_toward_the_cumulative_output_cap() {
+        let (mut writer, reader) = tokio::io::duplex(8192);
+        let (tx, mut rx) = mpsc::channel::<String>(1);
+        let capture = Capture::start(Some(reader), Some(tx));
+        let collect = tokio::spawn(async move {
+            let mut count = 0;
+            while let Some(chunk) = rx.recv().await {
+                assert!(chunk.ends_with('\n'));
+                count += chunk.len();
+            }
+            count
+        });
+        let bytes = b"x\n".repeat(MAX_OUTPUT / 2 + 1);
+        writer.write_all(&bytes).await.unwrap();
+        drop(writer);
+        let (tail, truncated) = capture.finish().await;
+        assert!(truncated);
+        assert!(tail.is_empty());
+        assert_eq!(collect.await.unwrap(), MAX_OUTPUT);
+    }
+
+    #[tokio::test]
+    async fn backpressure_does_not_discard_batches_when_the_pipe_grace_expires() {
+        let (mut writer, reader) = tokio::io::duplex(32);
+        let (tx, mut rx) = mpsc::channel(1);
+        let capture = Capture::start(Some(reader), Some(tx));
+        writer.write_all(b"first\n").await.unwrap();
+        // Wait for the first batch to fill the channel.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("first batch queued");
+        writer.write_all(b"second\ntail").await.unwrap();
+        drop(writer);
+        let finish = tokio::spawn(capture.finish());
+        tokio::time::sleep(OUTPUT_GRACE + Duration::from_millis(100)).await;
+        assert_eq!(rx.recv().await.unwrap(), "first\n");
+        assert_eq!(rx.recv().await.unwrap(), "second\n");
+        assert!(rx.recv().await.is_none());
+        assert_eq!(finish.await.unwrap(), ("tail".into(), false));
+    }
+
+    #[tokio::test]
+    async fn disabling_one_plugin_kills_only_its_processes() {
+        let (first, mut first_rx) = oneshot::channel();
+        let (second, mut second_rx) = oneshot::channel();
+        RUNNING.lock().insert(("disable-first".into(), 1), first);
+        RUNNING.lock().insert(("disable-second".into(), 2), second);
+        kill_plugin("disable-first");
+        assert_eq!(
+            first_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        );
+        assert_eq!(
+            second_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        );
+        kill_plugin("disable-second");
     }
 
     #[tokio::test]
@@ -329,6 +497,7 @@ mod test {
             None,
             Duration::from_secs(5),
             kill_rx,
+            None,
         )
         .await
         .unwrap();
@@ -355,6 +524,7 @@ mod test {
             None,
             Duration::from_secs(30),
             kill_rx,
+            None,
         ));
         tokio::time::sleep(Duration::from_millis(100)).await;
         drop(kill_tx);
@@ -372,6 +542,7 @@ mod test {
             None,
             Duration::from_secs(1),
             kill_rx,
+            None,
         )
         .await
         .unwrap_err();

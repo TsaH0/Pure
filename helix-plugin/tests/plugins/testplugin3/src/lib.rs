@@ -7,6 +7,7 @@ thread_local! {
     static CLOSED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
     static POPUP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 fn record(event: String) {
     host::log(&format!("event:{event}"));
@@ -26,6 +27,10 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "two-popups",
                 "popup-events",
                 "events",
+                "stream",
+                "stream-fail",
+                "output-events",
+                "kill",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -49,6 +54,35 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     }
     fn run_command(name: String, args: Vec<String>) -> Result<(), String> {
         match name.as_str() {
+            "stream" | "stream-fail" => {
+                let id = helix::plugin::process::spawn(
+                    &args,
+                    &helix::plugin::process::SpawnOptions {
+                        cwd: None,
+                        stdin: None,
+                        timeout_ms: Some(5000),
+                        stream: true,
+                    },
+                )?;
+                if name == "stream-fail" {
+                    return Err("failed after spawn".into());
+                }
+                host::set_status(&format!("stream-id:{id}"));
+                Ok(())
+            }
+            "kill" => {
+                let id = args
+                    .first()
+                    .ok_or("missing id")?
+                    .parse::<u32>()
+                    .map_err(|error| error.to_string())?;
+                helix::plugin::process::kill(id);
+                Ok(())
+            }
+            "output-events" => {
+                OUTPUT.with_borrow(|output| host::set_status(&format!("output:{output:?}")));
+                Ok(())
+            }
             "events" => {
                 EVENTS.with_borrow(|events| host::set_status(&events.join(",")));
                 Ok(())
@@ -143,10 +177,27 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn on_mode_switch(_old: types::Mode, _new: types::Mode) {}
 }
 impl exports::helix::plugin::callbacks::Guest for TestPlugin {
-    fn on_process_done(_id: u32, _result: Result<helix::plugin::process::Output, String>) {}
+    fn on_process_done(_id: u32, result: Result<helix::plugin::process::Output, String>) {
+        let output = match result {
+            Ok(output) => format!(
+                "done:{:?}:{}:{}",
+                output.exit_code, output.stdout, output.stderr
+            ),
+            Err(error) => format!("error:{error}"),
+        };
+        OUTPUT.with_borrow_mut(|events| events.push(output.clone()));
+        host::set_status(&output);
+    }
     fn on_picker_done(_id: u32, _result: helix::plugin::ui::PickerResult) {}
     fn on_picker_query(_id: u32, _generation: u64, _query: String) {}
-    fn on_process_output(_id: u32, _chunk: String) {}
+    fn on_process_output(_id: u32, chunk: String) {
+        let text = host::current_document()
+            .and_then(|doc| host::text(doc).ok())
+            .unwrap_or_default();
+        let output = format!("chunk:{chunk}:snapshot:{text}");
+        OUTPUT.with_borrow_mut(|events| events.push(output.clone()));
+        host::set_status(&output);
+    }
     fn on_popup_close(id: u32) {
         CLOSED.with_borrow_mut(|closed| closed.push(id));
         POPUPS.with_borrow_mut(|popups| popups.retain(|popup| *popup != id));

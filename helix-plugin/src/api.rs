@@ -175,7 +175,14 @@ impl process::Host for State {
         argv: Vec<String>,
         options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
-        State::spawn(self, argv, options.cwd, options.stdin, options.timeout_ms)
+        State::spawn(
+            self,
+            argv,
+            options.cwd,
+            options.stdin,
+            options.timeout_ms,
+            false,
+        )
     }
     fn run_interactive(
         &mut self,
@@ -325,6 +332,7 @@ impl Instance {
         };
         let callbacks = instance.helix_plugin_callbacks();
         match callback {
+            super::Callback::ProcessOutput { .. } => anyhow::bail!("streaming requires API 0.3"),
             super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
             super::Callback::ProcessDone { id, result } => {
                 callbacks

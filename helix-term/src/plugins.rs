@@ -610,7 +610,8 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 cwd,
                 stdin,
                 timeout,
-            } => process::spawn(plugin, id, argv, cwd, stdin, timeout),
+                stream,
+            } => process::spawn(plugin, id, argv, cwd, stdin, timeout, stream),
             Action::RunInteractive {
                 plugin,
                 id,
@@ -740,9 +741,15 @@ fn deliver(editor: &mut Editor, jobs: &mut Jobs, plugin: &str, callback: Callbac
 
 /// [`deliver`] from outside the editor's event loop.
 fn deliver_later(plugin: String, callback: Callback) {
-    tokio::spawn(job::dispatch_callback(job::Callback::EditorCompositorJobs(
-        Box::new(move |editor, _, jobs| deliver(editor, jobs, &plugin, callback)),
-    )));
+    tokio::spawn(deliver_async(plugin, callback));
+}
+
+/// Await the bounded job queue, preserving stream batches before completion.
+async fn deliver_async(plugin: String, callback: Callback) {
+    job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+        move |editor, _, jobs| deliver(editor, jobs, &plugin, callback),
+    )))
+    .await;
 }
 
 fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
@@ -823,15 +830,25 @@ pub fn editor_idle(editor: &mut Editor) {
 }
 
 fn refresh_wanted() {
-    let mask = with_host(|host| {
-        EVENT_KINDS
+    let (mask, disabled) = with_host(|host| {
+        let mask = EVENT_KINDS
             .into_iter()
             .filter(|kind| host.wants(*kind))
             .map(event_bit)
-            .fold(0, |mask, bit| mask | bit)
+            .fold(0, |mask, bit| mask | bit);
+        let disabled: Vec<_> = host
+            .plugins()
+            .iter()
+            .filter(|plugin| plugin.disabled().is_some())
+            .map(|plugin| plugin.name().to_owned())
+            .collect();
+        (mask, disabled)
     })
-    .unwrap_or(0);
+    .unwrap_or_default();
     WANTED.store(mask, Ordering::Relaxed);
+    for plugin in disabled {
+        process::kill_plugin(&plugin);
+    }
 }
 
 /// A document was written to disk.

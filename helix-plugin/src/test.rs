@@ -1193,6 +1193,17 @@ fn spawn_results_reach_the_plugin_once() {
             stderr: "err".into(),
         }),
     };
+    assert!(host
+        .callback(
+            "testplugin2",
+            Callback::ProcessOutput {
+                id,
+                chunk: "unexpected".into(),
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
     let actions = host
         .callback("testplugin2", done.clone(), &Snapshot::default())
         .unwrap();
@@ -2145,6 +2156,118 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
         .replace("api = \"0.1\"", "api = \"0.3\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
+}
+
+#[test]
+fn api_03_streams_keep_the_request_until_completion_and_use_fresh_snapshots() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["process", "read-buffers"]);
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "stream",
+            args(&["echo"]),
+            Snapshot::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("process not granted"));
+    host.set_process_grant("testplugin3", ProcessGrant::Any);
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "stream-fail",
+            args(&["echo"]),
+            Snapshot::default()
+        )
+        .is_err());
+    let state = host.plugins.last().unwrap().store.data();
+    assert!(state.pending.is_empty());
+    assert!(state.streaming.is_empty());
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "stream",
+            args(&["echo"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[0] {
+        Action::Spawn {
+            id, stream: true, ..
+        } => *id,
+        other => panic!("expected streaming spawn: {other:?}"),
+    };
+    assert!(host
+        .callback(
+            "testplugin3",
+            Callback::ProcessOutput {
+                id: id + 1,
+                chunk: "foreign".into()
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    for (chunk, text) in [("first\n", "before"), ("second\n", "after")] {
+        let actions = host
+            .callback(
+                "testplugin3",
+                Callback::ProcessOutput {
+                    id,
+                    chunk: chunk.into(),
+                },
+                &snapshot(text, 0, 0),
+            )
+            .unwrap();
+        assert_eq!(
+            statuses(&actions),
+            [format!("chunk:{chunk}:snapshot:{text}")]
+        );
+    }
+    let done = Callback::ProcessDone {
+        id,
+        result: Ok(ProcessOutput {
+            exit_code: Some(0),
+            stdout: "tail".into(),
+            stderr: "err".into(),
+        }),
+    };
+    assert_eq!(
+        statuses(
+            &host
+                .callback("testplugin3", done.clone(), &Snapshot::default())
+                .unwrap()
+        ),
+        ["done:Some(0):tail:err"]
+    );
+    assert!(host
+        .callback("testplugin3", done, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    assert!(host
+        .callback(
+            "testplugin3",
+            Callback::ProcessOutput {
+                id,
+                chunk: "late".into()
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    let state = host.plugins.last().unwrap().store.data();
+    assert!(state.pending.is_empty());
+    assert!(state.streaming.is_empty());
+    let output = statuses(
+        &host
+            .run_command("testplugin3", "output-events", vec![], Snapshot::default())
+            .unwrap(),
+    )
+    .remove(0);
+    assert!(output.find("first").unwrap() < output.find("second").unwrap());
+    assert!(output.find("second").unwrap() < output.find("done:").unwrap());
 }
 
 #[test]

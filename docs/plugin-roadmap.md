@@ -395,6 +395,9 @@ Do them together, as one version.
   `callbacks.on-process-output(id, chunk)` (stdout lines, batched); the
   final `on-process-done` still comes. Use it in `examples/finder` `files`
   with `push-items`.
+  - [x] Host/editor batches, cumulative stdout cap, bounded backpressure,
+    completion ordering and callback snapshots; older ABIs unchanged.
+  - [ ] SDK streaming helper and finder migration after query generations.
 
 ## M11. Review fixes still open (from a code review)
 
