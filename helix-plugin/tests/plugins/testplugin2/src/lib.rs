@@ -6,6 +6,7 @@ use helix_plugin_api::{
 };
 
 thread_local! {
+    static EVENT_SPAWN: Cell<bool> = const { Cell::new(false) };
     static EVENT_UI: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -13,6 +14,7 @@ struct TestPlugin;
 impl Plugin for TestPlugin {
     fn init(config: String) -> Result<Registration, String> {
         EVENT_UI.set(config.contains("event-ui"));
+        EVENT_SPAWN.set(config.contains("event-spawn"));
         editor::set_status(&format!("0.2 init:{config}"));
         Ok(Registration {
             commands: [
@@ -20,6 +22,13 @@ impl Plugin for TestPlugin {
                 "arm-process",
                 "arm-picker",
                 "spawn",
+                "spawn-stdin",
+                "spawn-timeout",
+                "spawn-edit",
+                "spawn-command",
+                "spawn-nested",
+                "spawn-many",
+                "panic",
                 "interactive",
                 "picker",
                 "push-items",
@@ -83,16 +92,75 @@ impl Plugin for TestPlugin {
                     Ok(())
                 });
             }
-            "spawn" => {
-                editor::spawn(&args, SpawnOptions::default(), |output| {
+            "spawn" | "spawn-stdin" | "spawn-timeout" | "spawn-edit" | "spawn-command"
+            | "spawn-nested" => {
+                let mut options = SpawnOptions::default();
+                let mut argv = args;
+                if name == "spawn-stdin" {
+                    options.stdin = Some(argv.first().ok_or("missing stdin")?.clone());
+                    argv.remove(0);
+                } else if name == "spawn-timeout" {
+                    options.timeout_ms = Some(
+                        argv.first()
+                            .ok_or("missing timeout")?
+                            .parse()
+                            .map_err(|_| "invalid timeout")?,
+                    );
+                    argv.remove(0);
+                }
+                let effect = name.to_owned();
+                let id = editor::spawn(&argv, options, move |output| {
                     let output = output?;
-                    editor::set_status(&format!(
-                        "exit:{:?};out:{};err:{}",
-                        output.exit_code, output.stdout, output.stderr
-                    ));
+                    match effect.as_str() {
+                        "spawn-edit" => {
+                            let doc = editor::current_document().ok_or("no document")?;
+                            editor::apply_edits(
+                                doc,
+                                &[Edit {
+                                    from: 0,
+                                    to: 0,
+                                    text: output.stdout,
+                                }],
+                            )?;
+                            editor::set_status("process edited");
+                        }
+                        "spawn-nested" => {
+                            editor::run_command(":plugin-run text-tools/upper")?;
+                            let doc = editor::current_document().ok_or("no document")?;
+                            editor::apply_edits(
+                                doc,
+                                &[Edit {
+                                    from: 0,
+                                    to: 0,
+                                    text: output.stdout,
+                                }],
+                            )?;
+                            editor::set_status("nested process edited");
+                        }
+                        "spawn-command" => {
+                            editor::run_command("goto_line_end")?;
+                            editor::set_status("process command");
+                        }
+                        _ => editor::set_status(&format!(
+                            "exit:{:?};out:{};err:{}",
+                            output.exit_code, output.stdout, output.stderr
+                        )),
+                    }
                     Ok(())
                 })?;
+                editor::set_status(&format!("request:{id}"));
             }
+            "spawn-many" => {
+                let count: usize = args
+                    .first()
+                    .ok_or("missing count")?
+                    .parse()
+                    .map_err(|_| "invalid count")?;
+                for _ in 0..count {
+                    editor::spawn(&args[1..], SpawnOptions::default(), |_| Ok(()))?;
+                }
+            }
+            "panic" => panic!("testplugin2 crashed on purpose"),
             "interactive" => {
                 editor::run_interactive(
                     &args,
@@ -131,6 +199,14 @@ impl Plugin for TestPlugin {
     }
 
     fn on_document_open(doc: DocumentId) {
+        if EVENT_SPAWN.get() {
+            if let Err(err) = editor::spawn(&["true"], SpawnOptions::default(), |_| {
+                editor::set_status("event process done");
+                Ok(())
+            }) {
+                editor::set_error(&err);
+            }
+        }
         if EVENT_UI.get() {
             let interactive =
                 editor::run_interactive(&["true"], InteractiveOptions::default(), |_| Ok(()));

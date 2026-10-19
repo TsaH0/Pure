@@ -18,6 +18,7 @@ pub mod interactive;
 pub mod job;
 pub mod keymap;
 pub mod logging;
+mod plugin_processes;
 pub mod plugins;
 pub mod ui;
 

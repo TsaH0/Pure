@@ -1102,11 +1102,160 @@ fn process_imports_require_both_manifest_permission_and_user_grant() {
         .unwrap_err()
         .to_string()
         .contains("not granted"));
-    // The grant gate now succeeds; execution itself lands in M1.2.
-    assert!(spawn(&mut host, "rg")
-        .unwrap_err()
-        .to_string()
-        .contains("process support is not implemented yet"));
+    let actions = spawn(&mut host, "rg").unwrap();
+    assert!(matches!(actions.first(), Some(Action::Spawn { argv, .. }) if argv == &["rg"]));
     assert_eq!(host.info()[0].process_grant.describe(), "only rg");
     assert!(host.plugin("testplugin2").unwrap().disabled().is_none());
+}
+
+fn granted_testplugin2() -> (PluginHost, tempfile::TempDir) {
+    let (mut host, root) = testplugin2();
+    let path = root.path().join("testplugin2/plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("permissions = [", "permissions = [\"process\", ");
+    std::fs::write(&path, source).unwrap();
+    host.clear();
+    host.set_process_grant("testplugin2", ProcessGrant::All);
+    host.load(path.parent().unwrap(), "{}").unwrap();
+    (host, root)
+}
+
+fn queued_spawn(actions: &[Action]) -> (u32, &SpawnOptions) {
+    actions
+        .iter()
+        .find_map(|action| match action {
+            Action::Spawn { id, options, .. } => Some((*id, options)),
+            _ => None,
+        })
+        .expect("queued spawn")
+}
+
+#[test]
+fn process_requests_enforce_quota_timeout_defaults_and_ownership() {
+    let (mut host, _root) = granted_testplugin2();
+    let mut ids = Vec::new();
+    for _ in 0..16 {
+        let actions = host
+            .run_command(
+                "testplugin2",
+                "spawn",
+                vec!["true".into()],
+                Snapshot::default(),
+            )
+            .unwrap();
+        let (id, options) = queued_spawn(&actions);
+        assert_eq!(options.timeout_ms, Some(30_000));
+        assert!(!ids.contains(&id));
+        ids.push(id);
+    }
+    assert!(host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            vec!["true".into()],
+            Snapshot::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("at most 16 processes"));
+    assert_eq!(host.plugins[0].store.data().pending.len(), 16);
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "kill",
+            vec![ids[0].to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Kill { plugin, id }] if plugin == "testplugin2" && *id == ids[0])
+    );
+    assert!(host.request_is_pending("testplugin2", ids[0], PendingKind::Process));
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "kill",
+            vec![u32::MAX.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(actions.is_empty());
+    host.callback(
+        "testplugin2",
+        process_done(ids[0], "done"),
+        &Snapshot::default(),
+    )
+    .unwrap();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "spawn-timeout",
+            vec!["900000".into(), "true".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(queued_spawn(&actions).1.timeout_ms, Some(600_000));
+}
+
+#[test]
+fn failed_commands_roll_back_all_their_queued_process_requests() {
+    let (mut host, _root) = granted_testplugin2();
+    let err = host
+        .run_command(
+            "testplugin2",
+            "spawn-many",
+            vec!["17".into(), "true".into()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("at most 16 processes"));
+    assert!(host.plugins[0].store.data().pending.is_empty());
+    assert!(host.plugin("testplugin2").unwrap().disabled().is_none());
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            vec!["true".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(host.request_is_pending(
+        "testplugin2",
+        queued_spawn(&actions).0,
+        PendingKind::Process
+    ));
+}
+
+#[test]
+fn event_handlers_can_start_processes_with_a_grant() {
+    let (mut host, root) = granted_testplugin2();
+    host.clear();
+    host.load(&root.path().join("testplugin2"), "{\"event-spawn\":true}")
+        .unwrap();
+    let results = host.dispatch(Event::DocumentOpen(1), &snapshot("text", 0, 1));
+    let actions = results
+        .into_iter()
+        .find(|(name, _)| name == "testplugin2")
+        .unwrap()
+        .1
+        .unwrap();
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::Spawn { argv, .. } if argv == &["true"])));
+}
+
+#[test]
+fn invalid_process_arguments_do_not_reserve_ids() {
+    let (mut host, _root) = granted_testplugin2();
+    for args in [
+        vec![],
+        vec![String::new()],
+        vec!["true".into(), "bad\0arg".into()],
+    ] {
+        assert!(host
+            .run_command("testplugin2", "spawn", args, Snapshot::default())
+            .is_err());
+        assert!(host.plugins[0].store.data().pending.is_empty());
+    }
 }

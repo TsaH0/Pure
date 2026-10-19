@@ -431,3 +431,221 @@ async fn process_grants_are_listed_and_invalid_grants_do_not_load_plugins() -> a
     assert!(names.contains(&"text-tools/upper".to_owned()));
     Ok(())
 }
+
+#[cfg(unix)]
+fn app_with_process_plugin(settings: &str) -> (Application, tempfile::TempDir) {
+    let (mut app, dir) = app_with_plugins("#[a|]#bc\n", ALL, "");
+    let plugin = dir.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!(
+            "name = 'testplugin2'\nversion = '1'\napi = '0.2'\npermissions = [{ALL}, 'process']\n"
+        ),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[cfg(unix)]
+async fn wait_process_status(app: &mut Application, expected: impl Fn(&str) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(message, _)| expected(message))
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "process callback did not arrive: {:?}",
+            app.editor.get_status()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        app.editor.reset_idle_timer();
+        run_event_loop_until_idle(app).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn processes_return_both_streams_and_stdin_to_wasm_callbacks() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_process_plugin("[testplugin2]\nallow-process = ['sh', 'cat']\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'echo hi; echo err <gt>&2; exit 3'<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message.starts_with("exit:")).await;
+    assert_eq!(status(&app).0, "exit:Some(3);out:hi\n;err:err\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn-stdin 'hello stdin' cat<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message.starts_with("exit:")).await;
+    assert_eq!(status(&app).0, "exit:Some(0);out:hello stdin;err:");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn process_callbacks_apply_edits_and_editor_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_process_plugin("[testplugin2]\nallow-process = true\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn-edit printf hi<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message == "process edited").await;
+    assert_eq!(text(&app), "hiabc\n");
+    keys(&mut app, "u").await;
+    assert_eq!(text(&app), "abc\n");
+    keys(&mut app, ":plugin-run testplugin2/spawn-command true<ret>").await;
+    wait_process_status(&mut app, |message| message == "process command").await;
+    assert_eq!(cursor(&app), 2);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn process_timeouts_kill_and_missing_programs_complete_once() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_process_plugin("[testplugin2]\nallow-process = true\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn-timeout -- 50 sh -c 'sleep 5'<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message.contains("timed out")).await;
+    assert!(status(&app).0.starts_with("exit:None;"));
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'sleep 5'<ret>",
+    )
+    .await;
+    let id = status(&app)
+        .0
+        .strip_prefix("request:")
+        .expect("pending request")
+        .parse::<u32>()?;
+    keys(&mut app, &format!(":plugin-run testplugin2/kill {id}<ret>")).await;
+    wait_process_status(&mut app, |message| message.contains("process killed")).await;
+    assert!(status(&app).0.starts_with("exit:None;"));
+    assert!(
+        !helix_term::plugins::with_host(|host| host.request_is_pending(
+            "testplugin2",
+            id,
+            helix_plugin::PendingKind::Process
+        ))
+        .unwrap()
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn /pure-no-such-program<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message.contains("failed to run")).await;
+    assert_eq!(status(&app).1, Severity::Error);
+    assert!(helix_term::plugins::with_host(|host| host
+        .plugin("testplugin2")
+        .unwrap()
+        .disabled()
+        .is_none())
+    .unwrap());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn process_grant_failures_never_start_a_request() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_process_plugin("");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'echo bad'<ret>",
+    )
+    .await;
+    assert_error(&app, "process not granted");
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin2]\nallow-process = ['cat']\n",
+    )?;
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'echo bad'<ret>",
+    )
+    .await;
+    assert_error(&app, "not granted");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_and_disable_cancel_owned_processes_and_ignore_late_results() -> anyhow::Result<()> {
+    let settings = "[testplugin2]\nallow-process = true\n";
+    let (mut app, dir) = app_with_process_plugin(settings);
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'sleep 5; echo late'<ret>",
+    )
+    .await;
+    let old_id = status(&app)
+        .0
+        .strip_prefix("request:")
+        .expect("pending request")
+        .parse::<u32>()?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings)?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    app.editor.reset_idle_timer();
+    run_event_loop_until_idle(&mut app).await;
+    assert_eq!(status(&app).0, "0.2 init:{}");
+    assert!(
+        !helix_term::plugins::with_host(|host| host.request_is_pending(
+            "testplugin2",
+            old_id,
+            helix_plugin::PendingKind::Process
+        ))
+        .unwrap()
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn -- sh -c 'sleep 5; echo late'<ret>",
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin2/panic<ret>").await;
+    assert!(helix_term::plugins::with_host(|host| host
+        .plugin("testplugin2")
+        .unwrap()
+        .disabled()
+        .is_some())
+    .unwrap());
+    keys(&mut app, ":plugin-run text-tools/count<ret>").await;
+    assert_eq!(status(&app).0, "document: 1 lines, 1 words, 4 chars");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_process_callback_edits_do_not_retrigger_plugin_events() -> anyhow::Result<()> {
+    let settings = "[testplugin2]\nallow-process = true\n[testplugin]\nedit-on-change = true\n";
+    let (mut app, _dir) = app_with_process_plugin(settings);
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/spawn-nested printf hi<ret>",
+    )
+    .await;
+    wait_process_status(&mut app, |message| message == "nested process edited").await;
+    for _ in 0..3 {
+        deliver_events(&mut app).await;
+    }
+    assert_eq!(text(&app), "hiAbc\n");
+    Ok(())
+}

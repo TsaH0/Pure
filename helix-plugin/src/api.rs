@@ -153,10 +153,9 @@ impl process::Host for State {
     fn spawn(
         &mut self,
         argv: Vec<String>,
-        _options: process::SpawnOptions,
+        options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
-        self.authorize_process(&argv)?;
-        Err("process support is not implemented yet".into())
+        State::spawn(self, argv, options)
     }
     fn run_interactive(
         &mut self,
@@ -167,7 +166,9 @@ impl process::Host for State {
         self.authorize_process(&argv)?;
         Err("interactive process support is not implemented yet".into())
     }
-    fn kill(&mut self, _id: u32) {}
+    fn kill(&mut self, id: u32) {
+        State::kill(self, id)
+    }
 }
 impl ui::Host for State {
     fn show_picker(&mut self, _picker: ui::Picker) -> std::result::Result<u32, String> {

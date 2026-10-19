@@ -166,10 +166,22 @@ pub enum Action {
     RunCommand(String),
     Status(String),
     Error(String),
+    /// Start a program asynchronously; completion is delivered to this id.
+    Spawn {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        options: SpawnOptions,
+    },
+    /// Cancel a process owned by this plugin; completion is still delivered.
+    Kill {
+        plugin: String,
+        id: u32,
+    },
 }
 
 /// Result of a background program or interactive chooser.
-pub use v0_2::helix::plugin::process::Output as ProcessOutput;
+pub use v0_2::helix::plugin::process::{Output as ProcessOutput, SpawnOptions};
 /// A picker choice, including the requested split action.
 pub use v0_2::helix::plugin::ui::PickerResult;
 
@@ -305,6 +317,37 @@ impl State {
             .map_err(|_| "plugin request ids exhausted".to_string())?;
         self.pending.insert(id, kind);
         Ok(id)
+    }
+
+    fn spawn(&mut self, argv: Vec<String>, mut options: SpawnOptions) -> Result<u32, String> {
+        self.authorize_process(&argv)?;
+        if self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Process)
+            .count()
+            >= 16
+        {
+            return Err("at most 16 processes may run per plugin".into());
+        }
+        options.timeout_ms = Some(options.timeout_ms.unwrap_or(30_000).min(600_000));
+        let id = self.request(PendingKind::Process)?;
+        self.actions.push(Action::Spawn {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            options,
+        });
+        Ok(id)
+    }
+
+    fn kill(&mut self, id: u32) {
+        if self.pending.get(&id) == Some(&PendingKind::Process) {
+            self.actions.push(Action::Kill {
+                plugin: self.plugin.clone(),
+                id,
+            });
+        }
     }
 
     fn need_ui(&self, function: &str) -> Result<(), String> {
@@ -989,6 +1032,13 @@ impl PluginHost {
             .data_mut()
             .request(kind)
             .map_err(anyhow::Error::msg)
+    }
+
+    /// Whether a deferred action still belongs to a live plugin instance.
+    pub fn request_is_pending(&self, name: &str, id: u32, kind: PendingKind) -> bool {
+        self.plugin(name).is_some_and(|plugin| {
+            plugin.disabled.is_none() && plugin.store.data().pending.get(&id) == Some(&kind)
+        })
     }
 
     /// Deliver a completion with the command time limit and a fresh snapshot.

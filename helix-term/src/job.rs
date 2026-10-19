@@ -10,6 +10,8 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 pub type EditorCompositorCallback = Box<dyn FnOnce(&mut Editor, &mut Compositor) + Send>;
+pub type EditorCompositorJobsCallback =
+    Box<dyn FnOnce(&mut Editor, &mut Compositor, &mut Jobs) + Send>;
 pub type EditorCallback = Box<dyn FnOnce(&mut Editor) + Send>;
 pub type EditorCallbackFollowup = Box<dyn FnOnce(&mut Editor) -> Option<Job> + Send>;
 
@@ -28,6 +30,16 @@ pub async fn dispatch(job: impl FnOnce(&mut Editor, &mut Compositor) + Send + 's
         .await;
 }
 
+/// Dispatch work that may itself schedule editor jobs, such as plugin callbacks.
+pub async fn dispatch_with_jobs(
+    job: impl FnOnce(&mut Editor, &mut Compositor, &mut Jobs) + Send + 'static,
+) {
+    let _ = JOB_QUEUE
+        .wait()
+        .send(Callback::EditorCompositorJobs(Box::new(job)))
+        .await;
+}
+
 pub fn dispatch_blocking(job: impl FnOnce(&mut Editor, &mut Compositor) + Send + 'static) {
     let jobs = JOB_QUEUE.wait();
     send_blocking(jobs, Callback::EditorCompositor(Box::new(job)))
@@ -35,6 +47,7 @@ pub fn dispatch_blocking(job: impl FnOnce(&mut Editor, &mut Compositor) + Send +
 
 pub enum Callback {
     EditorCompositor(EditorCompositorCallback),
+    EditorCompositorJobs(EditorCompositorJobsCallback),
     Editor(EditorCallback),
     Followup(EditorCallbackFollowup),
 }
@@ -102,7 +115,7 @@ impl Jobs {
     }
 
     pub fn handle_callback(
-        &self,
+        &mut self,
         editor: &mut Editor,
         compositor: &mut Compositor,
         call: anyhow::Result<Option<Callback>>,
@@ -112,6 +125,10 @@ impl Jobs {
             Ok(Some(call)) => match call {
                 Callback::EditorCompositor(call) => {
                     call(editor, compositor);
+                    None
+                }
+                Callback::EditorCompositorJobs(call) => {
+                    call(editor, compositor, self);
                     None
                 }
                 Callback::Editor(call) => {
@@ -161,6 +178,11 @@ impl Jobs {
                         if let Some(job) = match callback {
                             Callback::EditorCompositor(call) if compositor.is_some() => {
                                 call(editor, compositor.as_deref_mut().unwrap());
+                                None
+                            }
+                            Callback::EditorCompositorJobs(call) if compositor.is_some() => {
+                                call(editor, compositor.as_deref_mut().unwrap(), self);
+                                wait_futures.extend(std::mem::take(&mut self.wait_futures));
                                 None
                             }
                             Callback::Editor(call) => {

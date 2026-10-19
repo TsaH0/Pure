@@ -162,7 +162,7 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
   - **Open decision for the owner:** whether to also ask once per program at
     first use (like workspace trust). Implement the config grant; leave a
     hook for the prompt.
-- [ ] **M1.2 `spawn` and `kill`.** Depends on: M0.3, M1.1.
+- [x] **M1.2 `spawn` and `kill`.** Depends on: M0.3, M1.1.
   - Host function records `Action::Spawn { plugin, id, argv, options }`.
     `apply` runs it as a `tokio::process::Command` (no shell; `argv[0]`
     looked up in `PATH` and checked against the allow-list) on a task, with

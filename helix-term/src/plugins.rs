@@ -74,8 +74,9 @@ pub fn load(editor: &mut Editor) {
 /// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
 /// replacing any loaded plugins.
 pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
+    crate::plugin_processes::cancel_all();
+    *HOST.lock() = None;
     if !dir.is_dir() {
-        *HOST.lock() = None;
         return;
     }
     let mut host = match PluginHost::new(Some(helix_loader::cache_dir().join("plugins"))) {
@@ -220,8 +221,10 @@ pub fn run_command(
         .split_once('/')
         .ok_or_else(|| anyhow::anyhow!("expected <plugin>/<command>, got '{name}'"))?;
     let snapshot = snapshot(editor);
-    let actions = with_host(|host| host.run_command(plugin, command, args, snapshot))
-        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))??;
+    let result = with_host(|host| host.run_command(plugin, command, args, snapshot))
+        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))?;
+    cancel_disabled_processes();
+    let actions = result?;
     apply(editor, Some(jobs), actions);
     Ok(())
 }
@@ -288,7 +291,7 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
 /// Apply the actions of a plugin call. `jobs` is needed to run commands; it is
 /// only available when a plugin command runs (not for events).
 fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>) {
-    APPLYING.store(true, Ordering::Relaxed);
+    let applying = APPLYING.swap(true, Ordering::Relaxed);
     let mut edited: HashMap<DocumentId, ViewId> = HashMap::new();
     for action in actions {
         match action {
@@ -328,6 +331,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             },
             Action::Status(message) => editor.set_status(message),
             Action::Error(message) => editor.set_error(message),
+            Action::Spawn {
+                plugin,
+                id,
+                argv,
+                options,
+            } => {
+                crate::plugin_processes::start(plugin, id, argv, options);
+            }
+            Action::Kill { plugin, id } => crate::plugin_processes::kill(&plugin, id),
         }
     }
     // All edits of one call are one undo step.
@@ -341,7 +353,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
         doc.append_changes_to_history(view);
         view.ensure_cursor_in_view(doc, scrolloff);
     }
-    APPLYING.store(false, Ordering::Relaxed);
+    APPLYING.store(applying, Ordering::Relaxed);
 }
 
 fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
@@ -426,9 +438,43 @@ pub fn deliver_events(editor: &mut Editor) {
         for (_plugin, result) in results {
             match result {
                 Ok(actions) => apply(editor, None, actions),
-                Err(err) => editor.set_error(err.to_string()),
+                Err(err) => {
+                    cancel_disabled_processes();
+                    editor.set_error(err.to_string());
+                }
             }
         }
+    }
+}
+
+pub(crate) fn deliver_callback(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    plugin: &str,
+    callback: helix_plugin::Callback,
+) {
+    let snapshot = snapshot(editor);
+    let Some(result) = with_host(|host| host.callback(plugin, callback, &snapshot)) else {
+        return;
+    };
+    cancel_disabled_processes();
+    match result {
+        Ok(actions) => apply(editor, Some(jobs), actions),
+        Err(err) => editor.set_error(err.to_string()),
+    }
+}
+
+fn cancel_disabled_processes() {
+    let names = with_host(|host| {
+        host.info()
+            .into_iter()
+            .filter(|info| info.disabled.is_some())
+            .map(|info| info.name)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    for name in names {
+        crate::plugin_processes::cancel_plugin(&name);
     }
 }
 

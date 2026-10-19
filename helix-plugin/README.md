@@ -191,9 +191,9 @@ editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
 })?;
 ```
 
-The request and callback plumbing is available; actual process execution and
-picker display are implemented by their separate roadmap milestones. Until
-then those imports return an explicit unsupported error. UI is restricted to
+Background process execution and callback plumbing are available. Terminal
+hand-over and picker display follow in their separate milestones; those
+imports still return an explicit unsupported error until implemented. UI is restricted to
 plugin commands and callbacks, so events cannot interrupt typing. API 0.1's
 WIT remains at [`wit/v0.1/`](wit/v0.1/); existing versioned interfaces are never
 extended in place.
@@ -225,5 +225,38 @@ continue to load. Grants are host settings and are not forwarded to `init`.
 
 `:plugin-list` and the general `--health` report `process: granted`,
 `process: not granted`, or `process: only rg, fd`. No first-use prompt is
-implemented; explicit configuration is the current grant mechanism. Process
-execution itself follows in M1.2; permission/grant checks are already enforced.
+implemented; explicit configuration is the current grant mechanism. Background execution is available; terminal hand-over follows in M1.3.
+
+
+### Background programs
+
+```rust,ignore
+use helix_plugin_api::{editor, SpawnOptions};
+
+let request = editor::spawn(&["git", "status", "--short"], SpawnOptions::default(), |result| {
+    let output = result?;
+    if output.exit_code != Some(0) {
+        return Err(output.stderr);
+    }
+    editor::set_status(&output.stdout);
+    Ok(())
+})?;
+// To cancel later: editor::kill(request). The completion still arrives.
+```
+
+`SpawnOptions` accepts `cwd`, `stdin` (written and then closed), and
+`timeout_ms` (30 seconds by default, clamped to at most ten minutes).
+There is no implicit shell. `Output` contains an optional exit code and lossy
+UTF-8 stdout/stderr, capped at 16 MiB each; truncation is noted in stderr.
+Signals, cancellation and timeouts have no exit code. A failed spawn returns
+an error to the callback; nonzero program exits are ordinary outputs.
+
+Each plugin may have at most 16 outstanding process requests. Reload or
+disabling cancels its processes, and late results cannot reach the next
+instance. Callbacks get a fresh editor snapshot and the normal command time
+limit; their edits and editor commands apply through the job queue. `spawn`
+also works in event handlers; UI operations remain restricted.
+
+When passing flags to a plugin through `:plugin-run`, use the existing `--`
+separator before its arguments (for example `:plugin-run my-plugin/run -- -v`).
+This preserves the editor's existing command parser and quoting behavior.

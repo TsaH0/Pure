@@ -5,13 +5,14 @@
 - Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2), M0.5 (0.2 test plugin).
 - M0 complete and pushed to `plugin-api-0.2`; 216/216 full integration tests pass. PR creation is blocked by GitHub API egress.
 - Done independently: M2.1 on `plugin-pickers` (commit `08fe41bf`); it will be rebased onto M1 for the single M2 PR.
-- Done: M1.1 on `plugin-processes`, based on completed M0.
-- In progress: M1.2 background processes and cancellation.
+- Done: M1.1–M1.2 on `plugin-processes`, based on completed M0.
+- In progress: M1.3 terminal hand-over.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
 ## Open questions for the owner
 
-- An optional first-use process prompt remains undecided. M1.1 will implement explicit `allow-process` grants and leave a prompt hook.
+- API 0.1 `run-commands` can invoke existing shell/write commands. Asked whether those plugin calls should also require new process/filesystem grants, or retain their existing trusted semantics; user commands and key bindings stay unchanged either way. Direct process imports already require both permission and grant.
+- An optional first-use process prompt remains undecided. M1.1 implements explicit `allow-process` grants and leaves the optional prompt hook unimplemented.
 
 ## Environment and baseline (2026-10-19)
 
@@ -80,3 +81,12 @@
 - Host process imports enforce both checks. List and health diagnostics report grant status without instantiating components for health checks. The optional prompt hook is left unimplemented as requested.
 - Formatting, workspace Clippy (no warnings), all 45 host tests, all 23 editor library tests and all 20 plugin integration tests passed. Added checks for default denial, malformed grants, exact program paths, both permission layers, settings stripping and diagnostics. A development build and real CLI `--health` request also passed using a manifest without a component, confirming health does not run plugin code.
 - Guest code did not change; no fixture rebuild was necessary for this task.
+
+
+## M1.2 Background processes and cancellation (done, 2026-10-19, M1 PR pending)
+
+- Added queued spawn/kill actions, 16-request quotas, checked ownership and timeout defaults/caps. Requests start direct argv commands on Tokio tasks, write/close stdin concurrently with bounded output capture, and deliver callbacks through the editor job queue with access to jobs.
+- Timeout covers inherited pipes even after the parent exits. Unix cancellation kills the owned process group; children are reaped. Output remains valid UTF-8 and within the byte cap after lossy decoding. Reload and disable cancel owned processes; reload drops old authorization before creating a new host.
+- Added a small `job.rs` callback hook so callbacks can schedule editor commands. Plugin-specific execution remains in `plugin_processes.rs`. Nested plugin action application restores the previous event-suppression state.
+- Rebuilt the 0.2 fixture with stdin, timeout, quota, callback edit/command and failure commands. Added real-process tests and in-editor callback tests. Initial new integration inputs needed the existing `--` flag separator and `<gt>` key notation; inputs were corrected without changing command parsing or assertions.
+- Final validation: all 49 host tests, all 30 editor library tests (including seven executor tests), all 26 plugin integration tests, formatting and workspace Clippy passed without new warnings. New integration coverage includes output/exit codes, stdin, callback edits/undo, editor commands, timeouts, kill, spawn errors, grant refusal, reload/disable, and nested event suppression. Rebuilt fixture committed.
