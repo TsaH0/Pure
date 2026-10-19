@@ -18,6 +18,10 @@ pub mod interactive;
 pub mod job;
 pub mod keymap;
 pub mod logging;
+#[cfg(feature = "plugins")]
+pub mod plugins;
+#[cfg(not(feature = "plugins"))]
+#[path = "plugins_disabled.rs"]
 pub mod plugins;
 pub mod ui;
 

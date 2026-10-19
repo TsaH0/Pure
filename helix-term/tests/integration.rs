@@ -19,6 +19,7 @@ mod test {
     mod command_line;
     mod commands;
     mod movement;
+    #[cfg(feature = "plugins")]
     mod plugins;
     mod quickfix;
     mod splits;

@@ -3018,7 +3018,7 @@ fn plugin_reload(
     cx.editor.clear_status();
     crate::plugins::load(cx.editor);
     if cx.editor.get_status().is_none() {
-        let count = crate::plugins::with_host(|host| host.plugins().len()).unwrap_or(0);
+        let count = crate::plugins::count();
         cx.editor.set_status(format!("Loaded {count} plugin(s)"));
     }
     Ok(())

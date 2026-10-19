@@ -353,7 +353,7 @@ the hook first and keep it generic.
 - [x] **M9.2 Benchmarks.** Startup with 0/5/20 plugins (warm and cold cache),
   event dispatch cost while typing. Budget: under 5 ms of startup per cached
   plugin.
-- [ ] **M9.3 Docs.** Keep `helix-plugin/README.md` the single guide (user
+- [x] **M9.3 Docs.** Keep `helix-plugin/README.md` the single guide (user
   setup, every permission, every host function with an example); a book
   page linking to it.
 
@@ -400,8 +400,9 @@ Small, self-contained; each one is a good single task.
   their WASI context (or warn) after `:cd`.
 - [x] **Parallel compilation on a cold cache**, and plugins load in the
   background after startup (see "Performance" in `plugin-progress.md`).
-- [ ] **A `plugins` cargo feature** (on by default) to build Pure without
-  Wasmtime at all, for a smaller binary and faster builds.
+- [x] **A `plugins` cargo feature** (on by default): `cargo build
+  --no-default-features --features git` builds Pure without Wasmtime
+  (`helix-term/src/plugins_disabled.rs` stands in).
 - [ ] **Fuzz the WASM boundary itself** (M9.1 covers the host's validation
   with quickcheck): a test plugin that sends random edits, ranges and
   picker data through the real ABI.

@@ -331,6 +331,11 @@ pub fn command_names() -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// How many plugins are loaded.
+pub fn count() -> usize {
+    with_host(|host| host.plugins().len()).unwrap_or(0)
+}
+
 /// Names of the loaded plugins, for completion.
 pub fn plugin_names() -> Vec<String> {
     with_host(|host| {

@@ -31,10 +31,12 @@ assets = [
 ]
 
 [features]
-default = ["git"]
+default = ["git", "plugins"]
 unicode-lines = ["helix-core/unicode-lines", "helix-view/unicode-lines"]
 integration = ["helix-event/integration_test"]
 git = ["helix-vcs/git"]
+# WebAssembly plugins (Wasmtime). Without it Pure has no plugin support.
+plugins = ["dep:helix-plugin"]
 
 [[bin]]
 name = "pure"
@@ -49,7 +51,7 @@ helix-lsp = { path = "../helix-lsp" }
 helix-dap = { path = "../helix-dap" }
 helix-vcs = { path = "../helix-vcs" }
 helix-loader = { path = "../helix-loader" }
-helix-plugin = { path = "../helix-plugin" }
+helix-plugin = { path = "../helix-plugin", optional = true }
 
 anyhow = "1"
 
