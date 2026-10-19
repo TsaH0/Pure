@@ -4730,8 +4730,18 @@ pub(super) fn execute_command(
     (cmd.fun)(cx, args, event).map_err(|err| anyhow!("'{}': {err}", cmd.name))
 }
 
-#[allow(clippy::unnecessary_unwrap)]
 pub(super) fn command_mode(cx: &mut Context) {
+    command_mode_with(cx, String::new());
+}
+
+/// Command mode with `s/\v` typed: a very magic `:s` on the selections (or
+/// the cursor's line).
+pub(super) fn substitute_very_magic(cx: &mut Context) {
+    command_mode_with(cx, "s/\\v".to_string());
+}
+
+#[allow(clippy::unnecessary_unwrap)]
+fn command_mode_with(cx: &mut Context, line: String) {
     let mut prompt = Prompt::new(
         ":".into(),
         Some(':'),
@@ -4743,6 +4753,9 @@ pub(super) fn command_mode(cx: &mut Context) {
         },
     );
     prompt.doc_fn = Box::new(command_line_doc);
+    if !line.is_empty() {
+        prompt.set_line(line, cx.editor);
+    }
 
     // Calculate initial completion
     prompt.recalculate_completion(cx.editor);

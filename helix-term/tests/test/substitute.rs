@@ -217,3 +217,23 @@ async fn other_s_commands_still_work() -> anyhow::Result<()> {
     ))
     .await
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn space_v_very_magic_on_selection() -> anyhow::Result<()> {
+    // `space v` opens `:s/\v`: groups and `+` need no backslashes, and only the
+    // selection changes.
+    test((
+        "foo_bar #[foo_bar baz_qux|]#",
+        r"<space>v(\w+)_(\w+)/\2_\1/g<ret>",
+        "foo_bar #[bar_foo qux_baz|]#",
+    ))
+    .await?;
+    // With just a cursor: its line.
+    test((
+        "one two\n#[t|]#hree four\n",
+        r"<space>v(\w+) (\w+)/\2 \1/<ret>",
+        "one two\n#[f|]#our three\n",
+    ))
+    .await?;
+    Ok(())
+}

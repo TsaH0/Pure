@@ -245,6 +245,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "X" => toggle_compilation,
             "z" => run_and_wait,
             "q" => quickfix_picker,
+            "v" => substitute_very_magic,
             "G" => { "Debug (experimental)" sticky=true
                 "l" => dap_launch,
                 "r" => dap_restart,

@@ -314,6 +314,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `X`     | Show or hide `*compilation*` (`C-j` hides it, `Esc` closes it)          | `toggle_compilation`                       |
 | `z`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
 | `q`     | Open the quickfix list (`]q`/`[q` to step through it)                   | `quickfix_picker`                          |
+| `v`     | `:s/\v` on the selections (or the line): a very magic substitute         | `substitute_very_magic`                    |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |
 | `c`     | Comment/uncomment selections                                            | `toggle_comments`                          |
 | `C`     | Block comment/uncomment selections                                      | `toggle_block_comments`                    |

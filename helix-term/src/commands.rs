@@ -402,6 +402,7 @@ impl MappableCommand {
         insert_mode, "Insert before selection",
         append_mode, "Append after selection",
         command_mode, "Enter command mode",
+        substitute_very_magic, "Substitute in the selections with a very magic regex (`:s/\\v`)",
         file_picker, "Open file picker",
         file_picker_in_current_buffer_directory, "Open file picker at current buffer's directory",
         file_picker_in_current_directory, "Open file picker at current working directory",

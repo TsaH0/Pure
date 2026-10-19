@@ -15,7 +15,8 @@ inspired editor, written in Rust) that keeps up with Helix and adds:
   components, with permissions, time and memory limits. See
   [`helix-plugin/README.md`](helix-plugin/README.md).
 - **Vim's `:s`**: `:%s/\(.*\)/"\1",/`, `:s/(\w+) (\w+)/\U\2\E \1/g`, ranges,
-  capture groups (Vim and regex syntax), case changes and flags.
+  capture groups (Vim and regex syntax), case changes and flags; `space v`
+  starts a very magic `:s/\v` on the selection.
 - **Quickfix list**: filled from compiler output, `:grep`, diagnostics or a
   buffer; `]q` / `[q` / `]Q` / `[Q`, `space q`, `:cnext` and friends.
 - **Running commands**: `space x` streams a command's output into an
