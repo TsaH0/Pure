@@ -2,7 +2,7 @@
 
 Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
 run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
-[`wit/v0.1/helix-plugin.wit`](wit/v0.1/helix-plugin.wit); any language that can build a
+[`wit/v0.2/helix-plugin.wit`](wit/v0.2/helix-plugin.wit); any language that can build a
 component for it works. Rust has an SDK in [`sdk/`](sdk).
 
 ## Using plugins
@@ -133,7 +133,7 @@ register_plugin!(MyPlugin);
 ```toml
 name = "my-plugin"
 version = "0.1.0"
-api = "0.1"
+api = "0.2"
 description = "Says hello"
 permissions = ["read-buffers", "edit-buffers"]
 ```
@@ -152,3 +152,46 @@ See [`examples/text-tools`](examples/text-tools) for a complete plugin and
   tests plugins in a running editor.
 - `./build-plugins.sh` rebuilds the test plugin (`tests/fixtures`) and the
   example after changing them or the WIT file.
+
+
+## API versions and SDK callbacks
+
+Pure accepts `api = "0.1"` and `api = "0.2"`. Existing 0.1 components keep
+loading without rebuilding. SDK 0.2 keeps the same `Plugin` trait methods and
+buffer API; `text-tools` builds unchanged with `api = "0.2"`. To rebuild an
+older component with the 0.1 ABI, enable the SDK's `api-v0-1` feature:
+
+```toml
+helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-1"] }
+```
+
+SDK 0.2 also exports callback bindings automatically. `editor::spawn` and
+`editor::run_interactive` accept a one-shot closure receiving `Result<Output,
+String>`; `editor::pick` accepts a picker and a closure receiving `Choice`
+(items, original indices, and an optional split action; no action means
+cancelled). Each returns a request id, which `editor::kill` can use for a
+background program. A callback may start another request. Unknown/duplicate
+results are ignored; callback errors become editor errors. Failed commands
+discard the closures they registered.
+
+```rust,ignore
+use helix_plugin_api::{editor, Item, Picker, SpawnOptions};
+
+editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
+    let items = output?.stdout.lines().map(Item::text).collect();
+    editor::pick(Picker::new("Files", items), |choice| {
+        for item in choice.items {
+            editor::open_file(&item.data)?;
+        }
+        Ok(())
+    })?;
+    Ok(())
+})?;
+```
+
+The request and callback plumbing is available; actual process execution and
+picker display are implemented by their separate roadmap milestones. Until
+then those imports return an explicit unsupported error. UI is restricted to
+plugin commands and callbacks, so events cannot interrupt typing. API 0.1's
+WIT remains at [`wit/v0.1/`](wit/v0.1/); existing versioned interfaces are never
+extended in place.

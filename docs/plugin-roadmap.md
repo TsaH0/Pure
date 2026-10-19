@@ -133,7 +133,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     already does).
   - Done when: a unit test fakes a callback for a pending id, gets the
     plugin's actions back, and an unknown id is a no-op.
-- [ ] **M0.4 SDK 0.2.** Depends on: M0.1.
+- [x] **M0.4 SDK 0.2.** Depends on: M0.1.
   - `helix-plugin-api` 0.2: `thread_local!` registry `id → Box<dyn FnOnce>`;
     `register_plugin!` also exports `callbacks` and routes each callback to
     its closure. Public API sketch in the design doc (`editor::spawn`,

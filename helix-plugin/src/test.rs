@@ -14,7 +14,7 @@ fn testplugin_wasm() -> PathBuf {
 }
 
 fn text_tools_wasm() -> PathBuf {
-    fixture("examples/text-tools/plugin.wasm")
+    fixture("tests/fixtures/text-tools-v0.1.wasm")
 }
 
 /// Compiled components are cached here so not every test compiles them.
@@ -629,17 +629,21 @@ fn slow_event_handlers_are_disabled() {
 
 // -- the example plugin
 
-fn text_tools() -> (PluginHost, tempfile::TempDir) {
+fn text_tools(api: &str) -> (PluginHost, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let mut host = host();
     let dir = root.path().join("text-tools");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(text_tools_wasm(), dir.join("plugin.wasm")).unwrap();
-    std::fs::copy(
-        fixture("examples/text-tools/plugin.toml"),
-        dir.join("plugin.toml"),
-    )
-    .unwrap();
+    let wasm = if api == "0.1" {
+        text_tools_wasm()
+    } else {
+        fixture("examples/text-tools/plugin.wasm")
+    };
+    std::fs::copy(wasm, dir.join("plugin.wasm")).unwrap();
+    let manifest = std::fs::read_to_string(fixture("examples/text-tools/plugin.toml"))
+        .unwrap()
+        .replace("api = \"0.2\"", &format!("api = \"{api}\""));
+    std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
     host.load(&dir, "{}").unwrap();
     (host, root)
 }
@@ -651,7 +655,16 @@ fn text_tools_run(host: &mut PluginHost, command: &str, snapshot: Snapshot) -> V
 
 #[test]
 fn example_text_tools() {
-    let (mut host, _root) = text_tools();
+    check_text_tools("0.2");
+}
+
+#[test]
+fn legacy_example_text_tools() {
+    check_text_tools("0.1");
+}
+
+fn check_text_tools(api: &str) {
+    let (mut host, _root) = text_tools(api);
     let names: Vec<_> = host.commands().into_iter().map(|(_, c)| c.name).collect();
     assert_eq!(names, ["upper", "lower", "sort-lines", "count"]);
 

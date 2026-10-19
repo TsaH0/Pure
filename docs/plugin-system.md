@@ -17,7 +17,7 @@ to use and write plugins). Differences from the plan below:
 
 Not done yet (task list: [`plugin-roadmap.md`](plugin-roadmap.md)): phase 4 (async plugin calls, UI APIs; the next part is designed in
 [`plugin-processes-and-pickers.md`](plugin-processes-and-pickers.md)) and phase 5 (installing
-plugins, several API versions side by side).
+plugins). API 0.1/0.2 host bindings and callback groundwork now coexist; process and UI execution remain in the roadmap.
 
 This fork wants plugins: small pieces of user code that add commands, react to
 editor events and change buffers, without rebuilding Pure. This document picks

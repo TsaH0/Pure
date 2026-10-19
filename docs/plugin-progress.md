@@ -2,9 +2,9 @@
 
 ## Status
 
-- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks).
-- In progress: M0.4 (SDK 0.2), on `plugin-api-0.2`.
-- Next: M0.5, then M2.1 and the remaining authorized milestones in the requested order.
+- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2).
+- In progress: M0.5 (0.2 test plugin), on `plugin-api-0.2`.
+- Next: M2.1, then M2.1 and the remaining authorized milestones in the requested order.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
 ## Open questions for the owner
@@ -42,4 +42,13 @@
 - Explicit init/command/event/callback contexts guard UI and editor-command imports. Both commands and callbacks may request UI; init and events are refused.
 - Request allocation uses a process-wide checked counter shared by stores, rather than resetting a counter per instance. This prevents a late result from matching a new request after host recreation or reload; exhaustion returns an error instead of wrapping.
 - The planned `PromptDone` variant is reserved. The supplied 0.2 WIT has no prompt export, so prompt reservation explicitly fails; M3 needs a new versioned interface rather than modifying the existing 0.2 ABI.
-- Added tests for process/picker delivery, wrong-kind/unknown/duplicate ids, clear/recreation, legacy refusal and all four UI contexts. All 38 host tests and workspace Clippy (no warnings) pass. Editor library and integration reruns are running.
+- Added tests for process/picker delivery, wrong-kind/unknown/duplicate ids, clear/recreation, legacy refusal and all four UI contexts. All 38 host tests, all 21 editor library tests and workspace Clippy (no warnings) pass. The first plugin integration rerun overlapped changing text-tools to API 0.2 and saw a transient manifest/component mismatch (13 passed, 5 failed); rerunning after rebuilding the matching component. No assertions were changed.
+
+
+## M0.4 SDK 0.2 (done, 2026-10-19, PR pending)
+
+- SDK 0.2 generates the new world by default; the `api-v0-1` feature preserves the original ABI and source-compatible trait. The original test plugin uses that feature. Archived the unchanged 0.1 text-tools component and run all its behavior assertions against both 0.1 and the rebuilt 0.2 example.
+- Added one-shot, thread-local callback routing with reentrant chaining, unknown/duplicate/wrong-kind protection and failed-command cleanup. `register_plugin!` exports callbacks automatically. Added documented spawn/interactive options, picker choices/items and closure helpers.
+- text-tools source is unchanged; its manifest now selects 0.2. All rebuilt artifacts and updated guest lockfiles are included. Fixture builds now use `--locked`.
+- Both SDK unit tests, its generated export doctest, SDK Clippy with `-D warnings`, SDK legacy-feature build/doctest, 39 host tests, 21 editor library tests, all 18 plugin integration tests, formatting and workspace Clippy pass. The pre-existing illustrative SDK snippet remains ignored as before.
+- Process execution and picker display remain explicit unsupported errors until M1/M2; README and design status distinguish bindings from implemented capabilities. The transient M0.3 integration artifact mismatch is resolved by the final 18/18 pass.

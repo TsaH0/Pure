@@ -1,10 +1,14 @@
 [package]
 name = "helix-plugin-api"
 description = "SDK for writing Helix plugins in Rust"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MPL-2.0"
 publish = false
+
+[features]
+# Preserve the original component ABI for existing plugins.
+api-v0-1 = []
 
 [dependencies]
 wit-bindgen = "0.60"
