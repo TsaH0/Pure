@@ -1,4 +1,11 @@
-# Helix
+# Pure
+
+> *“Immortal enlightenment is repentant enlightenment, perhaps only by making a
+> mountain using salt is fastest way to reach heavens.”*
+
+Pure is a modal editor forked from [Helix](https://helix-editor.com). This book
+is Helix's documentation with Pure's additions (plugins, `:s`, the quickfix
+list, running commands, more text objects).
 
 <div class="version-tiles">
   <a class="version-tile" href="/">

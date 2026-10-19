@@ -1,21 +1,19 @@
 
 
-       .
-       ###x.        .|
-       d#####x,   ,v||
-        '+#####v||||||
-           ,v|||||+'.      _     _           _
-        ,v|||||^'>####    | |   | |   ___   | | (_) __  __
-       |||||^'  .v####    | |___| |  /   \  | |  _  \ \/ /
-       ||||=..v#####P'    |  ___  | /  ^  | | | | |  \  /
-       ''v'>#####P'       | |   | | |  ---  | | | |  /  \
-       ,######/P||x.      |_|   |_|  \___/  |_| |_| /_/\_\
-       ####P' "x|||||,
-       |/'       'x|||    A post-modern modal text editor.
-        '           '|
+          ____    _   _   ____    _____
+         |  _ \  | | | | |  _ \  | ____|
+         | |_) | | | | | | |_) | |  _|
+         |  __/  | |_| | |  _ <  | |___
+         |_|      \___/  |_| \_\ |_____|
+
+         A modal editor, forked from Helix.
+
+   "Immortal enlightenment is repentant enlightenment, perhaps
+    only by making a mountain using salt is fastest way to
+    reach heavens."
 
 
-                 Welcome to the Helix tutorial!
+                 Welcome to the Pure tutorial!
         Press the j key until you reach the introduction.
 
 

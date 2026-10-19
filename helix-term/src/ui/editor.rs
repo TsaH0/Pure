@@ -659,6 +659,75 @@ impl EditorView {
         Some(OverlayHighlights::Homogeneous { highlight, ranges })
     }
 
+    /// Where to show the startup screen: only while the editor is just one
+    /// window with an empty, unchanged scratch buffer (as after starting
+    /// without files). It goes away as soon as anything is typed or opened.
+    fn splash_area(editor: &Editor) -> Option<Rect> {
+        if editor.documents.len() != 1 || editor.tree.views().count() != 1 {
+            return None;
+        }
+        let view = editor.tree.get(editor.tree.focus);
+        let doc = editor.document(view.doc)?;
+        let text = doc.text();
+        let empty = text.len_chars() == 0 || (text.len_chars() == 1 && text.char(0) == '\n');
+        (doc.path().is_none() && empty && !doc.is_modified()).then(|| view.inner_area(doc))
+    }
+
+    fn render_splash(editor: &Editor, area: Rect, surface: &mut Surface) {
+        let theme = &editor.theme;
+        let name = theme.get("ui.text.focus").add_modifier(Modifier::BOLD);
+        let text = theme.get("ui.text");
+        let quote = text.add_modifier(Modifier::ITALIC);
+        let hint = theme
+            .try_get("ui.text.inactive")
+            .unwrap_or_else(|| theme.get("comment"));
+
+        // Wrap the quote to a comfortable width.
+        let width = (area.width as usize).saturating_sub(4).clamp(10, 64);
+        let mut quote_lines: Vec<String> = Vec::new();
+        for word in format!("“{}”", crate::QUOTE).split_whitespace() {
+            match quote_lines.last_mut() {
+                Some(line) if line.chars().count() + 1 + word.chars().count() <= width => {
+                    line.push(' ');
+                    line.push_str(word);
+                }
+                _ => quote_lines.push(word.to_string()),
+            }
+        }
+
+        let title = crate::NAME
+            .to_uppercase()
+            .chars()
+            .map(String::from)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut lines: Vec<(String, Style)> = vec![
+            (title, name),
+            ("a modal editor, forked from Helix".into(), hint),
+            (String::new(), text),
+        ];
+        lines.extend(quote_lines.into_iter().map(|line| (line, quote)));
+        lines.push((String::new(), text));
+        for (keys, what) in [
+            ("space f", "open a file"),
+            ("space x", "run a command"),
+            (":tutor ", "learn the basics"),
+            (":q     ", "quit"),
+        ] {
+            lines.push((format!("{keys}   {what:<16}"), hint));
+        }
+
+        if (area.height as usize) < lines.len() || area.width < 20 {
+            return;
+        }
+        let top = area.y + (area.height - lines.len() as u16) / 2;
+        for (i, (line, style)) in lines.iter().enumerate() {
+            let len = line.chars().count().min(area.width as usize) as u16;
+            let x = area.x + (area.width - len) / 2;
+            surface.set_stringn(x, top + i as u16, line, area.width as usize, *style);
+        }
+    }
+
     /// Render bufferline at the top
     pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface) {
         let scratch = PathBuf::from(SCRATCH_BUFFER_NAME); // default filename to use for scratch buffer
@@ -1646,6 +1715,10 @@ impl Component for EditorView {
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
             self.render_view(cx.editor, doc, view, area, surface, is_focused);
+        }
+
+        if let Some(area) = Self::splash_area(cx.editor) {
+            Self::render_splash(cx.editor, area, surface);
         }
 
         if config.auto_info {

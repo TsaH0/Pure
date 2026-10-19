@@ -1,6 +1,12 @@
 #[macro_use]
 extern crate helix_view;
 
+/// The name this fork of Helix goes by.
+pub const NAME: &str = "Pure";
+
+/// Shown on the startup screen, with `--version`, `--help` and `--health`.
+pub const QUOTE: &str = "Immortal enlightenment is repentant enlightenment, perhaps only by making a mountain using salt is fastest way to reach heavens.";
+
 pub mod application;
 pub mod args;
 pub mod commands;
