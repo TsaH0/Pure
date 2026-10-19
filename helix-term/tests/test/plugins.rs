@@ -649,3 +649,33 @@ async fn nested_process_callback_edits_do_not_retrigger_plugin_events() -> anyho
     assert_eq!(text(&app), "hiAbc\n");
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn reloaded_interactive_requests_are_cancelled_before_they_launch() -> anyhow::Result<()> {
+    let settings = "[testplugin2]\nallow-process = true\n";
+    let (mut app, dir) = app_with_process_plugin(settings);
+    let marker_dir = tempfile::tempdir()?;
+    let marker = marker_dir.path().join("launched");
+    let root = dir.path().to_path_buf();
+    let script = format!("printf launched > '{}'", marker.display());
+    helix_term::job::dispatch_with_jobs(move |editor, _, jobs| {
+        helix_term::plugins::run_command(
+            editor,
+            jobs,
+            "testplugin2/interactive",
+            vec!["sh".into(), "-c".into(), script],
+        )
+        .unwrap();
+        // Reload before the queued terminal request can be installed.
+        helix_term::plugins::load_with_settings(editor, &root, settings).unwrap();
+    })
+    .await;
+    keys(&mut app, "").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    app.editor.reset_idle_timer();
+    run_event_loop_until_idle(&mut app).await;
+    assert!(!marker.exists());
+    assert_eq!(status(&app).0, "0.2 init:{}");
+    Ok(())
+}

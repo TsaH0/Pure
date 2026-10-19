@@ -1259,3 +1259,49 @@ fn invalid_process_arguments_do_not_reserve_ids() {
         assert!(host.plugins[0].store.data().pending.is_empty());
     }
 }
+
+#[test]
+fn interactive_commands_and_callbacks_queue_requests_with_their_options() {
+    let (mut host, _root) = granted_testplugin2();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "interactive-wait",
+            vec!["program".into(), "{chooser}".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = actions
+        .iter()
+        .find_map(|action| match action {
+            Action::RunInteractive {
+                id, argv, options, ..
+            } => {
+                assert_eq!(argv, &["program", "{chooser}"]);
+                assert!(options.chooser_file);
+                assert!(options.wait_for_key);
+                Some(*id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "chosen"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["chosen"]);
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "interactive"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::RunInteractive { argv, .. } if argv == &["true"])));
+}

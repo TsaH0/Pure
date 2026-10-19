@@ -160,11 +160,9 @@ impl process::Host for State {
     fn run_interactive(
         &mut self,
         argv: Vec<String>,
-        _options: process::InteractiveOptions,
+        options: process::InteractiveOptions,
     ) -> std::result::Result<u32, String> {
-        self.need_ui("run-interactive")?;
-        self.authorize_process(&argv)?;
-        Err("interactive process support is not implemented yet".into())
+        State::run_interactive(self, argv, options)
     }
     fn kill(&mut self, id: u32) {
         State::kill(self, id)

@@ -1280,7 +1280,14 @@ impl Application {
         lsp::ShowDocumentResult { success: true }
     }
 
-    async fn run_interactive(&mut self, interactive: crate::interactive::Interactive) {
+    async fn run_interactive(&mut self, mut interactive: crate::interactive::Interactive) {
+        if interactive
+            .before_start
+            .take()
+            .is_some_and(|ready| !ready())
+        {
+            return;
+        }
         let crate::interactive::Interactive {
             mut command,
             on_exit,
@@ -1288,6 +1295,7 @@ impl Application {
             clear_screen,
             banner,
             wait_for_key,
+            before_start: _,
         } = interactive;
         use helix_view::graphics::CursorKind;
         self.terminal

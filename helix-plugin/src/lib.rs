@@ -173,6 +173,13 @@ pub enum Action {
         argv: Vec<String>,
         options: SpawnOptions,
     },
+    /// Hand the terminal to a program, then deliver the chooser result.
+    RunInteractive {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        options: InteractiveOptions,
+    },
     /// Cancel a process owned by this plugin; completion is still delivered.
     Kill {
         plugin: String,
@@ -181,7 +188,7 @@ pub enum Action {
 }
 
 /// Result of a background program or interactive chooser.
-pub use v0_2::helix::plugin::process::{Output as ProcessOutput, SpawnOptions};
+pub use v0_2::helix::plugin::process::{InteractiveOptions, Output as ProcessOutput, SpawnOptions};
 /// A picker choice, including the requested split action.
 pub use v0_2::helix::plugin::ui::PickerResult;
 
@@ -319,8 +326,8 @@ impl State {
         Ok(id)
     }
 
-    fn spawn(&mut self, argv: Vec<String>, mut options: SpawnOptions) -> Result<u32, String> {
-        self.authorize_process(&argv)?;
+    fn process_request(&mut self, argv: &[String]) -> Result<u32, String> {
+        self.authorize_process(argv)?;
         if self
             .pending
             .values()
@@ -330,9 +337,29 @@ impl State {
         {
             return Err("at most 16 processes may run per plugin".into());
         }
+        self.request(PendingKind::Process)
+    }
+
+    fn spawn(&mut self, argv: Vec<String>, mut options: SpawnOptions) -> Result<u32, String> {
+        let id = self.process_request(&argv)?;
         options.timeout_ms = Some(options.timeout_ms.unwrap_or(30_000).min(600_000));
-        let id = self.request(PendingKind::Process)?;
         self.actions.push(Action::Spawn {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            options,
+        });
+        Ok(id)
+    }
+
+    fn run_interactive(
+        &mut self,
+        argv: Vec<String>,
+        options: InteractiveOptions,
+    ) -> Result<u32, String> {
+        self.need_ui("run-interactive")?;
+        let id = self.process_request(&argv)?;
+        self.actions.push(Action::RunInteractive {
             plugin: self.plugin.clone(),
             id,
             argv,

@@ -3769,7 +3769,14 @@ fn yazi(cx: &mut Context) {
         .path()
         .map(Path::to_path_buf)
         .unwrap_or_else(helix_stdx::env::current_working_dir);
-    let interactive = crate::interactive::yazi(&start);
+    let interactive = match crate::interactive::yazi(&start) {
+        Ok(interactive) => interactive,
+        Err(err) => {
+            cx.editor
+                .set_error(format!("Failed to prepare yazi: {err}"));
+            return;
+        }
+    };
     cx.callback.push(Box::new(move |compositor, _| {
         compositor.interactive = Some(interactive);
     }));

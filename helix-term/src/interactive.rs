@@ -31,6 +31,8 @@ pub struct Interactive {
     /// After the program exits, show its exit status and wait for a key press
     /// before returning to the editor.
     pub wait_for_key: bool,
+    /// Revalidate deferred plugin requests immediately before terminal release.
+    pub before_start: Option<Box<dyn FnOnce() -> bool + Send>>,
 }
 
 impl Interactive {
@@ -45,19 +47,57 @@ impl Interactive {
             clear_screen: false,
             banner: None,
             wait_for_key: false,
+            before_start: None,
         }
     }
 }
 
 /// Hand the terminal to `interactive` once the current event is handled.
 pub fn request(jobs: &mut crate::job::Jobs, interactive: Interactive) {
+    request_if(jobs, interactive, |_, _| true);
+}
+
+pub(crate) fn request_if(
+    jobs: &mut crate::job::Jobs,
+    interactive: Interactive,
+    ready: impl FnOnce(&Editor, &Compositor) -> bool + Send + 'static,
+) {
     jobs.callback(async move {
         Ok(crate::job::Callback::EditorCompositor(Box::new(
-            move |_editor: &mut Editor, compositor: &mut Compositor| {
-                compositor.interactive = Some(interactive);
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if ready(editor, compositor) {
+                    compositor.interactive = Some(interactive);
+                }
             },
         )))
     });
+}
+
+/// Build a direct program invocation with a securely allocated chooser file.
+/// Substitute `{chooser}` in arguments; the caller keeps the returned path
+/// alive until exit, and dropping it also cleans up requests never launched.
+pub fn with_chooser(
+    argv: &[String],
+    cwd: Option<&Path>,
+) -> io::Result<(Interactive, tempfile::TempPath)> {
+    let program = argv
+        .first()
+        .filter(|program| !program.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty interactive argv"))?;
+    let directory = std::path::absolute(std::env::temp_dir())?;
+    let chooser = tempfile::Builder::new()
+        .prefix("pure-chooser-")
+        .tempfile_in(directory)?
+        .into_temp_path();
+    let path = chooser
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "chooser path is not UTF-8"))?;
+    let mut command = Command::new(program);
+    command.args(argv[1..].iter().map(|arg| arg.replace("{chooser}", path)));
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    Ok((Interactive::new(command, |_, _, _| {}), chooser))
 }
 
 static LAST_COMMAND: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
@@ -179,21 +219,12 @@ fn report_failure(editor: &mut Editor, program: &str, status: io::Result<ExitSta
 
 /// Pick files with [yazi](https://yazi-rs.github.io), starting at `start`, and
 /// open the chosen ones.
-pub fn yazi(start: &Path) -> Interactive {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let chooser = std::env::temp_dir().join(format!(
-        "helix-yazi-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_file(&chooser);
-
-    let mut command = Command::new("yazi");
-    command
-        .arg(start)
-        .arg(format!("--chooser-file={}", chooser.display()));
-
-    Interactive::new(command, move |editor, _, status| {
+pub fn yazi(start: &Path) -> io::Result<Interactive> {
+    let argv = vec!["yazi".into(), "--chooser-file={chooser}".into()];
+    let (mut interactive, chooser) = with_chooser(&argv, None)?;
+    // Keep the original OsStr path, including non-UTF-8 file names.
+    interactive.command.arg(start);
+    interactive.on_exit = Box::new(move |editor, _, status| {
         let chosen = std::fs::read_to_string(&chooser).unwrap_or_default();
         let _ = std::fs::remove_file(&chooser);
         // Quitting without choosing anything is not an error.
@@ -213,5 +244,62 @@ pub fn yazi(start: &Path) -> Interactive {
                 editor.set_error(format!("Failed to open '{}': {err}", path.display()));
             }
         }
-    })
+    });
+    Ok(interactive)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chooser_arguments_are_substituted_and_owned_path_cleans_up() {
+        let cwd = tempfile::tempdir().unwrap();
+        let argv = vec![
+            "program".into(),
+            "{chooser}".into(),
+            "--chooser-file={chooser}".into(),
+            "literal argument".into(),
+        ];
+        let (interactive, chooser) = with_chooser(&argv, Some(cwd.path())).unwrap();
+        let path = chooser.to_path_buf();
+        let args: Vec<_> = interactive
+            .command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                path.to_str().unwrap().to_owned(),
+                format!("--chooser-file={}", path.display()),
+                "literal argument".into()
+            ]
+        );
+        assert_eq!(interactive.command.as_std().get_program(), "program");
+        assert_eq!(
+            interactive.command.as_std().get_current_dir(),
+            Some(cwd.path())
+        );
+        assert!(path.is_file());
+        drop(interactive);
+        drop(chooser);
+        assert!(!path.exists());
+        assert!(with_chooser(&[], None).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn yazi_keeps_non_utf8_start_paths() {
+        use std::os::unix::ffi::OsStringExt;
+        let start = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/pure-\xff".to_vec()));
+        let interactive = yazi(&start).unwrap();
+        assert_eq!(
+            interactive.command.as_std().get_args().last(),
+            Some(start.as_os_str())
+        );
+        assert!(!interactive.normal_screen);
+        assert!(!interactive.wait_for_key);
+    }
 }

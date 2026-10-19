@@ -75,6 +75,7 @@ pub fn load(editor: &mut Editor) {
 /// replacing any loaded plugins.
 pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     crate::plugin_processes::cancel_all();
+    crate::plugin_interactive::cancel_all();
     *HOST.lock() = None;
     if !dir.is_dir() {
         return;
@@ -339,6 +340,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             } => {
                 crate::plugin_processes::start(plugin, id, argv, options);
             }
+            Action::RunInteractive {
+                plugin,
+                id,
+                argv,
+                options,
+            } => {
+                if let Some(jobs) = jobs.as_deref_mut() {
+                    crate::plugin_interactive::request(plugin, id, argv, options, jobs);
+                }
+            }
             Action::Kill { plugin, id } => crate::plugin_processes::kill(&plugin, id),
         }
     }
@@ -475,6 +486,7 @@ fn cancel_disabled_processes() {
     .unwrap_or_default();
     for name in names {
         crate::plugin_processes::cancel_plugin(&name);
+        crate::plugin_interactive::cancel_plugin(&name);
     }
 }
 

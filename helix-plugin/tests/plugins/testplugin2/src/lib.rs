@@ -30,6 +30,7 @@ impl Plugin for TestPlugin {
                 "spawn-many",
                 "panic",
                 "interactive",
+                "interactive-wait",
                 "picker",
                 "push-items",
                 "kill",
@@ -74,6 +75,18 @@ impl Plugin for TestPlugin {
                                 return Ok(());
                             }
                             "command" => return editor::run_command("goto_line_end"),
+                            "interactive" => {
+                                editor::run_interactive(
+                                    &["true"],
+                                    InteractiveOptions::default(),
+                                    |result| {
+                                        result?;
+                                        editor::set_status("interactive callback");
+                                        Ok(())
+                                    },
+                                )?;
+                                return Ok(());
+                            }
                             "fail" => return Err("callback failed on purpose".into()),
                             "spin" => loop {
                                 std::hint::spin_loop();
@@ -161,11 +174,12 @@ impl Plugin for TestPlugin {
                 }
             }
             "panic" => panic!("testplugin2 crashed on purpose"),
-            "interactive" => {
+            "interactive" | "interactive-wait" => {
                 editor::run_interactive(
                     &args,
                     InteractiveOptions {
                         chooser_file: true,
+                        wait_for_key: name == "interactive-wait",
                         ..Default::default()
                     },
                     |output| {
