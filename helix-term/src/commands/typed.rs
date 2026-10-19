@@ -2754,6 +2754,9 @@ fn substitute(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
         let _ = editor.registers.push('/', command.pattern.clone());
     }
     if outcome.matches == 0 {
+        if command.flags.quiet {
+            return Ok(());
+        }
         bail!("Pattern not found: {}", command.pattern);
     }
     let plural = |n: usize| if n == 1 { "" } else { "s" };
@@ -4355,7 +4358,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
     TypableCommand {
         name: "substitute",
         aliases: &[],
-        doc: "Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Replacement: `\\1`/`$1`/`${name}` groups, `&` the match, `\\u` `\\U..\\E` `\\l` `\\L` case. Flags: g (all per line), i, I, n (count).",
+        doc: "Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Patterns: Helix's regex syntax or Vim's (`\\(.*\\)`, `\\v`, `\\{-}`, `\\zs`/`\\ze`, `\\<\\>`). Replacement: `\\1`/`$1`/`${name}` groups, `&` the match, `\\r` line break, `\\u` `\\U..\\E` `\\l` `\\L` case. Flags: g (all per line), i, I, n (count), e (no error).",
         fun: substitute_command,
         completer: CommandCompleter::none(),
         signature: Signature {

@@ -1,22 +1,31 @@
 //! Vim-style `:s/pattern/replacement/flags`.
 //!
-//! The pattern uses Helix's regex syntax (the `regex` crate) plus Vim's `\<`
-//! and `\>` word boundaries. Vim's own syntax works too: a pattern with
-//! `\(...\)` groups and no plain `(` (like the "one-eyed Kirby" `\(.*\)`), or
-//! one starting with `\m`, is read the Vim way (`\(` `\)` `\|` `\+` `\?` `\=`
-//! `\{n,m}` are operators, plain `(` `+` ... are literal); `\v` at the start
-//! means the regex crate's syntax. The replacement understands:
+//! Patterns use Helix's regex syntax (the `regex` crate) or Vim's:
+//!
+//! - `\v`, `\m`, `\M`, `\V` at the start pick Vim's very magic, magic
+//!   (default), nomagic and very nomagic modes. Without one, a pattern that
+//!   uses Vim-only escapes (`\(`, `\+`, `\|`, `\=`, `\{`, `\zs`, Vim classes
+//!   like `\u`) and none of the regex crate's plain operators is read as
+//!   Vim's magic syntax, so the "one-eyed Kirby" `\(.*\)` works.
+//! - Vim's counts `\{n,m}` (`\{-}` is non-greedy, the "sleeping Kirby"
+//!   `\(.\{-}\)`), word boundaries `\<` `\>` (`<` `>` in very magic),
+//!   classes (`\a` `\l` `\u` `\h` `\x` `\o` `\k` ...; `\s` is only space and
+//!   tab) and `\zs` / `\ze`, which set where the replaced part starts and ends
+//!   (the rest only has to match around it).
+//!
+//! The replacement understands:
 //!
 //! - `\1` .. `\9`, `$1`, `${1}`, `${name}`, `$name`: capture groups
 //! - `&`, `\0`, `$0`: the whole match
-//! - `\n`, `\t`, `\r`: newline, tab, carriage return
+//! - `\n`, `\r`: a line break; `\t`: a tab
 //! - `\u`, `\l`: uppercase / lowercase the next char
 //! - `\U`, `\L` ... `\E` (or `\e`): uppercase / lowercase until `\E`
 //! - `\&`, `\\`, `\$`, `$$`, `\<delimiter>`: literal `&`, `\`, `$`, `$` and the
 //!   delimiter
 //!
 //! Flags: `g` replace every match on a line (not only the first), `i` ignore
-//! case, `I` don't ignore case, `n` only count the matches.
+//! case, `I` don't ignore case, `n` only count the matches, `e` no error when
+//! nothing matches.
 
 use regex::{Captures, Regex, RegexBuilder};
 
@@ -51,6 +60,8 @@ pub struct Flags {
     /// `Some(true)` for `i`, `Some(false)` for `I`.
     pub ignore_case: Option<bool>,
     pub count_only: bool,
+    /// `e`: no error when nothing matches.
+    pub quiet: bool,
 }
 
 /// Whether `input` (a command line without the `:`) is a substitute command
@@ -128,8 +139,8 @@ pub fn parse(input: &str) -> Result<Command, String> {
             'i' => flags.ignore_case = Some(true),
             'I' => flags.ignore_case = Some(false),
             'n' => flags.count_only = true,
-            // Vim's `e` (no error when nothing matches) and `&` (keep flags)
-            // don't apply.
+            'e' => flags.quiet = true,
+            // Vim's `&` (keep flags) doesn't apply.
             _ => return Err(format!("unknown flag '{flag}'")),
         }
     }
@@ -196,106 +207,281 @@ fn regex_syntax_char(c: char) -> bool {
     )
 }
 
-/// Whether `pattern` is written in Vim's default ("magic") syntax, where
-/// groups are `\(...\)`: it has an escaped group and no plain `(`.
-fn is_vim_magic(pattern: &str) -> bool {
-    let mut escaped_group = false;
-    let mut plain_group = false;
+/// How a pattern is read, see [`translate_pattern`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Syntax {
+    /// The regex crate's syntax (as in Helix's search).
+    Regex,
+    /// Vim's `\v`.
+    VeryMagic,
+    /// Vim's default, `\m`.
+    Magic,
+    /// Vim's `\M`.
+    NoMagic,
+    /// Vim's `\V`.
+    VeryNoMagic,
+}
+
+/// Name of the group standing for the part between `\zs` and `\ze`.
+const MATCH_GROUP: &str = "__helix_match";
+/// Placeholders for `\zs` and `\ze` during translation.
+const ZS: char = '\u{E000}';
+const ZE: char = '\u{E001}';
+
+/// Whether `pattern` (without a `\v`/`\m`/`\M`/`\V` prefix) is written in
+/// Vim's default syntax: it uses an escape that only means something in Vim
+/// (`\(`, `\|`, `\+`, `\?`, `\=`, `\{`, `\zs`, `\ze`) and none of the regex
+/// crate's plain operators `(` `)` `|` `+` `?` `{`.
+fn looks_like_vim(pattern: &str) -> bool {
+    let mut vim = false;
+    let mut regex = false;
     let mut in_class = false;
-    let mut chars = pattern.chars();
+    let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\\' => {
-                if chars.next() == Some('(') && !in_class {
-                    escaped_group = true;
+            '\\' => match chars.next() {
+                Some('(' | ')' | '|' | '+' | '?' | '=' | '{') if !in_class => vim = true,
+                Some('z') if !in_class && matches!(chars.peek(), Some('s' | 'e')) => vim = true,
+                // Vim's classes that aren't escapes in the regex crate (`\u`
+                // and `\x` are, followed by hex digits or `{`).
+                Some('l' | 'L' | 'h' | 'H' | 'o' | 'O' | 'k' | 'K' | 'i' | 'I' | 'a') => vim = true,
+                Some('u' | 'U' | 'x' | 'X')
+                    if !chars
+                        .peek()
+                        .is_some_and(|c| c.is_ascii_hexdigit() || *c == '{') =>
+                {
+                    vim = true
                 }
-            }
-            '[' => in_class = true,
-            ']' => in_class = false,
-            '(' if !in_class => plain_group = true,
+                _ => {}
+            },
+            '[' if !in_class => in_class = true,
+            ']' if in_class => in_class = false,
+            '(' | ')' | '|' | '+' | '?' | '{' if !in_class => regex = true,
             _ => {}
         }
     }
-    escaped_group && !plain_group
+    vim && !regex
 }
 
-/// Translate a pattern to the regex crate's syntax:
-///
-/// - `\v` at the start ("very magic") is dropped: that syntax is already the
-///   regex crate's.
-/// - `\m` at the start, or a pattern using Vim's `\(...\)` groups (see
-///   [`is_vim_magic`]), is read as Vim's magic syntax: `\(` `\)` `\|` `\+` `\?`
-///   `\=` `\{` `\}` are the operators, plain `(` `)` `|` `+` `?` `{` `}` are
-///   literal.
-/// - Vim's `\<` and `\>` become `\b` either way.
-fn translate_pattern(pattern: &str) -> String {
-    let (pattern, magic) = if let Some(rest) = pattern.strip_prefix("\\v") {
-        (rest, false)
-    } else if let Some(rest) = pattern.strip_prefix("\\m") {
-        (rest, true)
-    } else {
-        (pattern, is_vim_magic(pattern))
+/// Escape `c` for the regex crate if needed.
+fn push_literal(out: &mut String, c: char) {
+    if regex_syntax_char(c) {
+        out.push('\\');
+    }
+    out.push(c);
+}
+
+/// Translate a Vim count (`\{n,m}`, `{-}`, ...) whose opening brace was just
+/// read. Returns the regex crate's quantifier.
+fn translate_count(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<String, String> {
+    let mut body = String::new();
+    loop {
+        match chars.next() {
+            Some('\\') if chars.peek() == Some(&'}') => {
+                chars.next();
+                break;
+            }
+            Some('}') => break,
+            Some(c) => body.push(c),
+            None => return Err("unterminated \\{ in the pattern".into()),
+        }
+    }
+    let (lazy, range) = match body.strip_prefix('-') {
+        Some(range) => (true, range),
+        None => (false, body.as_str()),
     };
+    let quantifier = match range.split_once(',') {
+        _ if range.is_empty() => "*".to_string(),
+        None => format!("{{{range}}}"),
+        Some(("", "")) => "*".to_string(),
+        Some(("", max)) => format!("{{0,{max}}}"),
+        Some((min, "")) => format!("{{{min},}}"),
+        Some((min, max)) => format!("{{{min},{max}}}"),
+    };
+    if !range.chars().all(|c| c.is_ascii_digit() || c == ',') {
+        return Err(format!("invalid count {{{body}}} in the pattern"));
+    }
+    Ok(if lazy {
+        format!("{quantifier}?")
+    } else {
+        quantifier
+    })
+}
+
+/// Vim's character class escapes, like `\a` (alphabetic) or `\h` (head of a
+/// word). `\d`, `\s`, `\w` and their negations are the same in both syntaxes.
+fn vim_class(c: char) -> Option<&'static str> {
+    Some(match c {
+        'a' => "[A-Za-z]",
+        'A' => "[^A-Za-z]",
+        'l' => "[a-z]",
+        'L' => "[^a-z]",
+        'u' => "[A-Z]",
+        'U' => "[^A-Z]",
+        'h' => "[A-Za-z_]",
+        'H' => "[^A-Za-z_]",
+        'x' => "[0-9A-Fa-f]",
+        'X' => "[^0-9A-Fa-f]",
+        'o' => "[0-7]",
+        'O' => "[^0-7]",
+        // Identifier and keyword chars (without 'iskeyword' settings).
+        // Vim's `\s` is only space and tab, not newlines.
+        's' => "[ \\t]",
+        'S' => "[^ \\t\\n]",
+        'i' | 'k' => "\\w",
+        'I' | 'K' => "[^\\W\\d]",
+        'f' | 'p' => "\\S",
+        'F' | 'P' => "[^\\s\\d]",
+        _ => return None,
+    })
+}
+
+/// Translate a pattern to the regex crate's syntax.
+///
+/// - `\v`, `\m`, `\M`, `\V` at the start pick Vim's very magic, magic,
+///   nomagic and very nomagic syntax. Without one, a pattern that looks like
+///   Vim's default syntax (see [`looks_like_vim`]) is read as magic; anything
+///   else is the regex crate's syntax.
+/// - In Vim's syntaxes `\{n,m}` / `{n,m}` counts (`-` for non-greedy, so
+///   `.\{-}` is `.*?`), `<` / `>` (very magic) or `\<` / `\>` word boundaries,
+///   `=` (very magic) or `\=` for "optional", and classes like `\a`, `\l`,
+///   `\u`, `\h`, `\x`, `\k` work as in Vim.
+/// - `\zs` and `\ze` (all syntaxes) set the start and end of the part that is
+///   replaced; the rest of the pattern only has to match around it.
+fn translate_pattern(pattern: &str) -> Result<String, String> {
+    let (pattern, syntax) = if let Some(rest) = pattern.strip_prefix("\\v") {
+        (rest, Syntax::VeryMagic)
+    } else if let Some(rest) = pattern.strip_prefix("\\m") {
+        (rest, Syntax::Magic)
+    } else if let Some(rest) = pattern.strip_prefix("\\M") {
+        (rest, Syntax::NoMagic)
+    } else if let Some(rest) = pattern.strip_prefix("\\V") {
+        (rest, Syntax::VeryNoMagic)
+    } else if looks_like_vim(pattern) {
+        (pattern, Syntax::Magic)
+    } else {
+        (pattern, Syntax::Regex)
+    };
+    let vim = syntax != Syntax::Regex;
+    // Which plain chars are operators.
+    let plain_operator = |c: char| match syntax {
+        Syntax::Regex | Syntax::VeryMagic => regex_syntax_char(c) || c == '#',
+        Syntax::Magic => matches!(c, '.' | '*' | '[' | '^' | '$'),
+        Syntax::NoMagic | Syntax::VeryNoMagic => matches!(c, '^' | '$'),
+    };
+
     let mut out = String::with_capacity(pattern.len());
-    let mut in_class = false;
-    // Inside Vim's `\{n,m}`, which ends with a plain `}`.
-    let mut in_count = false;
     let mut chars = pattern.chars().peekable();
     while let Some(c) = chars.next() {
-        if in_class {
-            // Character classes are the same in both syntaxes.
-            out.push(c);
-            if c == '\\' {
-                if let Some(next) = chars.next() {
-                    out.push(next);
+        // A character class, copied as is.
+        let class_start = match c {
+            '[' => plain_operator('['),
+            '\\' if chars.peek() == Some(&'[') && !plain_operator('[') => {
+                chars.next();
+                true
+            }
+            _ => false,
+        };
+        if class_start {
+            out.push('[');
+            if chars.peek() == Some(&'^') {
+                out.push(chars.next().unwrap());
+            }
+            if chars.peek() == Some(&']') {
+                chars.next();
+                out.push_str("\\]");
+            }
+            loop {
+                match chars.next() {
+                    Some(']') => break,
+                    Some('\\') => {
+                        out.push('\\');
+                        out.push(chars.next().unwrap_or('\\'));
+                    }
+                    // POSIX classes like `[:alpha:]`.
+                    Some('[') if chars.peek() == Some(&':') => {
+                        out.push('[');
+                        for c in chars.by_ref() {
+                            out.push(c);
+                            if c == ']' {
+                                break;
+                            }
+                        }
+                    }
+                    Some('[') => out.push_str("\\["),
+                    Some(c) => out.push(c),
+                    None => return Err("unterminated [ in the pattern".into()),
                 }
-            } else if c == ']' {
-                in_class = false;
+            }
+            out.push(']');
+            continue;
+        }
+
+        if c == '\\' {
+            let Some(next) = chars.next() else {
+                out.push_str("\\\\");
+                break;
+            };
+            match next {
+                'z' if chars.peek() == Some(&'s') => {
+                    chars.next();
+                    out.push(ZS);
+                }
+                'z' if chars.peek() == Some(&'e') => {
+                    chars.next();
+                    out.push(ZE);
+                }
+                '<' | '>' if syntax != Syntax::VeryMagic => out.push_str("\\b"),
+                'n' => out.push_str("\\n"),
+                't' => out.push_str("\\t"),
+                '{' if !plain_operator('{') && vim => out.push_str(&translate_count(&mut chars)?),
+                '=' if vim && syntax != Syntax::VeryMagic => out.push('?'),
+                c if vim && vim_class(c).is_some() => out.push_str(vim_class(c).unwrap()),
+                // An escaped char that is literal when plain is an operator.
+                c if vim
+                    && !c.is_alphanumeric()
+                    && !plain_operator(c)
+                    && (regex_syntax_char(c) || c == '~') =>
+                {
+                    out.push(c)
+                }
+                // Regex escapes (`\d`, `\w`, `\b` ...).
+                c if c.is_alphanumeric() => {
+                    out.push('\\');
+                    out.push(c);
+                }
+                // Anything else escaped is that char.
+                c => push_literal(&mut out, c),
             }
             continue;
         }
+
         match c {
-            '\\' => match chars.next() {
-                Some('<') | Some('>') => out.push_str("\\b"),
-                Some('{') if magic => {
-                    in_count = true;
-                    out.push('{');
-                }
-                Some('}') if magic => {
-                    in_count = false;
-                    out.push('}');
-                }
-                Some(op @ ('(' | ')' | '|' | '+' | '?')) if magic => out.push(op),
-                Some('=') if magic => out.push('?'),
-                Some(next) => {
-                    out.push('\\');
-                    out.push(next);
-                }
-                None => out.push('\\'),
-            },
-            '}' if magic && in_count => {
-                in_count = false;
-                out.push('}');
-            }
-            '(' | ')' | '|' | '+' | '?' | '{' | '}' if magic => {
-                out.push('\\');
-                out.push(c);
-            }
-            '[' => {
-                in_class = true;
-                out.push(c);
-                // `[]...]` and `[^]...]` start with a literal `]`.
-                if chars.peek() == Some(&'^') {
-                    out.push(chars.next().unwrap());
-                }
-                if chars.peek() == Some(&']') {
-                    out.push(chars.next().unwrap());
-                }
-            }
+            '{' if syntax == Syntax::VeryMagic => out.push_str(&translate_count(&mut chars)?),
+            '=' if syntax == Syntax::VeryMagic => out.push('?'),
+            '<' | '>' if syntax == Syntax::VeryMagic => out.push_str("\\b"),
+            c if plain_operator(c) => out.push(c),
+            c if vim => push_literal(&mut out, c),
             c => out.push(c),
         }
     }
-    out
+
+    // `\zs` / `\ze`: the part in between becomes a named group.
+    if out.contains(ZS) || out.contains(ZE) {
+        let (before, rest) = match out.split_once(ZS) {
+            Some((before, rest)) => (before.to_string(), rest.to_string()),
+            None => (String::new(), out.clone()),
+        };
+        let (inner, after) = match rest.split_once(ZE) {
+            Some((inner, after)) => (inner.to_string(), after.to_string()),
+            None => (rest.clone(), String::new()),
+        };
+        if before.contains(ZE) || inner.contains(ZS) || after.contains(ZS) || after.contains(ZE) {
+            return Err("\\zs and \\ze can each be used only once, \\zs first".into());
+        }
+        out = format!("{before}(?P<{MATCH_GROUP}>{inner}){after}");
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,6 +502,8 @@ pub struct Substitution {
     regex: Regex,
     replacement: Vec<Part>,
     global: bool,
+    /// Index of the `\zs`/`\ze` group, which is the part to replace.
+    match_group: Option<usize>,
 }
 
 /// What a substitution changed.
@@ -340,7 +528,7 @@ impl Substitution {
                 .ok_or_else(|| "no previous search pattern".to_string())?
                 .to_string()
         } else {
-            translate_pattern(&command.pattern)
+            translate_pattern(&command.pattern)?
         };
         let regex = RegexBuilder::new(&pattern)
             .case_insensitive(command.flags.ignore_case.unwrap_or(false))
@@ -348,9 +536,13 @@ impl Substitution {
             .build()
             .map_err(|err| format!("invalid pattern: {err}"))?;
         let replacement = parse_replacement(&command.replacement)?;
+        let match_group = regex
+            .capture_names()
+            .position(|name| name == Some(MATCH_GROUP));
+        let user_groups = regex.captures_len() - usize::from(match_group.is_some());
         for part in &replacement {
             match part {
-                Part::Group(group) if *group >= regex.captures_len() => {
+                Part::Group(group) if *group >= user_groups => {
                     return Err(format!("no capture group {group} in the pattern"));
                 }
                 Part::Named(name) if !regex.capture_names().flatten().any(|n| n == name) => {
@@ -363,6 +555,7 @@ impl Substitution {
             regex,
             replacement,
             global: command.flags.global,
+            match_group,
         })
     }
 
@@ -380,7 +573,9 @@ impl Substitution {
             let from_byte = text.char_to_byte(from);
             let haystack = text.slice(from..to).to_string();
             for captures in self.regex.captures_iter(&haystack) {
-                let whole = captures.get(0).unwrap();
+                let Some(whole) = self.group(&captures, 0) else {
+                    continue;
+                };
                 let start = text.byte_to_char(from_byte + whole.start());
                 if Some(start) == phantom_line_start {
                     continue;
@@ -408,6 +603,16 @@ impl Substitution {
         outcome
     }
 
+    /// Group `group` as numbered in the pattern; 0 is what gets replaced (the
+    /// whole match or the part between `\zs` and `\ze`).
+    fn group<'h>(&self, captures: &Captures<'h>, group: usize) -> Option<regex::Match<'h>> {
+        match self.match_group {
+            Some(match_group) if group == 0 => captures.get(match_group),
+            Some(match_group) if group >= match_group => captures.get(group + 1),
+            _ => captures.get(group),
+        }
+    }
+
     fn expand(&self, captures: &Captures) -> String {
         #[derive(Clone, Copy, PartialEq)]
         enum Case {
@@ -432,7 +637,7 @@ impl Substitution {
             match part {
                 Part::Literal(s) => push(&mut out, s, case, &mut next),
                 Part::Group(group) => {
-                    if let Some(m) = captures.get(*group) {
+                    if let Some(m) = self.group(captures, *group) {
                         push(&mut out, m.as_str(), case, &mut next);
                     }
                 }
@@ -478,8 +683,9 @@ fn parse_replacement(replacement: &str) -> Result<Vec<Part>, String> {
                         literal.push('\t');
                         continue;
                     }
+                    // Like Vim, `\r` breaks the line.
                     'r' => {
-                        literal.push('\r');
+                        literal.push('\n');
                         continue;
                     }
                     'u' => Part::UpperNext,
@@ -604,7 +810,8 @@ mod test {
                 flags: Flags {
                     global: true,
                     ignore_case: Some(true),
-                    count_only: false
+                    count_only: false,
+                    quiet: false,
                 },
             }
         );
@@ -746,6 +953,124 @@ mod test {
             s("key = value", "s/\\(.*\\) = \\(.*\\)/\\2 = \\1/"),
             "value = key"
         );
+    }
+
+    /// The Kirby family, very magic, `\zs`/`\ze`, classes and the recipes from
+    /// a typical Vim regex guide.
+    #[test]
+    fn vim_regex_guide() {
+        // One-eyed Kirby: capture everything.
+        assert_eq!(s("hello world", "s/\\(.*\\)/[\\1]/"), "[hello world]");
+        // Sleeping Kirby: non-greedy `\{-}`.
+        assert_eq!(s("<a><b>", "s/<\\(.\\{-}\\)>/[\\1]/"), "[a]<b>");
+        assert_eq!(s("<a><b>", "s/<\\(.*\\)>/[\\1]/"), "[a><b]");
+        assert_eq!(s("aaaa", "s/a\\{-1,}/X/"), "Xaaa");
+        // Full Kirby: two chunks around an underscore.
+        assert_eq!(s("snake_case", "s/\\(.*_.*\\)/<\\1>/"), "<snake_case>");
+        assert_eq!(
+            s("snake_case", "s/\\(.*\\)_\\(.*\\)/\\2_\\1/"),
+            "case_snake"
+        );
+        // Crying Kirby: one or more word chars.
+        assert_eq!(s("foo bar", "s/\\(\\w\\+\\)/<\\1>/g"), "<foo> <bar>");
+
+        // Very magic equivalents.
+        assert_eq!(s("hello world", "s/\\v(.*)/[\\1]/"), "[hello world]");
+        assert_eq!(s("foo bar", "s/\\v\\w+/X/g"), "X X");
+        assert_eq!(s("color colour", "s/\\vcolou?r/C/g"), "C C");
+        assert_eq!(s("color colour", "s/colou\\?r/C/g"), "C C");
+        assert_eq!(s("foo baz bar", "s/\\v(foo|bar)/X/g"), "X baz X");
+        assert_eq!(s("foo baz bar", "s/foo\\|bar/X/g"), "X baz X");
+        assert_eq!(s("12 1234 123456", "s/\\v<\\d{3,5}>/N/g"), "12 N 123456");
+        assert_eq!(s("12 1234 123456", "s/\\<\\d\\{3,5}\\>/N/g"), "12 N 123456");
+        assert_eq!(s("a1b22", "s/\\v\\d{2}/X/"), "a1bX");
+        assert_eq!(s("<a><b>", "s/\\v\\<(.{-})\\>/[\\1]/"), "[a]<b>");
+
+        // `\zs` and `\ze`: context that isn't replaced.
+        assert_eq!(s("price: 100", "s/price: \\zs\\d\\+/200/g"), "price: 200");
+        assert_eq!(
+            s("price: 100", "s/\\(price: \\)\\d\\+/\\1200/g"),
+            "price: 200"
+        );
+        assert_eq!(
+            s("say \"hello\" and \"bye\"", "s/\"\\zs[^\"]*\\ze\"/world/g"),
+            "say \"world\" and \"world\""
+        );
+        assert_eq!(s("foobar foobaz", "s/foo\\zebar/X/g"), "Xbar foobaz");
+        // Groups keep their numbers around `\zs`.
+        assert_eq!(
+            s("key=val", "s/\\(\\w\\+\\)=\\zs\\(\\w\\+\\)/\\2-\\1/"),
+            "key=val-key"
+        );
+
+        // Word boundaries: Vim's `\<cat\>`, very magic `<cat>`.
+        assert_eq!(
+            s("cat category tomcat cat", "s/\\<cat\\>/dog/g"),
+            "dog category tomcat dog"
+        );
+        assert_eq!(
+            s("cat category tomcat cat", "s/\\v<cat>/dog/g"),
+            "dog category tomcat dog"
+        );
+
+        // Vim's classes.
+        assert_eq!(s("ab12_C", "s/\\a\\+/X/"), "X12_C");
+        assert_eq!(s("ab12_C", "s/\\v\\l+/X/"), "X12_C");
+        assert_eq!(s("abC1", "s/\\u/X/"), "abX1");
+        assert_eq!(s("x = 0xFF", "s/\\v0x\\x+/HEX/"), "x = HEX");
+        assert_eq!(s("my-var", "s/\\k\\+/X/g"), "X-X");
+        assert_eq!(s("a [b] c", "s/[[:alpha:]]/X/g"), "X [X] X");
+
+        // Case changes and whole-match references in replacements.
+        assert_eq!(s("hello", "s/\\v(\\w+)/\\u\\1/"), "Hello");
+        assert_eq!(s("hello", "s/\\v(\\w+)/\\U\\1\\e!/"), "HELLO!");
+        assert_eq!(s("a 12 b 3", "s/\\v\\d+/[&]/g"), "a [12] b [3]");
+
+        // Nomagic and very nomagic: plain chars are literal.
+        assert_eq!(s("a.b axb", "s/\\Va.b/X/g"), "X axb");
+        assert_eq!(s("a.b axb", "s/\\Ma\\.b/X/g"), "X X");
+        assert_eq!(s("1+1=2", "s/\\V1+1/two/"), "two=2");
+    }
+
+    #[test]
+    fn vim_regex_recipes() {
+        // Swap two words around an equals sign.
+        assert_eq!(
+            s(
+                "a = b\nleft=right\n",
+                "%s/\\v(\\w+)\\s*\\=\\s*(\\w+)/\\2 = \\1/g"
+            ),
+            "b = a\nright = left\n"
+        );
+        // snake_case to camelCase.
+        assert_eq!(s("my_var_name\n", "%s/\\v_(\\w)/\\u\\1/g"), "myVarName\n");
+        // Trailing whitespace, with `e` so no match isn't an error.
+        assert_eq!(s("a  \nb\t\nc\n", "%s/\\s\\+$//e"), "a\nb\nc\n");
+        let (text, matches, _) = sub("clean\n", "%s/\\s\\+$//e").unwrap();
+        assert_eq!((text.as_str(), matches), ("clean\n", 0));
+        // Duplicate each line around a colon.
+        assert_eq!(s("ab\ncd\n", "%s/.*/& : &/"), "ab : ab\ncd : cd\n");
+        // `\r` in the replacement breaks the line, like Vim.
+        assert_eq!(s("a,b", "s/,/\\r/"), "a\nb");
+        // An empty pattern reuses the last search.
+        assert_eq!(s("the last word", "s//first/"), "the first word");
+    }
+
+    #[test]
+    fn invalid_vim_patterns() {
+        assert!(sub("x", "s/\\v(x/y/")
+            .unwrap_err()
+            .contains("invalid pattern"));
+        assert!(sub("x", "s/a\\{1/y/").unwrap_err().contains("unterminated"));
+        assert!(sub("x", "s/a\\{x}/y/")
+            .unwrap_err()
+            .contains("invalid count"));
+        assert!(sub("x", "s/a\\zeb\\zsc/y/")
+            .unwrap_err()
+            .contains("\\zs first"));
+        assert!(sub("x", "s/\\v[ab/y/")
+            .unwrap_err()
+            .contains("unterminated ["));
     }
 
     #[test]

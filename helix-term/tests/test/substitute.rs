@@ -83,6 +83,48 @@ async fn one_eyed_kirby() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn vim_regex_recipes() -> anyhow::Result<()> {
+    // `\zs`: only the number is replaced.
+    test((
+        "#[p|]#rice: 100\n",
+        ":s/price: \\zs\\d\\+/200/g<ret>",
+        "#[p|]#rice: 200\n",
+    ))
+    .await?;
+    // Swap around `=` in very magic mode.
+    test((
+        "#[a|]# = b\n",
+        ":s/\\v(\\w+)\\s*\\=\\s*(\\w+)/\\2 = \\1/<ret>",
+        "#[b|]# = a\n",
+    ))
+    .await?;
+    // Trailing whitespace; `e` makes "no match" silent.
+    test(("#[a|]#  \nb\t\n", ":%s/\\s\\+$//e<ret>", "a\n#[b|]#\n")).await?;
+    // Sleeping Kirby and `\r`.
+    test((
+        "#[<|]#a><b>\n",
+        // `<lt>` and `<gt>` are `<` and `>` in the key notation of tests.
+        ":s/<lt>\\(.\\{-}\\)<gt>/\\1\\r/g<ret>",
+        "#[a|]#\nb\n\n",
+    ))
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quiet_flag() -> anyhow::Result<()> {
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[a|]#bc\n")
+        .build()?;
+    test_key_sequence(
+        &mut app,
+        Some(":s/x/y/e<ret>"),
+        Some(&|app| assert!(app.editor.get_status().is_none())),
+        false,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn substitute_long_form() -> anyhow::Result<()> {
     test(("#[a|]#bc\n", ":substitute /b/X/<ret>", "#[a|]#Xc\n")).await
 }

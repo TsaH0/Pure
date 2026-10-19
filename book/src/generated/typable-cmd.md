@@ -88,7 +88,7 @@
 | `:pipe-to` | Pipe each selection to the shell command, ignoring output. |
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
 | `:run-interactive`, `:term` | Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor. |
-| `:substitute` | Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Replacement: `\1`/`$1`/`${name}` groups, `&` the match, `\u` `\U..\E` `\l` `\L` case. Flags: g (all per line), i, I, n (count). |
+| `:substitute` | Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Patterns: Helix's regex syntax or Vim's (`\(.*\)`, `\v`, `\{-}`, `\zs`/`\ze`, `\<\>`). Replacement: `\1`/`$1`/`${name}` groups, `&` the match, `\r` line break, `\u` `\U..\E` `\l` `\L` case. Flags: g (all per line), i, I, n (count), e (no error). |
 | `:copen`, `:cope`, `:cw`, `:cwindow` | Show the quickfix list in a picker. |
 | `:cnext`, `:cn` | Go to the next (or Nth next) quickfix entry. |
 | `:cprevious`, `:cprev`, `:cp`, `:cN` | Go to the previous (or Nth previous) quickfix entry. |
