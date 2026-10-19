@@ -1548,3 +1548,188 @@ fn new_events_reach_0_2_plugins() {
         assert_eq!(statuses(actions), [expected]);
     }
 }
+
+/// Property tests of the validation of what plugins send (M9.1).
+mod properties {
+    use quickcheck::{QuickCheck, TestResult};
+
+    use super::*;
+
+    /// The text after applying sorted, non-overlapping `edits`, simply.
+    fn model(text: &str, edits: &[(usize, usize, String)]) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut edits = edits.to_vec();
+        edits.sort_by_key(|(from, to, _)| (*from, *to));
+        let mut out = String::new();
+        let mut pos = 0;
+        for (from, to, insert) in edits {
+            out.extend(&chars[pos..from]);
+            out.push_str(&insert);
+            pos = to;
+        }
+        out.extend(&chars[pos..]);
+        out
+    }
+
+    fn valid(len: usize, edits: &[(usize, usize, String)]) -> bool {
+        let mut sorted = edits.to_vec();
+        sorted.sort_by_key(|(from, to, _)| (*from, *to));
+        let mut end = 0;
+        for (from, to, _) in sorted {
+            if from > to || to > len || from < end {
+                return false;
+            }
+            end = to;
+        }
+        true
+    }
+
+    #[test]
+    fn edits_apply_like_the_model_or_are_rejected() {
+        fn property(text: String, raw: Vec<(u8, u8, String)>) -> TestResult {
+            let len = text.chars().count();
+            // Offsets around the text's length, some out of range.
+            let edits: Vec<(usize, usize, String)> = raw
+                .into_iter()
+                .take(6)
+                .map(|(a, b, s)| (a as usize % (len + 3), b as usize % (len + 3), s))
+                .collect();
+            let rope = Rope::from(text.as_str());
+            let wit: Vec<types::Edit> = edits
+                .iter()
+                .map(|(from, to, text)| types::Edit {
+                    from: *from as u32,
+                    to: *to as u32,
+                    text: text.clone(),
+                })
+                .collect();
+            match transaction_from_edits(&rope, wit) {
+                Ok(transaction) => {
+                    if !valid(len, &edits) {
+                        return TestResult::error("accepted invalid edits");
+                    }
+                    let mut result = rope.clone();
+                    transaction.apply(&mut result);
+                    TestResult::from_bool(result.to_string() == model(&text, &edits))
+                }
+                Err(_) => TestResult::from_bool(!valid(len, &edits)),
+            }
+        }
+        QuickCheck::new()
+            .tests(2000)
+            .quickcheck(property as fn(String, Vec<(u8, u8, String)>) -> TestResult);
+    }
+
+    #[test]
+    fn selections_are_validated_not_panicking() {
+        fn property(text: String, raw: Vec<(u8, u8)>) -> bool {
+            let len = text.chars().count();
+            let ranges: Vec<types::Range> = raw
+                .iter()
+                .take(8)
+                .map(|(a, h)| types::Range {
+                    anchor: (*a as usize % (len + 3)) as u32,
+                    head: (*h as usize % (len + 3)) as u32,
+                })
+                .collect();
+            let rope = Rope::from(text.as_str());
+            let in_bounds = !ranges.is_empty()
+                && ranges
+                    .iter()
+                    .all(|r| r.anchor as usize <= len && r.head as usize <= len);
+            match selection_from_ranges(&rope, &ranges) {
+                Ok(selection) => {
+                    in_bounds
+                        && selection
+                            .ensure_invariants(rope.slice(..))
+                            .ranges()
+                            .iter()
+                            .all(|r| r.to() <= len)
+                }
+                Err(_) => !in_bounds,
+            }
+        }
+        QuickCheck::new()
+            .tests(2000)
+            .quickcheck(property as fn(String, Vec<(u8, u8)>) -> bool);
+    }
+
+    #[test]
+    fn text_ranges_never_panic() {
+        fn property(text: String, from: u16, to: u16) -> bool {
+            let (mut host, _root) = testplugin2();
+            let state = host.plugins[0].store.data_mut();
+            state.snapshot = snapshot(&text, 0, 0);
+            let len = text.chars().count();
+            let result = state.text_range(1, from.into(), to.into());
+            match result {
+                Ok(slice) => {
+                    (from as usize) <= (to as usize)
+                        && (to as usize) <= len
+                        && slice.chars().count() == (to - from) as usize
+                }
+                Err(_) => from > to || to as usize > len,
+            }
+        }
+        QuickCheck::new()
+            .tests(50)
+            .quickcheck(property as fn(String, u16, u16) -> bool);
+    }
+}
+
+/// Startup and event costs (M9.2). Run with
+/// `cargo test -p helix-plugin --release -- --ignored --nocapture benchmarks`.
+#[test]
+#[ignore]
+fn benchmarks() {
+    let cache = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let plugins = 20;
+    for i in 0..plugins {
+        let name = format!("tools{i}");
+        let dir = plugin_dir(
+            root.path(),
+            &name,
+            &fixture("examples/text-tools/plugin.wasm"),
+            ALL,
+        );
+        let manifest = dir.join("plugin.toml");
+        let source = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("api = \"0.1\"", "api = \"0.2\"");
+        std::fs::write(manifest, source).unwrap();
+    }
+    for (label, cold) in [("cold cache", true), ("warm cache", false)] {
+        for count in [1, 5, 20] {
+            let cache_dir = if cold {
+                // A fresh cache: every plugin is compiled.
+                cache.path().join(format!("cold-{count}"))
+            } else {
+                cache.path().join("cold-20")
+            };
+            let started = Instant::now();
+            let mut host = PluginHost::new(Some(cache_dir)).unwrap();
+            let (_, errors) = host.load_all(root.path(), |name| {
+                let n: usize = name.trim_start_matches("tools").parse().unwrap();
+                (n < count).then(|| PluginSettings::new("{}"))
+            });
+            assert!(errors.is_empty(), "{errors:?}");
+            eprintln!(
+                "load {count:>2} plugins ({label}): {:>7.1} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    let (mut host, _root) = testplugin2();
+    let snapshot = snapshot(&"some text\n".repeat(10_000), 0, 0);
+    let rounds = 200;
+    let started = Instant::now();
+    for _ in 0..rounds {
+        host.dispatch(Event::SelectionChange(1), &snapshot);
+    }
+    eprintln!(
+        "dispatch one event to one plugin: {:>7.3} ms",
+        started.elapsed().as_secs_f64() * 1000.0 / rounds as f64
+    );
+}

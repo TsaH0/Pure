@@ -273,8 +273,10 @@ git pickers.
   - Done: `show-prompt` (message, initial text, fuzzy completions) →
     `on-prompt-done`. No separate `confirm`: a prompt with completions
     `["yes", "no"]` does it.
-- [ ] **M3.3 Notifications.** Status messages with severity and a
+- [x] **M3.3 Notifications.** Status messages with severity and a
   `log`-backed `:plugin-log <name>` buffer showing a plugin's log lines.
+  - Done: `:plugin-log <plugin>` (last 1000 lines). Status messages already
+    have `set-status` / `set-error`.
 
 ## M4. File system access
 
@@ -346,9 +348,9 @@ the hook first and keep it generic.
 
 ## M9. Hardening and docs
 
-- [ ] **M9.1 Fuzz the host functions** (offsets, overlapping edits, huge
+- [x] **M9.1 Fuzz the host functions** (offsets, overlapping edits, huge
   strings, invalid UTF-8 from processes) with `cargo fuzz` or proptest.
-- [ ] **M9.2 Benchmarks.** Startup with 0/5/20 plugins (warm and cold cache),
+- [x] **M9.2 Benchmarks.** Startup with 0/5/20 plugins (warm and cold cache),
   event dispatch cost while typing. Budget: under 5 ms of startup per cached
   plugin.
 - [ ] **M9.3 Docs.** Keep `helix-plugin/README.md` the single guide (user
@@ -397,8 +399,12 @@ Small, self-contained; each one is a good single task.
   first time a plugin runs a program, remember the answer.
 - [ ] **Stale preopens**: plugins see the workspace from load time; reload
   their WASI context (or warn) after `:cd`.
-- [ ] **`:plugin-log <name>`** (M3.3): a buffer with the plugin's `log`
-  lines.
+- [ ] **Parallel compilation on a cold cache**: plugins compile one after
+  another at startup (about 47 ms each, 0.9 s for 20, see M9.2). Compile
+  them in parallel, or load them after the first draw.
+- [ ] **Fuzz the WASM boundary itself** (M9.1 covers the host's validation
+  with quickcheck): a test plugin that sends random edits, ranges and
+  picker data through the real ABI.
 - [ ] **Caching `find_workspace`** in `plugins::snapshot` (it walks up the
   directory tree on every plugin call).
 

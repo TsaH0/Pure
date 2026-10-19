@@ -665,3 +665,19 @@ async fn plugins_hear_saves_closes_and_selection_changes() -> anyhow::Result<()>
     assert!(closed.starts_with("close:"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_log_shows_what_a_plugin_logged() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "Plugin 'testplugin2' hasn't logged anything"
+    );
+    keys(&mut app, ":plugin-run testplugin2/log first second<ret>").await;
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(text(&app), "first\nsecond\n");
+    keys(&mut app, ":plugin-log nope<ret>").await;
+    assert_error(&app, "no plugin named 'nope'");
+    Ok(())
+}

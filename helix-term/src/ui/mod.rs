@@ -461,6 +461,13 @@ pub mod completers {
             .collect()
     }
 
+    pub fn plugin_name(_editor: &Editor, input: &str) -> Vec<Completion> {
+        fuzzy_match(input, crate::plugins::plugin_names(), false)
+            .into_iter()
+            .map(|(name, _)| ((0..), name.into()))
+            .collect()
+    }
+
     pub fn theme(_editor: &Editor, input: &str) -> Vec<Completion> {
         let mut names = theme::Loader::read_names(&helix_loader::config_dir().join("themes"));
         for rt_dir in helix_loader::runtime_dirs() {

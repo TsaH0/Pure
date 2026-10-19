@@ -212,6 +212,24 @@ pub fn command_names() -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Names of the loaded plugins, for completion.
+pub fn plugin_names() -> Vec<String> {
+    with_host(|host| {
+        host.plugins()
+            .iter()
+            .map(|plugin| plugin.name().to_owned())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// What `plugin` wrote with `log`, oldest first.
+pub fn log_lines(plugin: &str) -> anyhow::Result<Vec<String>> {
+    with_host(|host| host.log_lines(plugin))
+        .flatten()
+        .ok_or_else(|| anyhow::anyhow!("no plugin named '{plugin}'"))
+}
+
 /// Run a plugin command given as `plugin/command`.
 pub fn run_command(
     editor: &mut Editor,

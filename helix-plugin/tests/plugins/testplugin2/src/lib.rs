@@ -30,6 +30,7 @@ impl Plugin for TestPlugin {
                 "dirs",
                 "read-file",
                 "write-data",
+                "log",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -135,6 +136,11 @@ impl Plugin for TestPlugin {
             }
             "kill" => editor::kill(request_id(&args)?),
             "popup" => editor::popup(&args.join(" "))?,
+            "log" => {
+                for line in &args {
+                    editor::log(line);
+                }
+            }
             "prompt" => {
                 editor::prompt("answer:", "init", args, |answer| {
                     editor::set_status(&format!("answer:{answer:?}"));

@@ -8,7 +8,9 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 - Done: M0 (API 0.2 groundwork), M1 (processes and the terminal), M2
   (pickers, including live pickers), M3.1–M3.2 (popups, prompts), M4 (file
   access, workspace info), M6.1 (save, close and selection events).
-- Next: M3.3, M9.1–M9.3 and the "Future TODOs" in the roadmap.
+- Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
+  (benchmarks).
+- Next: M9.3 and the "Future TODOs" in the roadmap.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -105,3 +107,23 @@ API 0.2 was extended in place (it is not released yet):
   tmux.
 - Tests: 52 host tests, 26 in-editor plugin tests (prompts, live picker,
   the three events), full suite as in the roadmap's "Commands".
+
+## M3.3, M9.1, M9.2 (done)
+
+- `:plugin-log <plugin>` opens the plugin's last 1000 `log` lines in a new
+  buffer (`PluginHost::log_lines`).
+- Property tests (quickcheck, `helix-plugin/src/test.rs`, `mod properties`):
+  plugin edits apply like a simple model or are rejected exactly when they
+  overlap or are out of range; selections and `text-range` never panic.
+- Benchmarks: `cargo test -p helix-plugin --release -- --ignored --nocapture
+  benchmarks`. On this machine (4 cores), loading `text-tools`:
+
+  | Plugins | Cold cache | Warm cache |
+  | --- | --- | --- |
+  | 1 | 48 ms | 1.5 ms |
+  | 5 | 218 ms | 5.3 ms |
+  | 20 | 936 ms | 19.7 ms |
+
+  Dispatching one event to one plugin (with a 10 000-line document): 0.05 ms.
+  Warm-cache startup is within the 5 ms per plugin budget; cold-cache
+  compilation is sequential (a TODO).

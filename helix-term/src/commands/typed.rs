@@ -2980,6 +2980,33 @@ fn plugin_list(
     Ok(())
 }
 
+fn plugin_log(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut lines = crate::plugins::log_lines(&args[0])?;
+    if lines.is_empty() {
+        cx.editor
+            .set_status(format!("Plugin '{}' hasn't logged anything", &args[0]));
+        return Ok(());
+    }
+    lines.push(String::new());
+    cx.editor.new_file(Action::Replace);
+    let (view, doc) = current!(cx.editor);
+    // Replace the new buffer's empty line.
+    let transaction = Transaction::change(
+        doc.text(),
+        std::iter::once((
+            0,
+            doc.text().len_chars(),
+            Some(lines.join(doc.line_ending.as_str()).into()),
+        )),
+    );
+    doc.apply(&transaction, view.id);
+    doc.append_changes_to_history(view);
+    Ok(())
+}
+
 fn plugin_reload(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4459,6 +4486,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-log",
+        aliases: &[],
+        doc: "Show the latest lines a plugin logged in a new buffer: `:plugin-log <plugin>`.",
+        fun: plugin_log,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (1, Some(1)),
             ..Signature::DEFAULT
         },
     },

@@ -454,7 +454,12 @@ struct State {
     files: FileGrant,
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
+    /// The latest `log` lines, for `:plugin-log`.
+    log: std::collections::VecDeque<String>,
 }
+
+/// `log` lines kept per plugin.
+const LOG_LINES: usize = 1000;
 
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -643,6 +648,10 @@ impl State {
 
     fn log(&mut self, message: String) {
         log::info!("[plugin {}] {message}", self.plugin);
+        if self.log.len() == LOG_LINES {
+            self.log.pop_front();
+        }
+        self.log.push_back(message);
     }
 
     /// Check that the plugin may run `argv` now.
@@ -1218,6 +1227,7 @@ impl PluginHost {
             process: settings.process,
             files: settings.files,
             data_dir,
+            log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -1385,6 +1395,12 @@ impl PluginHost {
             .data_mut()
             .request(kind)
             .map_err(anyhow::Error::msg)
+    }
+
+    /// The latest lines `plugin` wrote with `log` (oldest first).
+    pub fn log_lines(&self, plugin: &str) -> Option<Vec<String>> {
+        let plugin = self.plugin(plugin)?;
+        Some(plugin.store.data().log.iter().cloned().collect())
     }
 
     /// Set which programs `plugin` may run (`allow-process` in
