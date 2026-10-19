@@ -8,7 +8,7 @@ use crate::{Item, OpenAction, Output, Picker, PickerResult, RequestId};
 type ProcessCallback = Box<dyn FnOnce(Result<Output, String>) -> Result<(), String>>;
 type PickerCallback = Box<dyn FnOnce(PickerResult) -> Result<(), String>>;
 type PromptCallback = Box<dyn FnOnce(Option<String>) -> Result<(), String>>;
-type QueryCallback = Box<dyn FnMut(&str) -> Result<Vec<Item>, String>>;
+type QueryCallback = Box<dyn FnMut(RequestId, &str) -> Result<Option<Vec<Item>>, String>>;
 
 enum Completion {
     Process(ProcessCallback),
@@ -92,6 +92,21 @@ impl Item {
             data: text,
             preview: None,
         }
+    }
+
+    /// An item showing `columns`, handing back `data` when chosen.
+    pub fn new(columns: Vec<String>, data: impl Into<String>) -> Self {
+        Self {
+            columns,
+            data: data.into(),
+            preview: None,
+        }
+    }
+
+    /// Preview the file `path`, highlighting `lines` (0-based, inclusive).
+    pub fn with_file_preview(mut self, path: impl Into<String>, lines: Option<(u32, u32)>) -> Self {
+        self.preview = Some(crate::Preview::File((path.into(), lines)));
+        self
     }
 }
 
@@ -178,11 +193,13 @@ pub fn pick(
 }
 
 /// Show a live picker: instead of filtering `picker`'s items, the editor
-/// calls `query` with what the user typed (debounced) and shows the items it
-/// returns. `callback` runs once, like for [`pick`].
+/// calls `query` with the picker's id and what the user typed (debounced),
+/// and shows the items it returns. To answer later (e.g. from a program
+/// started with [`spawn`]), return `None` and call [`set_items`] with the id.
+/// `callback` runs once, like for [`pick`].
 pub fn pick_live(
     mut picker: Picker,
-    query: impl FnMut(&str) -> Result<Vec<Item>, String> + 'static,
+    query: impl FnMut(RequestId, &str) -> Result<Option<Vec<Item>>, String> + 'static,
     callback: impl FnOnce(Choice) -> Result<(), String> + 'static,
 ) -> Result<RequestId, String> {
     picker.live = true;
@@ -306,7 +323,10 @@ pub fn picker_query(id: RequestId, query: String) {
     let Some(mut handler) = QUERIES.with_borrow_mut(|queries| queries.remove(&id)) else {
         return;
     };
-    let result = handler(&query).and_then(|items| set_items(id, items));
+    let result = handler(id, &query).and_then(|items| match items {
+        Some(items) => set_items(id, items),
+        None => Ok(()),
+    });
     // Put back unless the picker was closed in the meantime.
     if PICKER_ITEMS.with_borrow(|open| open.contains_key(&id)) {
         QUERIES.with_borrow_mut(|queries| queries.insert(id, handler));

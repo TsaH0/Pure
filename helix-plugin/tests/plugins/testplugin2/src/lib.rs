@@ -145,7 +145,11 @@ impl Plugin for TestPlugin {
             "live" => {
                 editor::pick_live(
                     Picker::new("Live", vec![]),
-                    |query| Ok((1..=3).map(|n| Item::text(format!("{query}-{n}"))).collect()),
+                    |_id, query| {
+                        Ok(Some(
+                            (1..=3).map(|n| Item::text(format!("{query}-{n}"))).collect(),
+                        ))
+                    },
                     |choice| {
                         let data: Vec<_> = choice.items.iter().map(|i| i.data.as_str()).collect();
                         editor::set_status(&format!("live:{data:?}"));

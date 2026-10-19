@@ -91,7 +91,6 @@ pub fn load(editor: &mut Editor) {
 pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     // The old plugins' programs and pickers are of no use to the new ones.
     process::kill_all();
-    picker::clear();
     if !dir.is_dir() {
         *HOST.lock() = None;
         return;
@@ -374,7 +373,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             Action::ShowPicker { plugin, id, picker } => {
                 later(move |_, compositor| picker::show(compositor, plugin, id, picker))
             }
-            Action::PushItems { plugin, id, items } => picker::push_items(&plugin, id, items),
+            Action::PushItems { plugin, id, items } => {
+                later(move |_, compositor| picker::push_items(compositor, &plugin, id, items))
+            }
             Action::SetItems { plugin, id, items } => {
                 later(move |_, compositor| picker::set_items(compositor, &plugin, id, items))
             }

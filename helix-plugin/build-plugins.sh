@@ -1,6 +1,6 @@
 #!/bin/sh
-# Rebuild the test plugins (into tests/fixtures) and the example plugin (into
-# its own directory, ready to be copied into ~/.config/helix/plugins). The
+# Rebuild the test plugins (into tests/fixtures) and the example plugins (each
+# into its own directory, ready to be copied into ~/.config/helix/plugins). The
 # tests load them. Needs the wasm32-wasip2 target:
 #   rustup target add wasm32-wasip2
 set -eu
@@ -13,5 +13,9 @@ build() {
 }
 build tests/plugins/testplugin testplugin testplugin
 build tests/plugins/testplugin2 testplugin2 testplugin2
-(cd examples/text-tools && cargo build --locked --release --target wasm32-wasip2)
-cp examples/text-tools/target/wasm32-wasip2/release/text_tools.wasm examples/text-tools/plugin.wasm
+# Every example, into its own directory.
+for example in examples/*/; do
+    name=$(basename "$example")
+    (cd "$example" && cargo build --locked --release --target wasm32-wasip2)
+    cp "$example/target/wasm32-wasip2/release/$(echo "$name" | tr - _).wasm" "$example/plugin.wasm"
+done

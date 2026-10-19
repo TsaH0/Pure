@@ -1,16 +1,14 @@
 //! Pickers shown by plugins (`show-picker`, `push-items`, `set-items`, live
 //! pickers).
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use futures_util::future::{BoxFuture, FutureExt};
-use helix_event::runtime_local;
 use helix_plugin::{Callback, OpenAction, PickerItem, PickerPreview, PickerResult, PickerSpec};
 use helix_view::editor::Action;
 use helix_view::Editor;
-use parking_lot::Mutex;
 
 use crate::compositor::Compositor;
 use crate::ui::menu::Cell;
@@ -30,15 +28,11 @@ pub struct Item {
 pub struct Data {
     plugin: String,
     id: u32,
+    /// Items so far, to number pushed ones.
+    len: AtomicU32,
 }
 
 type PluginPicker = Picker<Item, Data>;
-
-runtime_local! {
-    /// Open plugin pickers by `(plugin, request id)`, for `push-items`, with
-    /// the number of items so far.
-    static OPEN: Mutex<BTreeMap<(String, u32), (Injector<Item, Data>, u32)>> = Mutex::new(BTreeMap::new());
-}
 
 fn item(index: u32, item: PickerItem) -> Item {
     let preview = match item.preview {
@@ -90,10 +84,9 @@ fn live_query(
     query: &str,
     _editor: &mut Editor,
     data: Arc<Data>,
-    injector: &Injector<Item, Data>,
+    _injector: &Injector<Item, Data>,
 ) -> BoxFuture<'static, anyhow::Result<()>> {
-    OPEN.lock()
-        .insert((data.plugin.clone(), data.id), (injector.clone(), 0));
+    data.len.store(0, Ordering::Relaxed);
     super::deliver_later(
         data.plugin.clone(),
         Callback::PickerQuery {
@@ -131,6 +124,7 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
     let data = Data {
         plugin: plugin.clone(),
         id,
+        len: AtomicU32::new(len),
     };
     let on_accept = plugin.clone();
     let on_close = plugin.clone();
@@ -140,7 +134,6 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
         items,
         data,
         move |cx, item: &Item, action| {
-            OPEN.lock().remove(&(on_accept.clone(), id));
             super::deliver(
                 cx.editor,
                 cx.jobs,
@@ -158,7 +151,6 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
             .map(|(path, lines)| (path.as_path().into(), *lines))
     })
     .with_on_close(move |cx| {
-        OPEN.lock().remove(&(on_close.clone(), id));
         super::deliver(
             cx.editor,
             cx.jobs,
@@ -174,7 +166,6 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
     if let Some(initial) = spec.initial.filter(|&initial| initial < len) {
         picker = picker.with_initial_cursor(initial);
     }
-    OPEN.lock().insert((plugin, id), (picker.injector(), len));
     if live {
         // Sends the (empty) initial query right away.
         picker = picker.with_dynamic_query(live_query, Some(100));
@@ -182,37 +173,42 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
     compositor.push(Box::new(ui::overlay::overlaid(picker)));
 }
 
-/// Add items to `plugin`'s open picker `id`.
-pub fn push_items(plugin: &str, id: u32, items: Vec<PickerItem>) {
-    let mut open = OPEN.lock();
-    let Some((injector, len)) = open.get_mut(&(plugin.to_string(), id)) else {
-        return; // closed in the meantime
-    };
+/// `plugin`'s open picker `id`, if it is still open.
+fn find<'a>(compositor: &'a mut Compositor, plugin: &str, id: u32) -> Option<&'a mut PluginPicker> {
+    let Overlay {
+        content: picker, ..
+    } = compositor.find::<Overlay<PluginPicker>>()?;
+    let data = picker.editor_data();
+    (data.plugin == plugin && data.id == id).then_some(picker)
+}
+
+fn push(picker: &PluginPicker, items: Vec<PickerItem>) {
+    // A fresh injector each time: one kept around would show the picker as
+    // "running" for good.
+    let injector = picker.injector();
+    let len = &picker.editor_data().len;
     for it in items {
-        if injector.push(item(*len, it)).is_err() {
+        if injector
+            .push(item(len.fetch_add(1, Ordering::Relaxed), it))
+            .is_err()
+        {
             break;
         }
-        *len += 1;
+    }
+}
+
+/// Add items to `plugin`'s open picker `id`.
+pub fn push_items(compositor: &mut Compositor, plugin: &str, id: u32, items: Vec<PickerItem>) {
+    if let Some(picker) = find(compositor, plugin, id) {
+        push(picker, items);
     }
 }
 
 /// Replace the items of `plugin`'s open picker `id`.
 pub fn set_items(compositor: &mut Compositor, plugin: &str, id: u32, items: Vec<PickerItem>) {
-    let Some(Overlay {
-        content: picker, ..
-    }) = compositor.find::<Overlay<PluginPicker>>()
-    else {
-        return;
-    };
-    if picker.editor_data().plugin != plugin || picker.editor_data().id != id {
-        return; // not the plugin picker on top: closed in the meantime
+    if let Some(picker) = find(compositor, plugin, id) {
+        drop(picker.restart());
+        picker.editor_data().len.store(0, Ordering::Relaxed);
+        push(picker, items);
     }
-    let injector = picker.restart();
-    OPEN.lock().insert((plugin.to_string(), id), (injector, 0));
-    push_items(plugin, id, items);
-}
-
-/// Forget all open pickers (when plugins are reloaded).
-pub fn clear() {
-    OPEN.lock().clear();
 }
