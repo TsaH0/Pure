@@ -26,6 +26,7 @@
   - [Themes](./themes.md)
   - [Key remapping](./remapping.md)
   - [Languages](./languages.md)
+  - [Plugins](./plugins.md)
 - [Guides](./guides/README.md)
   - [Adding languages](./guides/adding_languages.md)
   - [Adding highlight queries](./guides/highlights.md)
