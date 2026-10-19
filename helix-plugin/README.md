@@ -40,10 +40,26 @@ enabled = false
 [my-plugin]
 width = 80
 allow-process = ["rg", "git"]   # see "Running programs"
+allow-files = "read"            # see "Files"
 ```
 
-Try the example: copy [`examples/text-tools`](examples/text-tools) (its
-`plugin.toml` and `plugin.wasm`) into `~/.config/helix/plugins/text-tools/`.
+### Example plugins
+
+Ready to use: copy an example's `plugin.toml` and `plugin.wasm` into
+`~/.config/helix/plugins/<name>/`.
+
+| Example | Commands | `plugins.toml` |
+| --- | --- | --- |
+| [`text-tools`](examples/text-tools) | `upper`, `lower`, `sort-lines`, `count` | – |
+| [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
+| [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
+
+```toml
+# config.toml
+[keys.normal.space]
+e = ":plugin-run yazi/open"
+"/" = ":plugin-run finder/grep"
+```
 
 ## Sandbox
 
@@ -56,8 +72,10 @@ Try the example: copy [`examples/text-tools`](examples/text-tools) (its
     and callbacks)
   - `process`: run programs, see [Running programs](#running-programs). This
     one also needs the user's `allow-process` grant.
-- No file system, network, environment variables or standard streams (WASI is
-  linked with nothing granted).
+  - `filesystem`: read (or write) the workspace, see [Files](#files). This one
+    also needs the user's `allow-files` grant.
+- No network, environment variables or standard streams; no files except
+  the plugin's own directory and, if granted, the workspace.
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
   5 s for `init`) and plugins get at most **256 MiB** of memory. A plugin that
   runs out of time, out of memory or crashes is **disabled** (until
@@ -251,5 +269,47 @@ items. `Item::text(s)` is a one-column item whose data is `s`; items can also
 carry a file preview (path and lines to highlight). The callback gets a
 `Choice`: the chosen items and their indices, and the split (`None` when the
 picker was closed without choosing). `editor::push_items(id, items)` adds items to an
-open picker, e.g. as a program's output arrives. Text previews are not shown
-yet. Only from commands and callbacks.
+open picker, e.g. as a program's output arrives; `Item::new(columns, data)`
+and `.with_file_preview(path, lines)` build richer items. Text previews are
+not shown yet. Only from commands and callbacks.
+
+`editor::pick_live(picker, query, callback)` is a live picker: what the user
+types goes to `query(id, text)` (debounced) instead of filtering, and the
+items it returns are shown. To answer later, e.g. from a program, return
+`Ok(None)` and call `editor::set_items(id, items)` (see `examples/finder`,
+`grep`).
+
+## Prompts and popups
+
+- `editor::prompt(message, initial, completions, callback)` asks for a line
+  of text; the callback gets `Some(text)`, or `None` on Esc. `completions`
+  are offered (fuzzy matched) while typing.
+- `editor::popup(markdown)` shows markdown at the cursor until the next key.
+
+Both only from commands and callbacks.
+
+## Files
+
+Each plugin has its own directory, `editor::data_dir()`
+(`~/.local/share/helix/plugins/<name>/`), and can read and write it with
+`std::fs` without any permission. The workspace (`editor::workspace_root()`)
+needs the `filesystem` permission and the user's grant:
+
+```toml
+[my-plugin]
+allow-files = "read"    # or "write"
+```
+
+Paths are the real ones (as `document-path` returns them). Plugins see the
+workspace from when they were loaded: after `:cd`, `:plugin-reload`. Also
+available: `editor::cwd()`, `editor::config_dir()` and
+`editor::document_modified(doc)`.
+
+## Events
+
+Subscribe in `init`'s `Registration { events, .. }` and implement the
+`Plugin` trait's handler: `on_document_open`, `on_document_change`
+(debounced), `on_mode_switch`, and with API 0.2 `on_document_save`,
+`on_document_close` (the document is gone; only its id is known) and
+`on_selection_change` (debounced). Handlers get 250 ms and can't open UI or
+run commands.

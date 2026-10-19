@@ -5,15 +5,15 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 
 ## Status
 
-- Done: M0.1–M0.5 (API 0.2 groundwork), M1.1–M1.4 (processes and the
-  terminal), M2.1–M2.3 and M2.5 (pickers).
-- Next: M2.4 (live pickers), M3 (popups and prompts), M4 (file access),
-  M6.1 (more events), M9.1–M9.2 (fuzzing, benchmarks).
+- Done: M0 (API 0.2 groundwork), M1 (processes and the terminal), M2
+  (pickers, including live pickers), M3.1–M3.2 (popups, prompts), M4 (file
+  access, workspace info), M6.1 (save, close and selection events).
+- Next: M3.3, M9.1–M9.3 and the "Future TODOs" in the roadmap.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
-- Scope rule from the owner: Pure ships the plugin API only, no bundled
-  end-user plugins (no file manager, no yazi integration). The built-in yazi
-  command was removed.
+- Owner's rules: nothing built into the editor (the built-in yazi command was
+  removed); plugins written to try the API are kept as examples in
+  `helix-plugin/examples/` (`text-tools`, `yazi`, `finder`).
 
 ## Open questions for the owner
 
@@ -76,3 +76,32 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   picker; the SDK keeps the items so the callback gets pushed ones too.
 - Tests: host tests for pickers and `push-items`; in-editor tests for every
   key, filtering, and that `space '` doesn't reopen an answered picker.
+
+## M2.4, M3, M4, M6.1 (done)
+
+API 0.2 was extended in place (it is not released yet):
+
+- Prompts (`show-prompt` → `on-prompt-done`) and popups (`show-popup`,
+  markdown at the cursor). `helix-term/src/plugins/prompt.rs`.
+- Live pickers: `live` pickers send what the user types to the plugin
+  (`on-picker-query`, debounced, through a hidden primary column) and the
+  plugin answers with `set-items`. The query callback doesn't complete the
+  request. Pickers now make an injector when they need one (a kept one
+  showed "(running)" forever).
+- File access: `filesystem` permission plus `allow-files = "read" |
+  "write"`; the workspace is preopened at its real path. Every plugin gets a
+  read-write `data-dir` (`<data dir>/plugins/<name>`). Settings and grants
+  are passed at load time (`PluginSettings`, `PluginHost::load_with`,
+  `set_dirs`).
+- `workspace-root`, `cwd`, `config-dir`, `data-dir`, `document-modified`.
+- Events `document-save` (from `Application::handle_document_write`),
+  `document-close`, `selection-change` (debounced), exported by 0.2 plugins
+  in a separate `events` interface.
+- SDK: `prompt`, `popup`, `pick_live` (handler gets the picker id and may
+  answer later), `set_items`, `Item::new`, `Item::with_file_preview`,
+  handlers for the new events.
+- Examples: `examples/yazi` (chooser through `run-interactive`) and
+  `examples/finder` (files, live grep, git branches), checked by hand in
+  tmux.
+- Tests: 52 host tests, 26 in-editor plugin tests (prompts, live picker,
+  the three events), full suite as in the roadmap's "Commands".

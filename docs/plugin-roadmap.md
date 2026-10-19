@@ -15,11 +15,15 @@ Each task has an id (`M1.2`), what it depends on, the files it touches, what to
 do, and **done when** criteria. Tick the box in this file in the same PR that
 finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.md).
 
-**Scope (the owner's rule): Pure ships the plugin API, not plugins.** No
-built-in or bundled file manager, yazi integration, git UI or other end-user
-plugin: users build those themselves on the API. The only plugins in the
-repository are test fixtures and the small `text-tools` example; the guide
-shows short snippets instead of shipping example plugins.
+**Scope (the owner's rules):**
+
+- **Pure ships the plugin API, not built-in plugins.** No file manager, yazi
+  integration, git UI or other end-user feature goes into the editor itself:
+  users build those as plugins.
+- **Plugins written while working (to try an API) are kept** as opt-in
+  examples in `helix-plugin/examples/<name>/` (source, `plugin.toml` and the
+  built `plugin.wasm`), so users can copy them into their plugins directory.
+  Never delete them; `build-plugins.sh` rebuilds every example.
 
 ---
 
@@ -98,8 +102,16 @@ Compare against this list rather than expecting all green:
 - `commands::movement::{match_bracket, select_all_siblings, select_all_children, test_move_parent_node_end, test_move_parent_node_start, test_select_next_sibling, test_select_prev_sibling, test_smart_tab_move_parent_node_end}`
 - `movement::{match_around_closest_ts, select_mode_tree_sitter_next_function_is_union_of_objects, select_mode_tree_sitter_prev_function_goes_backwards_to_object, select_mode_tree_sitter_prev_function_unselects_object, tree_sitter_motions_work_across_injections}`
 
-The test binary can also abort (SIGABRT) partway through the full run; run
-with `--test-threads 4` to get the complete list.
+The full run aborts (SIGABRT, a stack overflow) without a bigger stack, and
+the 8 `commands::movement` tests can still abort it. Run the full suite as:
+
+```sh
+cargo test -p helix-term --features integration --test integration --no-run
+B=$(ls -t target/debug/deps/integration-* | grep -v '\.d$' | head -1)
+RUST_MIN_STACK=16777216 $B --test-threads 4 --skip test::commands::movement
+```
+
+Expect exactly the other 11 known failures.
 
 Commit the rebuilt `.wasm` fixtures with the code that needs them. Manual
 checks run in `tmux` (`tmux new -d -s t 'target/debug/pure'`,
@@ -236,36 +248,47 @@ git pickers.
     `stream: bool` spawn option).
   - Done: `push-items` into an open picker. Streaming process output
     (`on-process-output`) needs a new API version and is left for later.
-- [ ] **M2.4 Live pickers.** Depends on: M2.2.
+- [x] **M2.4 Live pickers.** Depends on: M2.2.
   - `with_dynamic_query`-backed pickers: a `live: bool` picker flag and an
     `on-picker-query(id, query)` callback that may call `push-items` /
     `set-items`. Debounce like the global search. Enables live grep.
+  - Done: `live: bool`, `on-picker-query`, `set-items`; the typed text goes
+    to a hidden primary column (the picker needs one filtering column). See
+    `examples/finder` (`finder/grep`).
 - [x] **M2.5 Docs.** Depends on: M1.2, M2.2.
   - No example plugins (see Scope). The guide has a picker snippet (spawn
     `rg --files`, pick, open with the chosen split).
 
 ## M3. Popups, prompts and messages
 
-- [ ] **M3.1 `show-popup`.** A `ui::Popup` with markdown (`ui::Markdown`), at
+- [x] **M3.1 `show-popup`.** A `ui::Popup` with markdown (`ui::Markdown`), at
   the cursor or centered, closed with Esc; returns an id; optional
   `on-popup-close`. For hover-like info, help and plugin output.
-- [ ] **M3.2 `prompt` and `confirm`.** Text input with an optional
+  - Done as fire-and-forget: markdown at the cursor, closed by the next key
+    (no id, no close callback yet).
+- [x] **M3.2 `prompt` and `confirm`.** Text input with an optional
   completion list (`ui::Prompt`) → `on-prompt-done(id, option<string>)`;
   yes/no confirm built on the same thing. Enables "rename file", "new note
   title", "git commit message".
+  - Done: `show-prompt` (message, initial text, fuzzy completions) →
+    `on-prompt-done`. No separate `confirm`: a prompt with completions
+    `["yes", "no"]` does it.
 - [ ] **M3.3 Notifications.** Status messages with severity and a
   `log`-backed `:plugin-log <name>` buffer showing a plugin's log lines.
 
 ## M4. File system access
 
-- [ ] **M4.1 `filesystem` permission.** WASI preopens rather than new host
+- [x] **M4.1 `filesystem` permission.** WASI preopens rather than new host
   functions, so `std::fs` works in Rust plugins unchanged: `read` → the
   workspace root (and the plugin's own data dir), read-only; `write` →
   read-write. Granted in `plugins.toml` like `process`. The plugin's data dir
   `<data>/plugins/<name>/` is always read-write.
-- [ ] **M4.2 Workspace info.** Host functions `workspace-root`,
+  - Done: `allow-files = "read" | "write"`. Preopens use the host paths as
+    guest paths, so paths from `document-path` / `workspace-root` work with
+    `std::fs`. They're fixed at load time: after `:cd`, `:plugin-reload`.
+- [x] **M4.2 Workspace info.** Host functions `workspace-root`,
   `config-dir`, `cwd`, and the open documents' modified state.
-- [ ] **M4.3 Docs.** A guide snippet using file access (no bundled plugin).
+- [x] **M4.3 Docs.** A guide section on file access.
 
 ## M5. Decorations
 
@@ -285,10 +308,12 @@ the hook first and keep it generic.
 
 ## M6. Events and key bindings
 
-- [ ] **M6.1 More events.** `document-save` (post-save), `document-close`,
+- [x] **M6.1 More events.** `document-save` (post-save), `document-close`,
   `selection-change` (debounced), `post-command(name)`, `focus-gained`/`lost`,
   `editor-idle`. Each one is a variant in `event-kind`, a hook in
   `plugins::register_hooks` and an export.
+  - Done: save, close and selection change, in a new `events` export
+    interface. Still open: `post-command`, focus and idle (see TODO list).
 - [ ] **M6.2 Default key bindings from plugins.** `[keys]` in `plugin.toml`,
   merged *under* the user's config (the user always wins) and listed in
   `:plugin-list`. Turn off per plugin with `keys = false` in `plugins.toml`.
@@ -346,10 +371,71 @@ estimate the upstream diff.
 
 Tasks in one batch touch the same code, so give each batch to one agent.
 
-1. **M0.1–M0.5**: the 0.2 groundwork. It must land first.
-2. **M1.1–M1.4**: processes and terminal hand-over (done).
-3. **M2.1–M2.5**: pickers (done except M2.4, live pickers).
-4. **M3 + M4**: popups, prompts and file access. These need batch 1.
-5. **M6.1 + M9.1–M9.2**: events, fuzzing and benchmarks. Mostly independent.
+1. **Done:** M0, M1, M2, M3.1–M3.2, M4, M6.1 (see `plugin-progress.md`).
+2. **Open, no owner review needed:** M3.3, M9.1–M9.3 and the small TODOs
+   below.
+3. **Needs the owner first:** M5, M6.2, M6.3, M7, M8 and the file-manager
+   APIs.
 
-M5, M7 and M8 need design review with the owner before work starts.
+## Future TODOs (not yet milestones)
+
+Small, self-contained; each one is a good single task.
+
+- [ ] **Text previews in pickers** (`preview::text`): the picker previews
+  files and documents only. Option: a small `PathOrId`-like variant holding
+  text, rendered without syntax highlighting.
+- [ ] **Streaming program output**: `on-process-output(id, chunk)` behind a
+  `stream: bool` spawn option, so a picker can fill as `rg` runs. Needs
+  the next API version once 0.2 is released.
+- [ ] **Popup ids and `on-popup-close`**, and popups placed centered.
+- [ ] **More events**: `post-command(name)`, `focus-gained` / `focus-lost`,
+  `editor-idle`.
+- [ ] **Open with a split from plugins**: `open-file` only replaces the
+  view; `examples/finder` works around it with `:vsplit` through
+  `run-command`. Add an `open-action` (and a position) to `open-file`.
+- [ ] **Per-program process prompt** (owner's open question): ask once the
+  first time a plugin runs a program, remember the answer.
+- [ ] **Stale preopens**: plugins see the workspace from load time; reload
+  their WASI context (or warn) after `:cd`.
+- [ ] **`:plugin-log <name>`** (M3.3): a buffer with the plugin's `log`
+  lines.
+- [ ] **Caching `find_workspace`** in `plugins::snapshot` (it walks up the
+  directory tree on every plugin call).
+
+## Guidelines for agents (lessons from earlier work)
+
+- **Push often.** An earlier agent built M1.1–M1.3 and lost all of it
+  because it was never pushed before its session ended. Commit and push
+  every finished task to your branch.
+- **API versions:** 0.2 may still change until it is merged to `master`.
+  After that it is frozen (never edit a released WIT); new functions go in
+  a new version. Add new *exports* in separate interfaces (like `callbacks`
+  and `events`): the SDK's `register_plugin!` implements `plugin` for both
+  API versions, so changing `plugin` breaks the 0.1 ABI.
+- **Fixtures:** after changing the WIT, the SDK or a guest, run
+  `helix-plugin/build-plugins.sh` and commit the `.wasm` files. A stale
+  fixture fails at load time with "a matching implementation was not found
+  in the linker". The script strips local paths; don't commit components
+  built any other way.
+- **Don't commit environment notes** (machine paths, proxy issues,
+  `/workspace/...`, lockfiles of the standalone SDK).
+- **In-editor tests** (`helix-term/tests/test/plugins.rs`):
+  - call `app.editor.reset_idle_timer()` before
+    `run_event_loop_until_idle` when there's no input, or it waits forever
+    (use the `deliver_events` and `wait_for_status` helpers);
+  - only the first `Application` of a test gets the job queue (a
+    `OnceLock`): results of programs, pickers and prompts never reach a
+    second one. Reload plugins with `load_with_settings` on the same app
+    instead;
+  - key notation: `<gt>` / `<lt>` for `>` / `<`.
+- **Pickers:** don't keep an `Injector` around (the picker shows
+  "(running)" while one lives); get one from the picker when needed. The
+  picker needs at least one filtering column.
+- **Manual checks:** the integration build overwrites `target/debug/pure`
+  with a test build: run `cargo build` before trying it in tmux. Use a
+  scratch `XDG_CONFIG_HOME` with `helix/plugins/` and `helix/plugins.toml`.
+  Don't use `pkill -f` / `pgrep -f` (they match your own shell).
+- **Disk space** is tight: `CARGO_INCREMENTAL=0`, and delete
+  `target/debug/incremental` when a build fails with "no space left".
+- **Scope:** API only in the editor; trial plugins stay in
+  `helix-plugin/examples/`.
