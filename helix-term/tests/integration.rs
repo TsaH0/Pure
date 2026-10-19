@@ -21,4 +21,5 @@ mod test {
     mod movement;
     mod plugins;
     mod splits;
+    mod substitute;
 }

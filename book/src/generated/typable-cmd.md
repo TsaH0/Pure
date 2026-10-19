@@ -88,6 +88,7 @@
 | `:pipe-to` | Pipe each selection to the shell command, ignoring output. |
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
 | `:run-interactive`, `:term` | Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor. |
+| `:substitute` | Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Replacement: `\1`/`$1`/`${name}` groups, `&` the match, `\u` `\U..\E` `\l` `\L` case. Flags: g (all per line), i, I, n (count). |
 | `:plugin-run` | Run a plugin command: `:plugin-run <plugin>/<command> [args...]`. |
 | `:plugin-list` | Show the loaded plugins and their commands. |
 | `:plugin-reload` | Reload all plugins and plugins.toml. |

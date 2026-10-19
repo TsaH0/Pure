@@ -2698,6 +2698,114 @@ fn run_interactive(
     Ok(())
 }
 
+/// Vim's `:s`: see `helix_core::substitute` for the syntax.
+fn substitute(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
+    use helix_core::substitute::{self, Scope, Substitution};
+
+    let command = substitute::parse(input).map_err(|err| anyhow!(err))?;
+    let last_search = editor.registers.first('/', editor).map(|s| s.into_owned());
+    let substitution =
+        Substitution::new(&command, last_search.as_deref()).map_err(|err| anyhow!(err))?;
+
+    let (view, doc) = current!(editor);
+    let text = doc.text();
+    let selection = doc.selection(view.id);
+    let line_span = |from_line: usize, to_line: usize| {
+        let last = text.len_lines() - 1;
+        let (from_line, to_line) = (from_line.min(last), to_line.min(last));
+        let (from_line, to_line) = (from_line.min(to_line), from_line.max(to_line));
+        (text.line_to_char(from_line), text.line_to_char(to_line + 1))
+    };
+    let mut scopes: Vec<(usize, usize)> = match command.scope {
+        Scope::Document => vec![(0, text.len_chars())],
+        Scope::Lines(from, to) => {
+            let current = text.char_to_line(selection.primary().cursor(text.slice(..)));
+            vec![line_span(from.unwrap_or(current), to.unwrap_or(current))]
+        }
+        Scope::Selections => selection
+            .ranges()
+            .iter()
+            .map(|range| {
+                if range.len() > 1 {
+                    (range.from(), range.to())
+                } else {
+                    // Just a cursor: its line.
+                    let line = text.char_to_line(range.cursor(text.slice(..)));
+                    line_span(line, line)
+                }
+            })
+            .collect(),
+    };
+    // Merge overlapping scopes (several cursors on one line).
+    scopes.sort_unstable();
+    scopes.dedup_by(|next, prev| {
+        if next.0 <= prev.1 {
+            prev.1 = prev.1.max(next.1);
+            true
+        } else {
+            false
+        }
+    });
+
+    let outcome = substitution.apply(text, &scopes);
+
+    // Like Vim, the pattern becomes the last search, so `n` finds the next match.
+    if !command.pattern.is_empty() {
+        let _ = editor.registers.push('/', command.pattern.clone());
+    }
+    if outcome.matches == 0 {
+        bail!("Pattern not found: {}", command.pattern);
+    }
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    if command.flags.count_only {
+        editor.set_status(format!(
+            "{} match{} on {} line{}",
+            outcome.matches,
+            if outcome.matches == 1 { "" } else { "es" },
+            outcome.lines,
+            plural(outcome.lines)
+        ));
+        return Ok(());
+    }
+
+    let scrolloff = editor.config().scrolloff;
+    let (view, doc) = current!(editor);
+    let last_line_start = outcome.last_line.map(|line| doc.text().line_to_char(line));
+    let transaction = Transaction::change(doc.text(), outcome.changes.into_iter());
+    doc.apply(&transaction, view.id);
+    // Like Vim, line-based substitutions leave the cursor at the start of the
+    // last changed line. With selections, the selections stay.
+    if let (Some(start), false) = (last_line_start, command.scope == Scope::Selections) {
+        let pos = transaction
+            .changes()
+            .map_pos(start, helix_core::Assoc::Before);
+        let text = doc.text();
+        let line_start = text.line_to_char(text.char_to_line(pos));
+        doc.set_selection(view.id, Selection::point(line_start));
+    }
+    doc.append_changes_to_history(view);
+    view.ensure_cursor_in_view(doc, scrolloff);
+    editor.set_status(format!(
+        "{} substitution{} on {} line{}",
+        outcome.matches,
+        plural(outcome.matches),
+        outcome.lines,
+        plural(outcome.lines)
+    ));
+    Ok(())
+}
+
+fn substitute_command(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    substitute(cx.editor, &format!("s{}", args[0].trim_start()))
+}
+
 fn plugin_run(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4068,6 +4176,18 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: SHELL_SIGNATURE,
     },
     TypableCommand {
+        name: "substitute",
+        aliases: &[],
+        doc: "Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Replacement: `\\1`/`$1`/`${name}` groups, `&` the match, `\\u` `\\U..\\E` `\\l` `\\L` case. Flags: g (all per line), i, I, n (count).",
+        fun: substitute_command,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            raw_after: Some(0),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "plugin-run",
         aliases: &[],
         doc: "Run a plugin command: `:plugin-run <plugin>/<command> [args...]`.",
@@ -4275,6 +4395,14 @@ fn execute_command_line(
     input: &str,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
+    // `:s/pattern/replacement/flags` has no space after the command name.
+    if helix_core::substitute::is_substitute(input) {
+        if event == PromptEvent::Validate {
+            return substitute(cx.editor, input);
+        }
+        return Ok(());
+    }
+
     let (command, rest, _) = command_line::split(input);
     if command.is_empty() {
         return Ok(());
