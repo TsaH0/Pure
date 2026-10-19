@@ -1817,3 +1817,148 @@ fn dispatch_to_calls_only_the_named_subscriber_with_the_supplied_snapshot() {
         assert_eq!(statuses(&actions), ["events: change:1"]);
     }
 }
+
+/// Bound the test itself as well as the guest call: a regression must fail
+/// promptly instead of leaving the test runner blocked in a WASI import.
+fn bounded_wasi_test(test: impl FnOnce() + Send + 'static) {
+    let (send, recv) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
+        let _ = send.send(result);
+    });
+    match recv
+        .recv_timeout(Duration::from_secs(15))
+        .expect("WASI call or host shutdown hung")
+    {
+        Ok(()) => {}
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[test]
+fn wasi_sleep_is_bounded_in_commands_for_both_abis() {
+    bounded_wasi_test(|| {
+        for version in ["0.1", "0.2"] {
+            let (mut host, _root) = if version == "0.1" {
+                testplugin("{}")
+            } else {
+                testplugin2()
+            };
+            host.limits.command = Duration::from_millis(80);
+            let name = if version == "0.1" {
+                "testplugin"
+            } else {
+                "testplugin2"
+            };
+            let start = std::time::Instant::now();
+            let error = host
+                .run_command(name, "sleep", vec![], Snapshot::default())
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("took longer than 80 ms"),
+                "{error:#}"
+            );
+            assert!(start.elapsed() < Duration::from_secs(2));
+            assert!(host.plugin(name).unwrap().disabled().is_some());
+            assert_eq!(host.ticker.busy.load(Ordering::Acquire), 0);
+            // Dropping the runtime must not wait for the guest's minute timer.
+            drop(host);
+        }
+    });
+}
+
+#[test]
+fn wasi_sleep_is_bounded_in_init_events_and_callbacks() {
+    bounded_wasi_test(|| {
+        let (mut host, root) = testplugin2();
+        host.clear();
+        host.limits.init = Duration::from_millis(80);
+        let error = host
+            .load(&root.path().join("testplugin2"), r#"{"sleep-init":true}"#)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("took longer than 80 ms"),
+            "{error:#}"
+        );
+        host.limits.init = Duration::from_secs(5);
+        host.load(
+            &root.path().join("testplugin2"),
+            r#"{"sleep-on-open":true}"#,
+        )
+        .unwrap();
+        host.limits.event = Duration::from_millis(80);
+        let error = host
+            .dispatch_to(
+                "testplugin2",
+                Event::DocumentOpen(1),
+                &snapshot("abc", 0, 0),
+            )
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("took longer than 80 ms"),
+            "{error:#}"
+        );
+        host.clear();
+        host.load(&root.path().join("testplugin2"), "{}").unwrap();
+        host.limits.command = Duration::from_millis(80);
+        let id = arm_request(&mut host, PendingKind::Process).unwrap();
+        let error = host
+            .callback(
+                "testplugin2",
+                process_done(id, "sleep"),
+                &Snapshot::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("took longer than 80 ms"),
+            "{error:#}"
+        );
+        assert!(host
+            .plugin("testplugin2")
+            .unwrap()
+            .store
+            .data()
+            .pending
+            .is_empty());
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn wasi_fifo_open_and_host_shutdown_are_bounded() {
+    bounded_wasi_test(|| {
+        let (mut host, root, workspace, _) = testplugin2_files(FileGrant::Read);
+        let fifo = workspace.join("blocked.fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        host.limits.command = Duration::from_millis(80);
+        let start = std::time::Instant::now();
+        let error = host
+            .run_command(
+                "testplugin2",
+                "read-file",
+                vec![fifo.to_string_lossy().into_owned()],
+                Snapshot::default(),
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("took longer than 80 ms"),
+            "{error:#}"
+        );
+        drop(host);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        // Release the OS open after verifying shutdown, so this test leaves
+        // no detached blocking operation behind. Open both ends without waiting.
+        let release = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo)
+            .unwrap();
+        drop(release);
+        drop(root);
+    });
+}

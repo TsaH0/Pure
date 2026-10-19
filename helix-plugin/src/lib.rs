@@ -14,8 +14,10 @@
 //! or runs out of time is disabled.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -902,6 +904,7 @@ pub struct Plugin {
     /// Why the plugin was disabled.
     disabled: Option<String>,
     ticker: Arc<Ticker>,
+    runtime: Arc<CallRuntime>,
 }
 
 impl Plugin {
@@ -937,10 +940,10 @@ impl Plugin {
         snapshot: Snapshot,
         context: CallContext,
         limit: Duration,
-        f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R> + Send,
+        f: impl for<'a> FnOnce(&'a Instance, &'a mut Store<State>) -> CallFuture<'a, R> + Send,
     ) -> anyhow::Result<(R, Vec<Action>)>
     where
-        R: Send,
+        R: Send + 'static,
     {
         if let Some(reason) = &self.disabled {
             bail!("plugin '{}' is disabled: {reason}", self.manifest.name);
@@ -955,7 +958,8 @@ impl Plugin {
         let guest = &self.instance;
         let store = &mut self.store;
         let busy = self.ticker.busy();
-        let result = outside_async_runtime(move || f(guest, store));
+        let runtime = &self.runtime;
+        let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
         drop(busy);
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
@@ -1008,6 +1012,7 @@ pub struct PluginHost {
     /// Plugins get `<data_root>/<name>` as their own directory.
     data_root: Option<PathBuf>,
     ticker: Arc<Ticker>,
+    runtime: Arc<CallRuntime>,
 }
 
 /// Advances the engine's epoch so plugin calls can be interrupted, but only
@@ -1084,14 +1089,16 @@ impl PluginHost {
     pub fn with_limits(cache_dir: Option<PathBuf>, limits: Limits) -> anyhow::Result<Self> {
         let mut config = wasmtime::Config::new();
         config.epoch_interruption(true);
+        config.async_support(true);
         config.wasm_component_model(true);
         let engine = Engine::new(&config)?;
 
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
+        let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
 
         Ok(Self {
@@ -1103,6 +1110,7 @@ impl PluginHost {
             workspace: None,
             data_root: None,
             ticker,
+            runtime,
         })
     }
 
@@ -1236,6 +1244,7 @@ impl PluginHost {
         files: FileGrant,
     ) -> anyhow::Result<(WasiCtx, Option<PathBuf>)> {
         let mut wasi = WasiCtx::builder();
+        wasi.allow_blocking_current_thread(false);
         let data_dir = match &self.data_root {
             Some(root) => {
                 let dir = root.join(name);
@@ -1331,15 +1340,20 @@ impl PluginHost {
         );
         let linker = &self.linker;
         let busy = self.ticker.busy();
-        let instance =
-            outside_async_runtime(|| match manifest.api.as_str() {
-                "0.1" => v0_1::HelixPlugin::instantiate(&mut store, &component, linker)
-                    .map(Instance::V0_1),
-                "0.2" => v0_2::HelixPlugin::instantiate(&mut store, &component, linker)
-                    .map(Instance::V0_2),
-                _ => unreachable!("manifest API was validated"),
+        let instance = outside_async_runtime(|| {
+            self.runtime.run(self.limits.init, async {
+                match manifest.api.as_str() {
+                    "0.1" => v0_1::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_1),
+                    "0.2" => v0_2::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_2),
+                    _ => unreachable!("manifest API was validated"),
+                }
             })
-            .with_context(|| format!("failed to start plugin '{name}'"))?;
+        })
+        .with_context(|| format!("failed to start plugin '{name}'"))?;
         drop(busy);
 
         let mut plugin = Plugin {
@@ -1351,12 +1365,14 @@ impl PluginHost {
             events: Vec::new(),
             disabled: None,
             ticker: self.ticker.clone(),
+            runtime: self.runtime.clone(),
         };
+        let config = settings.config;
         let (registration, actions) = plugin.call(
             Snapshot::default(),
             CallContext::Init,
             self.limits.init,
-            |guest, store| guest.call_init(store, &settings.config),
+            move |guest, store| Box::pin(async move { guest.call_init(store, &config).await }),
         )?;
         let (commands, events) =
             registration.map_err(|err| anyhow!("plugin '{name}' failed to start: {err}"))?;
@@ -1413,10 +1429,15 @@ impl PluginHost {
         }
         let name = plugin.manifest.name.clone();
         let pending = plugin.store.data().pending.clone();
-        let (result, actions) =
-            plugin.call(snapshot, CallContext::Command, limit, |guest, store| {
-                guest.call_run_command(store, command, &args)
-            })?;
+        let command_name = command.to_owned();
+        let (result, actions) = plugin.call(
+            snapshot,
+            CallContext::Command,
+            limit,
+            move |guest, store| {
+                Box::pin(async move { guest.call_run_command(store, &command_name, &args).await })
+            },
+        )?;
         if let Err(err) = result {
             plugin.store.data_mut().pending = pending;
             bail!("{name}/{command}: {err}");
@@ -1485,7 +1506,9 @@ impl PluginHost {
                 snapshot.clone(),
                 CallContext::Callback,
                 self.limits.command,
-                |guest, store| guest.call_callback(store, &callback),
+                move |guest, store| {
+                    Box::pin(async move { guest.call_callback(store, &callback).await })
+                },
             )
             .map(|((), actions)| actions)
     }
@@ -1535,7 +1558,7 @@ impl PluginHost {
                     snapshot.clone(),
                     CallContext::Event,
                     limit,
-                    move |guest, store| guest.call_event(store, event),
+                    move |guest, store| Box::pin(guest.call_event(store, event)),
                 )
                 .map(|((), actions)| actions),
         )
@@ -1603,12 +1626,45 @@ fn compile(
     Ok(component)
 }
 
-/// Run `f` on a thread without an entered async runtime.
-///
-/// The synchronous WASI implementation drives its I/O (a plugin writing to
-/// stderr, e.g. when it panics) with `Handle::block_on` when a Tokio runtime is
-/// entered, which panics when called from within the runtime, as the editor
-/// does. On a fresh thread WASI uses its own runtime instead.
+type CallFuture<'a, R> = Pin<Box<dyn Future<Output = wasmtime::Result<R>> + Send + 'a>>;
+
+/// One parked runtime per host. Only a plugin call drives its timer and I/O.
+/// Shutdown must not wait for an uncancellable OS operation (e.g. opening a
+/// FIFO): WASI runs those on Tokio's blocking pool, outside the editor thread.
+struct CallRuntime(Option<tokio::runtime::Runtime>);
+
+impl CallRuntime {
+    fn new() -> anyhow::Result<Self> {
+        Ok(Self(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        )))
+    }
+
+    fn run<R>(
+        &self,
+        limit: Duration,
+        future: impl Future<Output = wasmtime::Result<R>>,
+    ) -> wasmtime::Result<R> {
+        self.0.as_ref().unwrap().block_on(async {
+            tokio::time::timeout(limit, future)
+                .await
+                .map_err(|_| anyhow!(Trap::Interrupt))?
+        })
+    }
+}
+
+impl Drop for CallRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// Run a bounded async plugin call outside the editor's entered runtime.
+/// The current-thread runtime advances only while this scoped thread runs.
 fn outside_async_runtime<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     std::thread::scope(|scope| match scope.spawn(f).join() {
         Ok(result) => result,

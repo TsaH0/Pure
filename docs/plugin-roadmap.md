@@ -51,8 +51,10 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 
 The editor builds a `Snapshot` of the state a plugin may read and calls the
 plugin **synchronously** with time and memory limits (`Limits`). The call runs
-on a scoped thread outside Tokio (`outside_async_runtime`), because WASI's
-sync bindings call `block_on`. Writes made by the plugin are recorded as
+on a scoped thread outside the editor's Tokio runtime
+(`outside_async_runtime`), driving a host-owned current-thread runtime.
+Async WASI imports are bounded by `tokio::time::timeout`; the parked epoch
+ticker also interrupts CPU loops. Writes made by the plugin are recorded as
 `Action`s and applied by `helix-term/src/plugins.rs::apply` after the call
 returns. An `APPLYING` guard stops an edit made by a plugin from re-triggering
 plugin events. Every new ability follows this pattern: **a host function
@@ -407,7 +409,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   settings. Private editor tests cover file-grant boundaries and stale load
   installation (`cargo test -p helix-term --lib --features integration plugins::tests`).
 
-- [ ] **M11.1 Blocking WASI calls can hang the editor** (high). The epoch
+- [x] **M11.1 Blocking WASI calls can hang the editor** (high). The epoch
   time limit only interrupts running wasm; a plugin calling
   `std::thread::sleep` or reading a FIFO blocks the UI forever. Fix: enable
   Wasmtime `async_support`, call exports with `call_*_async` under
@@ -469,6 +471,10 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 ## Future TODOs (not yet milestones)
 
+- [ ] **Cancel blocked filesystem workers:** async timeouts stop the guest
+  and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
+  pool can survive until the FIFO wakes. Track upstream WASI/cap-std support
+  for opening nonblocking from the start; keep host shutdown nonblocking.
 - [ ] **Background load metadata:** `load_in_background` writes `LOADED`
   before its generation check. A delayed task can overwrite the reload's
   directory/settings even when its host is correctly dropped. Install this

@@ -59,7 +59,27 @@ Validation: 57 host tests (one benchmark ignored), 29 editor library tests,
 Workspace formatting and `cargo clippy --workspace --all-targets` passed
 without warnings. Removed two redundant event clones and unused test-case
 storage reported by the checks; line-ending conversion still happens when
-constructing a test case.
+constructing a test case. The documented full suite completed with 224 passes,
+zero failures and eight `commands::movement` tests filtered out.
+
+## M11.1 Bounded WASI calls
+
+The host uses async Wasmtime exports and WASI imports, driven by a parked
+current-thread Tokio runtime on the existing scoped call thread. A wall-clock
+timeout covers suspended imports and instantiation; epoch interruption still
+bounds CPU loops. The epoch ticker runs only while a call is active. Neither
+the runtime nor ticker adds periodic idle work or changes the guest ABI.
+WASI filesystem operations run off the call thread. Host shutdown uses
+`shutdown_background`, so an uncancellable OS FIFO open cannot hang reload or
+exit; the remaining worker lifetime is recorded as a roadmap TODO.
+
+Validation: 60 host tests (one benchmark ignored), 29 editor library tests,
+and 35 in-editor plugin tests passed. New host tests bound their own runtime
+and exercise sleep in both ABIs, init/events/callbacks, a blocked FIFO open,
+and host destruction. A tmux check with scratch configuration showed the
+2-second timeout after 2.12 seconds, followed by successful editing and saving.
+Formatting, workspace Clippy (no warnings), and the normal editor build passed.
+The release benchmark is running; its measurements will be recorded separately.
 
 ## M0 API 0.2 groundwork (done)
 

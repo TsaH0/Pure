@@ -6,6 +6,7 @@ use helix_plugin_api::{
 };
 
 thread_local! {
+    static SLEEP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static APPEND_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENT_UI: Cell<bool> = const { Cell::new(false) };
 }
@@ -13,12 +14,17 @@ thread_local! {
 struct TestPlugin;
 impl Plugin for TestPlugin {
     fn init(config: String) -> Result<Registration, String> {
+        if config.contains("sleep-init") {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+        SLEEP_ON_OPEN.set(config.contains("sleep-on-open"));
         EVENT_UI.set(config.contains("event-ui"));
         APPEND_ON_OPEN.set(config.contains("append-on-open"));
         editor::set_status(&format!("0.2 init:{config}"));
         Ok(Registration {
             commands: [
                 "inspect",
+                "sleep",
                 "edit-close",
                 "recursive",
                 "ordered-picker",
@@ -58,6 +64,10 @@ impl Plugin for TestPlugin {
 
     fn run_command(name: &str, args: Vec<String>) -> Result<(), String> {
         match name {
+            "sleep" => {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                editor::set_status("sleep returned");
+            }
             "edit-close" => {
                 let doc = editor::current_document().ok_or("no document")?;
                 editor::apply_edits(
@@ -125,6 +135,9 @@ impl Plugin for TestPlugin {
                             }
                             "command" => return editor::run_command("goto_line_end"),
                             "fail" => return Err("callback failed on purpose".into()),
+                            "sleep" => {
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
                             "spin" => loop {
                                 std::hint::spin_loop();
                             },
@@ -287,6 +300,9 @@ impl Plugin for TestPlugin {
     }
 
     fn on_document_open(doc: DocumentId) {
+        if SLEEP_ON_OPEN.get() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
         if APPEND_ON_OPEN.get() {
             let text = editor::text(doc).unwrap();
             editor::apply_edits(

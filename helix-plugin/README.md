@@ -79,7 +79,8 @@ e = ":plugin-run yazi/open"
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
   5 s for `init`) and plugins get at most **256 MiB** of memory. A plugin that
   runs out of time, out of memory or crashes is **disabled** (until
-  `:plugin-reload`) and the editor keeps going.
+  `:plugin-reload`) and the editor keeps going. Time limits also cover
+  suspended WASI calls, such as sleeping or waiting to open a FIFO.
 
 ## How calls work
 

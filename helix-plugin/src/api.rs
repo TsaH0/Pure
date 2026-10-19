@@ -3,10 +3,10 @@ use super::{types, CommandInfo, DocumentId, Event, EventKind, State};
 use wasmtime::{Result, Store};
 
 pub(crate) mod v0_1 {
-    wasmtime::component::bindgen!({ path: "wit/v0.1", world: "helix-plugin" });
+    wasmtime::component::bindgen!({ path: "wit/v0.1", world: "helix-plugin", exports: { default: async } });
 }
 pub(crate) mod v0_2 {
-    wasmtime::component::bindgen!({ path: "wit/v0.2", world: "helix-plugin" });
+    wasmtime::component::bindgen!({ path: "wit/v0.2", world: "helix-plugin", exports: { default: async } });
 }
 
 impl types::Host for State {}
@@ -222,80 +222,84 @@ pub(crate) enum Instance {
 impl Instance {
     /// `init`: the plugin's commands and the events it subscribes to.
     #[allow(clippy::type_complexity)]
-    pub fn call_init(
+    pub async fn call_init(
         &self,
         store: &mut Store<State>,
         config: &str,
     ) -> Result<std::result::Result<(Vec<CommandInfo>, Vec<EventKind>), String>> {
         match self {
-            Self::V0_1(instance) => {
-                instance
-                    .helix_plugin_plugin()
-                    .call_init(store, config)
-                    .map(|r| {
-                        r.map(|r| {
-                            let events = r
-                                .events
-                                .into_iter()
-                                .map(|e| match e {
-                                    types::EventKind::DocumentOpen => EventKind::DocumentOpen,
-                                    types::EventKind::DocumentChange => EventKind::DocumentChange,
-                                    types::EventKind::ModeSwitch => EventKind::ModeSwitch,
-                                })
-                                .collect();
-                            (r.commands, events)
-                        })
+            Self::V0_1(instance) => instance
+                .helix_plugin_plugin()
+                .call_init(store, config)
+                .await
+                .map(|r| {
+                    r.map(|r| {
+                        let events = r
+                            .events
+                            .into_iter()
+                            .map(|e| match e {
+                                types::EventKind::DocumentOpen => EventKind::DocumentOpen,
+                                types::EventKind::DocumentChange => EventKind::DocumentChange,
+                                types::EventKind::ModeSwitch => EventKind::ModeSwitch,
+                            })
+                            .collect();
+                        (r.commands, events)
                     })
-            }
-            Self::V0_2(instance) => {
-                instance
-                    .helix_plugin_plugin()
-                    .call_init(store, config)
-                    .map(|r| {
-                        r.map(|r| {
-                            use v0_2::helix::plugin::types::EventKind as E;
-                            let commands = r
-                                .commands
-                                .into_iter()
-                                .map(|c| CommandInfo {
-                                    name: c.name,
-                                    doc: c.doc,
-                                })
-                                .collect();
-                            let events = r
-                                .events
-                                .into_iter()
-                                .map(|e| match e {
-                                    E::DocumentOpen => EventKind::DocumentOpen,
-                                    E::DocumentChange => EventKind::DocumentChange,
-                                    E::ModeSwitch => EventKind::ModeSwitch,
-                                    E::DocumentSave => EventKind::DocumentSave,
-                                    E::DocumentClose => EventKind::DocumentClose,
-                                    E::SelectionChange => EventKind::SelectionChange,
-                                })
-                                .collect();
-                            (commands, events)
-                        })
+                }),
+            Self::V0_2(instance) => instance
+                .helix_plugin_plugin()
+                .call_init(store, config)
+                .await
+                .map(|r| {
+                    r.map(|r| {
+                        use v0_2::helix::plugin::types::EventKind as E;
+                        let commands = r
+                            .commands
+                            .into_iter()
+                            .map(|c| CommandInfo {
+                                name: c.name,
+                                doc: c.doc,
+                            })
+                            .collect();
+                        let events = r
+                            .events
+                            .into_iter()
+                            .map(|e| match e {
+                                E::DocumentOpen => EventKind::DocumentOpen,
+                                E::DocumentChange => EventKind::DocumentChange,
+                                E::ModeSwitch => EventKind::ModeSwitch,
+                                E::DocumentSave => EventKind::DocumentSave,
+                                E::DocumentClose => EventKind::DocumentClose,
+                                E::SelectionChange => EventKind::SelectionChange,
+                            })
+                            .collect();
+                        (commands, events)
                     })
-            }
+                }),
         }
     }
-    pub fn call_run_command(
+    pub async fn call_run_command(
         &self,
         store: &mut Store<State>,
         name: &str,
         args: &[String],
     ) -> Result<std::result::Result<(), String>> {
         match self {
-            Self::V0_1(instance) => instance
-                .helix_plugin_plugin()
-                .call_run_command(store, name, args),
-            Self::V0_2(instance) => instance
-                .helix_plugin_plugin()
-                .call_run_command(store, name, args),
+            Self::V0_1(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
+            Self::V0_2(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
         }
     }
-    pub fn call_callback(
+    pub async fn call_callback(
         &self,
         store: &mut Store<State>,
         callback: &super::Callback,
@@ -305,31 +309,35 @@ impl Instance {
         };
         let callbacks = instance.helix_plugin_callbacks();
         match callback {
-            super::Callback::ProcessDone { id, result } => callbacks.call_on_process_done(
-                store,
-                *id,
-                result.as_ref().map_err(|err| err.as_str()),
-            ),
+            super::Callback::ProcessDone { id, result } => {
+                callbacks
+                    .call_on_process_done(store, *id, result.as_ref().map_err(|err| err.as_str()))
+                    .await
+            }
             super::Callback::PickerDone { id, result } => {
-                callbacks.call_on_picker_done(store, *id, result)
+                callbacks.call_on_picker_done(store, *id, result).await
             }
             super::Callback::PromptDone { id, result } => {
-                callbacks.call_on_prompt_done(store, *id, result.as_deref())
+                callbacks
+                    .call_on_prompt_done(store, *id, result.as_deref())
+                    .await
             }
             super::Callback::PickerQuery { id, query } => {
-                callbacks.call_on_picker_query(store, *id, query)
+                callbacks.call_on_picker_query(store, *id, query).await
             }
         }
     }
 
-    pub fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
+    pub async fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
         match self {
             Self::V0_1(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {
-                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
-                    Event::ModeSwitch { old, new } => guest.call_on_mode_switch(store, old, new),
+                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
+                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
+                    Event::ModeSwitch { old, new } => {
+                        guest.call_on_mode_switch(store, old, new).await
+                    }
                     // 0.1 plugins can't subscribe to these.
                     Event::DocumentSave(_)
                     | Event::DocumentClose(_)
@@ -339,20 +347,31 @@ impl Instance {
             Self::V0_2(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {
-                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
+                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
+                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
                     Event::ModeSwitch { old, new } => {
-                        guest.call_on_mode_switch(store, to_v2_mode(old), to_v2_mode(new))
+                        guest
+                            .call_on_mode_switch(store, to_v2_mode(old), to_v2_mode(new))
+                            .await
                     }
-                    Event::DocumentSave(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_document_save(store, doc),
-                    Event::DocumentClose(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_document_close(store, doc),
-                    Event::SelectionChange(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_selection_change(store, doc),
+                    Event::DocumentSave(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_document_save(store, doc)
+                            .await
+                    }
+                    Event::DocumentClose(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_document_close(store, doc)
+                            .await
+                    }
+                    Event::SelectionChange(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_selection_change(store, doc)
+                            .await
+                    }
                 }
             }
         }

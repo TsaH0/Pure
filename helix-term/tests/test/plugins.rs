@@ -789,3 +789,17 @@ async fn plugin_event_subscribers_see_the_previous_plugins_edits() -> anyhow::Re
     assert_eq!(text(&app), "abc[3][6]");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_blocked_in_wasi_return_control_to_the_editor() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    let start = std::time::Instant::now();
+    keys(&mut app, ":plugin-run testplugin2/sleep<ret>").await;
+    assert_error(&app, "took longer than 2000 ms");
+    assert!(start.elapsed() < Duration::from_secs(10));
+    keys(&mut app, "iworks<esc>").await;
+    assert_eq!(text(&app), "worksa\n");
+    keys(&mut app, ":plugin-run testplugin2/sleep<ret>").await;
+    assert_error(&app, "is disabled");
+    Ok(())
+}
