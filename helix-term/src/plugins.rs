@@ -312,12 +312,24 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 cwd,
                 chooser_file,
                 wait_for_key,
-            } => match process::interactive(plugin.clone(), id, argv, cwd, chooser_file, wait_for_key)
-            {
+            } => match process::interactive(
+                plugin.clone(),
+                id,
+                argv,
+                cwd,
+                chooser_file,
+                wait_for_key,
+            ) {
                 Ok(interactive) => later(move |_, compositor| {
                     compositor.interactive = Some(interactive);
                 }),
-                Err(err) => deliver_later(plugin, Callback::ProcessDone { id, result: Err(err) }),
+                Err(err) => deliver_later(
+                    plugin,
+                    Callback::ProcessDone {
+                        id,
+                        result: Err(err),
+                    },
+                ),
             },
             Action::Kill { plugin, id } => process::kill(&plugin, id),
             Action::ShowPicker { plugin, id, picker } => {
@@ -474,7 +486,10 @@ pub fn describe() -> String {
         if !permissions.is_empty() {
             out.push_str(&format!("permissions: {}\n", permissions.join(", ")));
         }
-        if plugin.permissions.contains(&helix_plugin::Permission::Process) {
+        if plugin
+            .permissions
+            .contains(&helix_plugin::Permission::Process)
+        {
             out.push_str(&format!("process: {}\n", plugin.process));
         }
         for command in &plugin.commands {

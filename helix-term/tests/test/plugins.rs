@@ -498,7 +498,10 @@ async fn picker_close_hook_cancels_empty_picker_on_enter() -> anyhow::Result<()>
 /// An editor with only the 0.2 test plugin, with `permissions` and the
 /// plugin's `plugins.toml` table `settings`.
 fn app_with_v2(permissions: &str, settings: &str) -> (Application, tempfile::TempDir) {
-    let mut app = AppBuilder::new().with_input_text("#[a|]#\n").build().unwrap();
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
     let root = tempfile::tempdir().unwrap();
     let plugin = root.path().join("testplugin2");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -543,16 +546,22 @@ async fn wait_for_status(app: &mut Application, done: impl Fn(&str) -> bool) -> 
 #[tokio::test(flavor = "multi_thread")]
 async fn plugins_run_programs_when_granted() -> anyhow::Result<()> {
     // Without the user's grant, the permission alone is not enough.
-    let (mut app, _dir) = app_with_v2(WITH_PROCESS, "");
+    let (mut app, dir) = app_with_v2(WITH_PROCESS, "");
     keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
     assert_error(&app, "allow-process");
 
-    let (mut app, _dir) = app_with_v2(WITH_PROCESS, r#"allow-process = ["sh"]"#);
+    // Grant `sh` only. (Reload rather than build a second application: only
+    // the first one in a runtime gets the job queue.)
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin2]\nallow-process = [\"sh\"]\n",
+    )?;
     keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
     assert_error(&app, "'echo' is not in allow-process");
     keys(
         &mut app,
-        r#":plugin-run testplugin2/spawn sh -c "echo out; echo err >&2; exit 4"<ret>"#,
+        r#":plugin-run testplugin2/spawn sh -c "echo out; echo err <gt>&2; exit 4"<ret>"#,
     )
     .await;
     let message = wait_for_status(&mut app, |s| s.starts_with("exit:")).await;
@@ -574,9 +583,13 @@ async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> 
         // Filtering keeps the original index.
         ("gam<ret>", "choice:[2]:Some(OpenAction::Replace)"),
     ] {
-        keys(&mut app, ":plugin-run testplugin2/picker alpha beta gamma<ret>").await;
+        keys(
+            &mut app,
+            ":plugin-run testplugin2/picker alpha beta gamma<ret>",
+        )
+        .await;
         // The picker opens once the command's event is handled.
-        run_event_loop_until_idle(&mut app).await;
+        deliver_events(&mut app).await;
         app.editor.set_status("");
         keys(&mut app, keys_).await;
         let message = wait_for_status(&mut app, |s| s.starts_with("choice:")).await;
@@ -586,8 +599,7 @@ async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> 
     app.editor.set_status("");
     keys(&mut app, "<space>'").await;
     keys(&mut app, "<ret>").await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    run_event_loop_until_idle(&mut app).await;
+    deliver_events(&mut app).await;
     assert!(!app
         .editor
         .get_status()

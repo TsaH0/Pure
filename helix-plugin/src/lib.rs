@@ -220,7 +220,10 @@ pub enum Action {
         wait_for_key: bool,
     },
     /// Kill a program started with `Spawn`.
-    Kill { plugin: String, id: u32 },
+    Kill {
+        plugin: String,
+        id: u32,
+    },
     /// Show a picker and deliver [`Callback::PickerDone`].
     ShowPicker {
         plugin: String,
@@ -237,12 +240,14 @@ pub enum Action {
 
 /// Result of a background program or interactive chooser.
 pub use v0_2::helix::plugin::process::Output as ProcessOutput;
+/// How to open a picked item.
+pub use v0_2::helix::plugin::types::OpenAction;
 /// A picker choice, including the requested split action.
 pub use v0_2::helix::plugin::ui::PickerResult;
 /// A picker as a plugin describes it.
-pub use v0_2::helix::plugin::ui::{Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview};
-/// How to open a picked item.
-pub use v0_2::helix::plugin::types::OpenAction;
+pub use v0_2::helix::plugin::ui::{
+    Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview,
+};
 
 /// The completion expected for an outstanding request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -645,7 +650,9 @@ impl State {
             ));
         }
         if picker.items.len() > MAX_PICKER_ITEMS {
-            return Err(format!("a picker can have at most {MAX_PICKER_ITEMS} items"));
+            return Err(format!(
+                "a picker can have at most {MAX_PICKER_ITEMS} items"
+            ));
         }
         let id = self.request(PendingKind::Picker)?;
         self.actions.push(Action::ShowPicker {

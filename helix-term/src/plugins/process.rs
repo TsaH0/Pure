@@ -110,7 +110,9 @@ async fn run(
     let mut stderr = stderr.finish().await;
     for (truncated, name) in [(stdout.1, "stdout"), (stderr.1, "stderr")] {
         if truncated {
-            stderr.0.push_str(&format!("\n[{name} truncated at 16 MiB]"));
+            stderr
+                .0
+                .push_str(&format!("\n[{name} truncated at 16 MiB]"));
         }
     }
     if let Some(note) = note {
@@ -185,7 +187,10 @@ pub fn interactive(
     wait_for_key: bool,
 ) -> Result<Interactive, String> {
     let chooser = if chooser_file {
-        Some(create_chooser_file().map_err(|err| format!("failed to create a chooser file: {err}"))?)
+        Some(
+            create_chooser_file()
+                .map_err(|err| format!("failed to create a chooser file: {err}"))?,
+        )
     } else {
         None
     };
@@ -260,7 +265,12 @@ mod test {
 
     #[tokio::test]
     async fn output_and_exit_code() {
-        let out = run_sh("echo hi; echo err >&2; exit 3", None, Duration::from_secs(5)).await;
+        let out = run_sh(
+            "echo hi; echo err >&2; exit 3",
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
         assert_eq!(out.exit_code, Some(3));
         assert_eq!(out.stdout, "hi\n");
         assert_eq!(out.stderr, "err\n");
@@ -268,7 +278,12 @@ mod test {
 
     #[tokio::test]
     async fn stdin_cwd_and_lossy_utf8() {
-        let out = run_sh("cat; printf '\\377'", Some("in put"), Duration::from_secs(5)).await;
+        let out = run_sh(
+            "cat; printf '\\377'",
+            Some("in put"),
+            Duration::from_secs(5),
+        )
+        .await;
         assert_eq!(out.stdout, "in put\u{FFFD}");
         let dir = tempfile::tempdir().unwrap();
         let (_kill, kill_rx) = oneshot::channel();
@@ -298,7 +313,13 @@ mod test {
         assert!(started.elapsed() < Duration::from_secs(5));
 
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
-        let task = tokio::spawn(run(sh("sleep 30"), None, None, Duration::from_secs(30), kill_rx));
+        let task = tokio::spawn(run(
+            sh("sleep 30"),
+            None,
+            None,
+            Duration::from_secs(30),
+            kill_rx,
+        ));
         tokio::time::sleep(Duration::from_millis(100)).await;
         drop(kill_tx);
         let out = task.await.unwrap().unwrap();
@@ -318,7 +339,10 @@ mod test {
         )
         .await
         .unwrap_err();
-        assert!(err.contains("failed to run '/nonexistent/program'"), "{err}");
+        assert!(
+            err.contains("failed to run '/nonexistent/program'"),
+            "{err}"
+        );
     }
 
     #[test]

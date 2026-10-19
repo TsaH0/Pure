@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::ui::menu::Cell;
 use helix_event::runtime_local;
 use helix_plugin::{Callback, OpenAction, PickerItem, PickerPreview, PickerResult, PickerSpec};
 use helix_view::editor::Action;
 use parking_lot::Mutex;
-use crate::ui::menu::Cell;
 
 use crate::compositor::Compositor;
 use crate::ui::{self, picker::Injector, Picker, PickerColumn};
