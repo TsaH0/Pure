@@ -357,6 +357,40 @@ the hook first and keep it generic.
   setup, every permission, every host function with an example); a book
   page linking to it.
 
+## M10. API 0.3
+
+0.2 is released (on `master`), so it is frozen: these need a new version.
+Do them together, as one version.
+
+- [ ] **M10.1 The 0.3 world, cheaply.** Copy `wit/v0.2` to `wit/v0.3`
+  (package `helix:plugin@0.3.0`) and add the functions below. In
+  `helix-plugin/src/api.rs` add `mod v0_3` (a third `bindgen!`), the `Host`
+  impls (thin wrappers over `State` methods, like 0.2's) and an
+  `Instance::V0_3` arm everywhere `V0_2` is matched. To keep the host types
+  (`Action`, `Callback`, `PickerSpec`, ...) single, convert 0.3 types to
+  the host's at the boundary (or move the host's own types out of the
+  generated 0.2 module first and convert both versions into them: that is
+  the cleaner end state). `Manifest::parse` accepts `"0.3"`.
+  - SDK: generate 0.3 by default; keep `api-v0-1` and add `api-v0-2`.
+    Re-check `register_plugin!`: exports that differ between versions go
+    through version-specific macros (see `__export_callbacks!`).
+  - Keep a frozen 0.2 component fixture (like `text-tools-v0.1.wasm`) and
+    run the 0.2 tests against it.
+  - Done when: 0.1, 0.2 and 0.3 plugins load side by side and every
+    existing test passes.
+- [ ] **M10.2 `open-file` with a split and a position.**
+  `open-file-at: func(path, action: open-action, line: option<u32>,
+  column: option<u32>)`. Then drop the `:vsplit` workaround in
+  `examples/finder`.
+- [ ] **M10.3 Popup ids and `on-popup-close`**; centered popups.
+- [ ] **M10.4 More events:** `post-command(name)`, `focus-gained` /
+  `focus-lost`, `editor-idle` (from the idle timer). Add bits to
+  `plugins::event_bit` and keep the "no cost when unused" rule.
+- [ ] **M10.5 Streaming output:** `stream: bool` in `spawn-options` and
+  `callbacks.on-process-output(id, chunk)` (stdout lines, batched); the
+  final `on-process-done` still comes. Use it in `examples/finder` `files`
+  with `push-items`.
+
 ## Later: APIs for file-manager style plugins
 
 Pure won't ship a file manager (see Scope), but users should be able to write
