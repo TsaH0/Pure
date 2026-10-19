@@ -189,6 +189,7 @@ pub fn show(
             },
         );
     })
+    .with_title(spec.title)
     // Its request is answered once; choosing again would go nowhere.
     .not_reopenable();
     if let Some(initial) = spec.initial.filter(|&initial| initial < len) {

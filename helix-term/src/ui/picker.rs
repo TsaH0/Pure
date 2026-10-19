@@ -280,6 +280,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     on_close: Option<PickerCloseCallback>,
     /// Whether `space '` can reopen the picker after it closes.
     reopenable: bool,
+    /// Shown in the top border, if set.
+    title: Option<Arc<str>>,
     default_action: Action,
 
     pub truncate_start: bool,
@@ -404,6 +406,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             callback_fn: Box::new(callback_fn),
             on_close: None,
             reopenable: true,
+            title: None,
             default_action: Action::Replace,
             completion_height: 0,
             widths,
@@ -441,6 +444,13 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
     /// Don't keep the picker for `space '` (`last_picker`) once it closes,
     /// e.g. when choosing from it twice makes no sense.
+    /// A title in the picker's top border.
+    pub fn with_title(mut self, title: impl Into<Arc<str>>) -> Self {
+        let title: Arc<str> = title.into();
+        self.title = (!title.is_empty()).then_some(title);
+        self
+    }
+
     pub fn not_reopenable(mut self) -> Self {
         self.reopenable = false;
         self
@@ -796,12 +806,15 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let background = cx.editor.theme.get("ui.background");
         surface.clear_with(area, background);
 
-        const BLOCK: Block<'_> = Block::bordered();
+        let block = match &self.title {
+            Some(title) => Block::bordered().title(format!(" {title} ")),
+            None => Block::bordered(),
+        };
 
         // calculate the inner area inside the box
-        let inner = BLOCK.inner(area);
+        let inner = block.inner(area);
 
-        BLOCK.render(area, surface);
+        block.render(area, surface);
 
         // -- Render the input bar:
 

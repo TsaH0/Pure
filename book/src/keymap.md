@@ -121,6 +121,7 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | `S`                      | Split selection into sub selections on regex matches              | `split_selection`                    |
 | `Alt-s`                  | Split selection on newlines                                       | `split_selection_on_newline`         |
 | `Alt-minus`              | Merge selections                                                  | `merge_selections`                   |
+| `Alt-m`                  | Select inside the next bracket or quote pair on the line (again: the next pair inside) | `select_inside_next_pair` |
 | `Alt-_`                  | Merge consecutive selections                                      | `merge_consecutive_selections`       |
 | `&`                      | Align selection in columns                                        | `align_selections`                   |
 | `_`                      | Trim whitespace from the selection                                | `trim_selections`                    |

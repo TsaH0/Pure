@@ -543,6 +543,7 @@ impl MappableCommand {
         shrink_selection, "Shrink selection to previously expanded syntax node",
         select_next_sibling, "Select next sibling in the syntax tree",
         select_prev_sibling, "Select previous sibling the in syntax tree",
+        select_inside_next_pair, "Select inside the next bracket or quote pair on the line",
         select_all_siblings, "Select all siblings of the current node",
         select_all_children, "Select all children of the current node",
         jump_forward, "Jump forward on jumplist",
@@ -6022,6 +6023,23 @@ fn select_next_sibling(cx: &mut Context) {
 
 fn select_prev_sibling(cx: &mut Context) {
     select_sibling_impl(cx, object::select_prev_sibling)
+}
+
+/// Select inside the nearest bracket or quote pair on the line: the next one
+/// to the right, else the nearest to the left, else the one around the
+/// cursor. Pressing it again steps into the next pair.
+fn select_inside_next_pair(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        match helix_core::surround::find_next_pair_on_line(text, range.from()) {
+            Some((open, close)) if close > open + 1 => Range::new(open + 1, close),
+            // Empty pair: put the cursor between the delimiters.
+            Some((open, _)) => Range::point(open + 1),
+            None => range,
+        }
+    });
+    doc.set_selection(view.id, selection);
 }
 
 fn move_node_bound_impl(cx: &mut Context, dir: Direction, movement: Movement) {
