@@ -1,5 +1,8 @@
 ## Package managers
 
+> Note: these packages install upstream Helix (the `hx` command), not Pure.
+> To get Pure, [build it from source](./building-from-source.md).
+
 - [Linux](#linux)
   - [Debian](#debian)
   - [Ubuntu/Mint](#ubuntumint)

@@ -1,4 +1,4 @@
-//! SDK for writing [Helix](https://helix-editor.com) plugins in Rust.
+//! SDK for writing [Pure](https://github.com/TsaH0/helix-editor-custom) plugins in Rust.
 //!
 //! ```ignore
 //! use helix_plugin_api::{editor, register_plugin, CommandInfo, Plugin, Registration};
@@ -45,7 +45,7 @@ pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
 }
 
-/// A Helix plugin. Only `init` and `run_command` have to be implemented; the
+/// A Pure plugin. Only `init` and `run_command` have to be implemented; the
 /// event handlers are only called for the events returned from `init`.
 pub trait Plugin {
     /// Called once when the plugin is loaded. `config` is the plugin's table in

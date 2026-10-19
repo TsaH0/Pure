@@ -518,14 +518,14 @@ fn build_grammar(grammar: GrammarConfiguration, target: Option<&str>) -> Result<
 
     let grammar_dir_entries = grammar_dir.read_dir().with_context(|| {
         format!(
-            "Failed to read directory {:?}. Did you use 'hx --grammar fetch'?",
+            "Failed to read directory {:?}. Did you use 'pure --grammar fetch'?",
             grammar_dir
         )
     })?;
 
     if grammar_dir_entries.count() == 0 {
         return Err(anyhow!(
-            "Directory {:?} is empty. Did you use 'hx --grammar fetch'?",
+            "Directory {:?} is empty. Did you use 'pure --grammar fetch'?",
             grammar_dir
         ));
     };

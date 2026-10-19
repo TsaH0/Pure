@@ -1,6 +1,6 @@
 ## Adding indent queries
 
-Helix uses tree-sitter to correctly indent new lines. This requires a
+Pure uses tree-sitter to correctly indent new lines. This requires a
 tree-sitter grammar and an `indent.scm` query file placed in
 `runtime/queries/{language}/indents.scm`.
 
@@ -14,7 +14,7 @@ Note that it matters where these scopes *begin*: multiple scopes that open on
 the same physical line only increase the indent by 1 (the same-line rule). See
 [Capture types](#capture-types).
 
-By default, Helix uses the `hybrid` indentation heuristic. This means that
+By default, Pure uses the `hybrid` indentation heuristic. This means that
 indent queries are not used to compute the expected absolute indentation of a
 line but rather the expected difference in indentation between the new and an
 already existing line. This difference is then added to the actual indentation
@@ -25,7 +25,7 @@ the `tree-sitter` heuristic is used.
 
 ## Indent queries
 
-When Helix is inserting a new line through `o`, `O`, or `<ret>`, to determine
+When Pure is inserting a new line through `o`, `O`, or `<ret>`, to determine
 the indent level for the new line, the query in `indents.scm` is run on the
 document. The starting position of the query is the end of the line above where
 a new line will be inserted.

@@ -7,7 +7,7 @@ in `languages.toml` files.
 
 There are three possible locations for a `languages.toml` file:
 
-1. In the Helix source code, which lives in the
+1. In the Pure source code, which lives in the
    [Helix repository](https://github.com/helix-editor/helix/blob/master/languages.toml).
    It provides the default configurations for languages and language servers.
 
@@ -58,7 +58,7 @@ These configuration keys are available:
 | `injection-regex`     | regex pattern that will be tested against a language name in order to determine whether this language should be used for a potential [language injection][treesitter-language-injection] site. |
 | `file-types`          | The filetypes of the language, for example `["yml", "yaml"]`. See the file-type detection section below. |
 | `shebangs`            | The interpreters from the shebang line, for example `["sh", "bash"]` |
-| `roots`               | A set of marker files used for LSP working directory selection. Helix starts at the file, walks upward, and remembers the *topmost* i.e. *last* directory that contains a marker file. For example Cargo.lock, yarn.lock |
+| `roots`               | A set of marker files used for LSP working directory selection. Pure starts at the file, walks upward, and remembers the *topmost* i.e. *last* directory that contains a marker file. For example Cargo.lock, yarn.lock |
 | `auto-format`         | Whether to autoformat this language when saving               |
 | `diagnostic-severity` | Minimal severity of diagnostic for it to be displayed. (Allowed values: `error`, `warning`, `info`, `hint`) |
 | `comment-tokens`      | The tokens to use as a comment token, either a single token `"//"` or an array `["//", "///", "//!"]` (the first token will be used for commenting). Also configurable as `comment-token` for backwards compatibility|
@@ -73,20 +73,20 @@ These configuration keys are available:
 | `path-completion`     | Overrides the `editor.path-completion` config key for the language. |
 | `word-completion`     | Overrides the [`editor.word-completion`](./editor.md#editorword-completion-section) configuration for the language. |
 | `workspace-lsp-roots`     | Directories (relative to the workspace root) that stop the upward root search early. Meant for project-specific hard overrides in a local `.helix/config.toml`; |
-| `persistent-diagnostic-sources` | An array of LSP diagnostic sources assumed unchanged when the language server resends the same set of diagnostics. Helix can track the position for these diagnostics internally instead. Useful for diagnostics that are recomputed on save.
+| `persistent-diagnostic-sources` | An array of LSP diagnostic sources assumed unchanged when the language server resends the same set of diagnostics. Pure can track the position for these diagnostics internally instead. Useful for diagnostics that are recomputed on save.
 | `rainbow-brackets` | Overrides the `editor.rainbow-brackets` config key for the language |
 | `code-actions-on-save`    | List of LSP code actions to be run in order on save, for example `["source.organizeImports"]` |
 
 ## Project and LSP root selection
 
-This is the model Helix uses:
+This is the model Pure uses:
 
 - The **workspace root** is found once by walking upward from the current
   working directory and picking the first directory that contains `.git`, `.svn`,
   `.jj`, or `.helix`. If none are found, the current working directory is the
   workspace root.
 - Root markers (`roots`) are used only for LSP root selection and are found by
-  starting at the **file**, not the folder Helix was opened in.
+  starting at the **file**, not the folder Pure was opened in.
 - We use the **topmost** directory that has a root marker (we stop the search at
   the workspace root).
 - In most cases, root markers are enough. In some repos there are multiple
@@ -98,13 +98,13 @@ This is the model Helix uses:
 
 Interaction with `required-root-patterns` (a language_server configuration key):
 
-- After the LSP root is selected, Helix checks for `required-root-patterns` in
+- After the LSP root is selected, Pure checks for `required-root-patterns` in
   that directory. If none match, the server is not started.
 - This is validation, not root detection.
 
 ### File-type detection and the `file-types` key
 
-Helix determines which language configuration to use based on the `file-types` key
+Pure determines which language configuration to use based on the `file-types` key
 from the above section. `file-types` is a list of strings or tables, for
 example:
 
@@ -112,7 +112,7 @@ example:
 file-types = ["toml", { glob = "Makefile" }, { glob = ".git/config" }, { glob = ".github/workflows/*.yaml" } ]
 ```
 
-When determining a language configuration to use, Helix searches the file-types
+When determining a language configuration to use, Pure searches the file-types
 with the following priorities:
 
 1. Glob: values in `glob` tables are checked against the full path of the given
@@ -291,12 +291,12 @@ git repository:
 | ---    | -----------                                               |
 | `git`  | A git remote URL from which the grammar should be cloned  |
 | `rev`  | The revision (commit hash or tag) which should be fetched |
-| `subpath` | A path within the grammar directory which should be built. Some grammar repositories host multiple grammars (for example `tree-sitter-typescript` and `tree-sitter-ocaml`) in subdirectories. This key is used to point `hx --grammar build` to the correct path for compilation. When omitted, the root of repository is used |
+| `subpath` | A path within the grammar directory which should be built. Some grammar repositories host multiple grammars (for example `tree-sitter-typescript` and `tree-sitter-ocaml`) in subdirectories. This key is used to point `pure --grammar build` to the correct path for compilation. When omitted, the root of repository is used |
 
 ### Choosing grammars
 
 You may use a top-level `use-grammars` key to control which grammars are
-fetched and built when using `hx --grammar fetch` and `hx --grammar build`.
+fetched and built when using `pure --grammar fetch` and `pure --grammar build`.
 
 ```toml
 # Note: this key must come **before** the [[language]] and [[grammar]] sections

@@ -19,7 +19,7 @@ Not done yet: phase 4 (async plugin calls, UI APIs) and phase 5 (installing
 plugins, several API versions side by side).
 
 This fork wants plugins: small pieces of user code that add commands, react to
-editor events and change buffers, without rebuilding Helix. This document picks
+editor events and change buffers, without rebuilding Pure. This document picks
 a technology, describes the architecture and splits the work into phases that
 can each be merged and used on their own.
 
@@ -179,7 +179,7 @@ mutably borrowed while commands and hooks run. The simplest correct model:
 Long-running work (calling external programs, network, heavy analysis) comes
 later through WASI 0.3 async: plugin exports become `async`, the host drives the
 future from a tokio task, and results come back to the main thread through
-Helix's existing job queue (`job::dispatch`).
+Pure's existing job queue (`job::dispatch`).
 
 ### Hooks into the existing code
 
@@ -229,7 +229,7 @@ not linked, so the plugin fails to load instead of failing later. Planned
 capabilities: `read-buffers`, `edit-buffers`, `run-commands`, `open-files`,
 `filesystem` (WASI preopens limited to the workspace), `process` (spawn
 programs) and `network`. When a plugin asks for more than the user granted,
-Helix shows what it wants and refuses to load it until the config grants it.
+Pure shows what it wants and refuses to load it until the config grants it.
 
 Memory is capped with a Wasmtime `ResourceLimiter` per store.
 

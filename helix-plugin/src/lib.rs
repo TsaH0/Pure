@@ -105,7 +105,7 @@ impl Manifest {
         }
         if manifest.api != API_VERSION {
             bail!(
-                "plugin '{}' needs plugin API {} but this Helix provides {API_VERSION}",
+                "plugin '{}' needs plugin API {} but this Pure provides {API_VERSION}",
                 manifest.name,
                 manifest.api
             );

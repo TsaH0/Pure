@@ -25,7 +25,7 @@
 
 > 💡 Mappings marked (**TS**) require a tree-sitter grammar for the file type.
 
-> ⚠️ Some terminals' default key mappings conflict with Helix's. If any of the mappings described on this page do not work as expected, check your terminal's mappings to ensure they do not conflict. See the [wiki](https://github.com/helix-editor/helix/wiki/Terminal-Support) for known conflicts.
+> ⚠️ Some terminals' default key mappings conflict with Pure's. If any of the mappings described on this page do not work as expected, check your terminal's mappings to ensure they do not conflict. See the [wiki](https://github.com/helix-editor/helix/wiki/Terminal-Support) for known conflicts.
 
 ## Normal mode
 
@@ -100,7 +100,7 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | `Ctrl-x`    | Decrement object (number) under cursor                               | `decrement`               |
 | `Q`         | Start/stop macro recording to the selected register (experimental)   | `record_macro`            |
 | `q`         | Play back a recorded macro from the selected register (experimental) | `replay_macro`            |
-| `Ctrl-z`    | Suspend Helix and return to the shell (resume with `fg`)             | `suspend`                 |
+| `Ctrl-z`    | Suspend Pure and return to the shell (resume with `fg`)             | `suspend`                 |
 
 #### Shell
 
@@ -400,7 +400,7 @@ These mappings are in the style of [vim-unimpaired](https://github.com/tpope/vim
 
 Accessed by typing `i` in [normal mode](#normal-mode).
 
-Insert mode bindings are minimal by default. Helix is designed to
+Insert mode bindings are minimal by default. Pure is designed to
 be a modal editor, and this is reflected in the user experience and internal
 mechanics. Changes to the text are only saved for undos when
 escaping from insert mode to normal mode.

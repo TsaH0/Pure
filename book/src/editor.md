@@ -75,7 +75,7 @@
 
 ### `[editor.clipboard-provider]` Section
 
-Helix can be configured either to use a builtin clipboard configuration or to use
+Pure can be configured either to use a builtin clipboard configuration or to use
 a provided command.
 
 For instance, setting it to use OSC 52 termcodes, the configuration would be:
@@ -84,7 +84,7 @@ For instance, setting it to use OSC 52 termcodes, the configuration would be:
 clipboard-provider = "termcode"
 ```
 
-Alternatively, Helix can be configured to use arbitrary commands for clipboard integration:
+Alternatively, Pure can be configured to use arbitrary commands for clipboard integration:
 
 ```toml
 [editor.clipboard-provider.custom]
@@ -179,7 +179,7 @@ The following statusline elements can be configured:
 
 [^1]: By default, a progress spinner is shown in the statusline beside the file path.
 
-[^2]: You may also have to activate them in the language server config for them to appear, not just in Helix. Inlay hints in Helix are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them!
+[^2]: You may also have to activate them in the language server config for them to appear, not just in Pure. Inlay hints in Pure are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them!
 
 ### `[editor.cursor-shape]` Section
 
@@ -202,7 +202,7 @@ Valid values for these options are `block`, `bar`, `underline`, or `hidden`.
 ### `[editor.file-picker]` Section
 
 Set options for file picker and global search. Ignoring a file means it is
-not visible in the Helix file picker and global search.
+not visible in the Pure file picker and global search.
 
 All git related options are only enabled in a git repository.
 
@@ -220,7 +220,7 @@ All git related options are only enabled in a git repository.
 
 Ignore files can be placed locally as `.ignore` or put in your home directory as `~/.ignore`. They support the usual ignore and negative ignore (unignore) rules used in `.gitignore` files.
 
-Additionally, you can use Helix-specific ignore files by creating a local `.helix/ignore` file in the current workspace or a global `ignore` file located in your Helix config directory:
+Additionally, you can use Pure-specific ignore files by creating a local `.helix/ignore` file in the current workspace or a global `ignore` file located in your Pure config directory:
 - Linux and Mac: `~/.config/helix/ignore`
 - Windows: `%AppData%\helix\ignore`
 
@@ -237,7 +237,7 @@ Example:
 
 In addition to the options for the file picker and global search, a similar set of options is presented to configure the file explorer separately. However, unlike the file picker, the defaults are set to avoid ignoring most files.
 
-Note that the ignore files consulted by the file explorer when `ignore` is set to true are the same ones used by the file picker, including the aforementioned Helix-specific ignore files.
+Note that the ignore files consulted by the file explorer when `ignore` is set to true are the same ones used by the file picker, including the aforementioned Pure-specific ignore files.
 
 
 | Key | Description | Default |
@@ -316,7 +316,7 @@ Control auto save behavior.
 
 | Key | Description | Default |
 |--|--|---------|
-| `focus-lost` | Enable automatic saving on the focus moving away from Helix. Requires [focus event support](https://github.com/helix-editor/helix/wiki/Terminal-Support) from your terminal | `false` |
+| `focus-lost` | Enable automatic saving on the focus moving away from Pure. Requires [focus event support](https://github.com/helix-editor/helix/wiki/Terminal-Support) from your terminal | `false` |
 | `after-delay.enable` | Enable automatic saving after `auto-save.after-delay.timeout` milliseconds have passed since last edit. | `false` |
 | `after-delay.timeout` | Time in milliseconds since last edit before auto save timer triggers. | `3000` |
 

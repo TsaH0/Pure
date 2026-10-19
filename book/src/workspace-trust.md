@@ -1,6 +1,6 @@
 # Workspace trust
 
-Helix has several features that can execute arbitrary code:
+Pure has several features that can execute arbitrary code:
 
 - Language servers (LSP)
 - Debug adapters (DAP)
@@ -8,7 +8,7 @@ Helix has several features that can execute arbitrary code:
 - Git integration (filters and other commands in a repository's `.git/config`)
 
 To protect against malicious projects (a checked-out PR, a freshly cloned
-repository, etc.) Helix gates these behind explicit per-workspace trust.
+repository, etc.) Pure gates these behind explicit per-workspace trust.
 By default language servers start automatically (their binaries come from
 `$PATH`, not from the workspace) and debug adapters may be launched, but
 loading `.helix/config.toml` or `.helix/languages.toml` and trusting a
@@ -16,11 +16,11 @@ repository's `.git/config` requires opting in. Note that debug adapters
 are never started automatically — you launch them yourself — but the same
 trust level still gates whether they may run. The model is intentionally
 similar to [direnv](https://direnv.net/): you run `:workspace-trust` once
-per workspace and Helix remembers across sessions.
+per workspace and Pure remembers across sessions.
 
 ## Granting trust
 
-When Helix opens a file inside a workspace it has never seen before, a
+When Pure opens a file inside a workspace it has never seen before, a
 modal trust prompt asks:
 
 - **Trust** — allow the workspace permanently.
@@ -28,7 +28,7 @@ modal trust prompt asks:
 
 `<Esc>` (or any other dismissal) caches "untrusted for this session" so
 the prompt doesn't re-fire for every file you open in the workspace. The
-next time you start Helix in that workspace, it'll prompt again.
+next time you start Pure in that workspace, it'll prompt again.
 
 A small `[⚠]` indicator appears in the bottom-right of the editor (next
 to the macro-recording `[@]`) whenever the workspace is in restricted mode
@@ -45,9 +45,9 @@ you open a file in that workspace, you're back to the untrusted hint.
 
 ## Detecting changes after trust was granted
 
-When you trust a workspace, Helix records a hash of every file under
+When you trust a workspace, Pure records a hash of every file under
 `.helix/`. If those files change afterwards (a malicious checkout, an
-inadvertent rebase, etc.) Helix detects the mismatch on the next open and
+inadvertent rebase, etc.) Pure detects the mismatch on the next open and
 reports the workspace as *stale*:
 
 ```
@@ -75,7 +75,7 @@ excluded = false
 - Linux, macOS: `~/.local/share/helix/workspace_trust/`
 - Windows: `%AppData%\Roaming\helix\workspace_trust\`
 
-The one-file-per-workspace shape is safe under multiple concurrent Helix
+The one-file-per-workspace shape is safe under multiple concurrent Pure
 instances — different workspaces never write the same file.
 
 ## Configuration
@@ -158,7 +158,7 @@ are expanded.
 
 ## Git trust
 
-Workspace trust also gates how Helix opens git repositories. Untrusted
+Workspace trust also gates how Pure opens git repositories. Untrusted
 workspaces are opened in [gix](https://github.com/Byron/gitoxide)'s
 `Trust::Reduced` mode; trusted workspaces use `Trust::Full`.
 
@@ -169,7 +169,7 @@ That means `filter.*.clean` / `filter.*.smudge` drivers and similar
 keys that would otherwise execute external programs are dropped until you
 trust the workspace.
 
-Helix forces this trust level explicitly rather than letting gix infer it
+Pure forces this trust level explicitly rather than letting gix infer it
 from `.git` directory ownership — a malicious `.git/config` in a directory
 you happen to own is still treated as untrusted until you run
 `:workspace-trust`.

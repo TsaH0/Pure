@@ -1,4 +1,4 @@
-# Helix plugins
+# Pure plugins
 
 Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
 run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
@@ -61,7 +61,7 @@ Try the example: copy [`examples/text-tools`](examples/text-tools) (its
 
 ## How calls work
 
-When Helix calls a plugin (a command or an event) the plugin sees a snapshot
+When Pure calls a plugin (a command or an event) the plugin sees a snapshot
 of the editor: open documents, their text, paths, languages and selections, the
 focused document and the mode. Changes the plugin makes (edits, selections,
 messages, opening files, commands) are collected and applied after the call
@@ -69,8 +69,8 @@ returns, in order. All edits of one call to a document are one undo step. Edits
 are checked: they must be in bounds and not overlap, otherwise the call fails
 and nothing is applied. Reads after an edit in the same call see the edit.
 
-Positions are **char** offsets (not bytes), like everywhere in Helix. In
-Helix a cursor is a one-char selection.
+Positions are **char** offsets (not bytes), like everywhere in Pure. In
+Pure a cursor is a one-char selection.
 
 Events (`document-open`, `document-change`, `mode-switch`) are delivered
 shortly after they happen; several changes to a document in a row (typing)

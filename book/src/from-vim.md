@@ -6,14 +6,14 @@
 - [Comment lines, Completion, Search](#comment-lines-completion-search)
 - [File actions](#file-actions)
 
-Helix's editing model is strongly inspired from Vim and Kakoune, and a notable
-difference from Vim (and the most striking similarity to Kakoune) is that Helix
+Pure's editing model is strongly inspired from Vim and Kakoune, and a notable
+difference from Vim (and the most striking similarity to Kakoune) is that Pure
 follows the `selection → action` model. This means that whatever you are
 going to act on (a word, a paragraph, a line, etc.) is selected first and the
 action itself (delete, change, yank, etc.) comes second. A cursor is simply a
 single width selection.
 
-*Note:* As Helix is inspired by Vim and [Kakoune](https://github.com/mawww/kakoune), the keybindings are similar but also have some differences. The content of this page is inspired by [Kakoune Wiki](https://github.com/mawww/kakoune/wiki/Migrating-from-Vim).
+*Note:* As Pure is inspired by Vim and [Kakoune](https://github.com/mawww/kakoune), the keybindings are similar but also have some differences. The content of this page is inspired by [Kakoune Wiki](https://github.com/mawww/kakoune/wiki/Migrating-from-Vim).
 
 NOTE: Unlike vim, `f`, `F`, `t` and `T` are not confined to the current line.
 
@@ -126,9 +126,9 @@ setting a bookmark (bookmarking a location):
 * vim: `ma` to set bookmark with name a. Use `` `a `` to go back to this bookmarked location.
 * helix: there are no named bookmarks, but you can save a location in the jumplist with `C-s`, then jump back to that location by opening the jumplist picker with `<space>-j`, or back in the jumplist with `C-o` and forward with `C-i`
 
-Helix allows [some limited movement in `insert` mode](https://docs.helix-editor.com/keymap.html#insert-mode) without switching to `normal` mode.
+Pure allows [some limited movement in `insert` mode](https://docs.helix-editor.com/keymap.html#insert-mode) without switching to `normal` mode.
 
-Unlike Vim, under Helix, the cursor shape is the same (block) in insert mode and normal mode by default.
+Unlike Vim, under Pure, the cursor shape is the same (block) in insert mode and normal mode by default.
 This can be adjusted in configuration:
 
 ```toml

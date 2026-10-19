@@ -1,4 +1,4 @@
-//! Example Helix plugin: small text transformations on the selections.
+//! Example Pure plugin: small text transformations on the selections.
 //!
 //! Commands (run with `:plugin-run text-tools/<command>`):
 //! - `upper`, `lower`: change the case of the selected text
@@ -13,7 +13,7 @@ use helix_plugin_api::{
 
 struct TextTools;
 
-/// In Helix a cursor is a selection of one char (or none, right after some
+/// In Pure a cursor is a selection of one char (or none, right after some
 /// commands), so treat those as "nothing selected".
 fn is_cursor(range: &Range) -> bool {
     range.anchor.abs_diff(range.head) <= 1
@@ -27,7 +27,7 @@ fn command(name: &str, doc: &str) -> CommandInfo {
 }
 
 /// The selections as `(from, to)`, with cursors extended to the char under
-/// them like in Helix.
+/// them like in Pure.
 fn spans(ranges: &[Range], len: u32) -> Vec<(u32, u32)> {
     ranges
         .iter()
