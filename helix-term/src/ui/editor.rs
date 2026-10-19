@@ -165,6 +165,9 @@ impl EditorView {
             if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
                 overlays.push(overlay);
             }
+            if let Some(overlay) = crate::commands::substitute_preview::overlay(doc.id(), theme) {
+                overlays.push(overlay);
+            }
         }
 
         let gutter_overflow = view.gutter_offset(doc) == 0;
@@ -1720,6 +1723,8 @@ impl Component for EditorView {
         if let Some(area) = Self::splash_area(cx.editor) {
             Self::render_splash(cx.editor, area, surface);
         }
+
+        crate::commands::substitute_preview::render(cx.editor, editor_area, surface);
 
         if config.auto_info {
             if let Some(mut info) = cx.editor.autoinfo.take() {

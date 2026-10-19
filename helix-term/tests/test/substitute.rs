@@ -1,5 +1,6 @@
 //! `:s/pattern/replacement/flags`
 
+use helix_term::application::Application;
 use helix_view::editor::Severity;
 
 use super::*;
@@ -235,5 +236,39 @@ async fn space_v_very_magic_on_selection() -> anyhow::Result<()> {
         "one two\n#[f|]#our three\n",
     ))
     .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_preview() -> anyhow::Result<()> {
+    use helix_term::commands::substitute_preview::snapshot;
+
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[p|]#rint( hello )\nprint(x)\nother\n")
+        .build()?;
+    let text = |app: &Application| helix_view::doc!(app.editor).text().to_string();
+
+    // While the pattern is typed: the matching lines, unchanged.
+    helpers::send_keys(&mut app, r":%s/\vprint\(\s*(.*)\)").await;
+    let (title, lines) = snapshot().expect("a preview");
+    assert_eq!(title, "2 matches on 2 lines");
+    assert_eq!(lines, ["print( hello )", "print(x)"]);
+
+    // With a replacement: the lines as they will be. The buffer is untouched.
+    helpers::send_keys(&mut app, r"/say(\1)").await;
+    assert_eq!(snapshot().unwrap().1, ["say(hello )", "say(x)"]);
+    assert_eq!(text(&app), "print( hello )\nprint(x)\nother\n");
+
+    // Esc drops the preview and changes nothing.
+    helpers::send_keys(&mut app, "<esc>").await;
+    assert!(snapshot().is_none());
+    assert_eq!(text(&app), "print( hello )\nprint(x)\nother\n");
+
+    // A bad pattern shows the error; Enter applies and drops the preview.
+    helpers::send_keys(&mut app, r":s/\(").await;
+    assert!(snapshot().is_some_and(|(title, lines)| lines.is_empty() && !title.is_empty()));
+    helpers::send_keys(&mut app, r"<backspace><backspace>print/P/<ret>").await;
+    assert!(snapshot().is_none());
+    assert_eq!(text(&app), "P( hello )\nprint(x)\nother\n");
     Ok(())
 }

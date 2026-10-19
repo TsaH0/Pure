@@ -82,10 +82,10 @@
 | `global_search` | Global search in workspace folder | normal: `` <space>/ ``, select: `` <space>/ `` |
 | `extend_line` | Select current line, if already selected, extend to another line based on the anchor |  |
 | `extend_line_below` | Select current line, if already selected, extend to next line | normal: `` x ``, select: `` x `` |
-| `extend_line_above` | Select current line, if already selected, extend to previous line |  |
+| `extend_line_above` | Select current line, if already selected, extend to previous line | normal: `` X ``, select: `` X `` |
 | `select_line_above` | Select current line, if already selected, extend or shrink line above based on the anchor |  |
 | `select_line_below` | Select current line, if already selected, extend or shrink line below based on the anchor |  |
-| `extend_to_line_bounds` | Extend selection to line bounds | normal: `` X ``, select: `` X `` |
+| `extend_to_line_bounds` | Extend selection to line bounds |  |
 | `shrink_to_line_bounds` | Shrink selection to line bounds | normal: `` <A-x> ``, select: `` <A-x> `` |
 | `delete_selection` | Delete selection | normal: `` d ``, select: `` d `` |
 | `delete_selection_noyank` | Delete selection without yanking | normal: `` <A-d> ``, select: `` <A-d> `` |
@@ -118,7 +118,6 @@
 | `diagnostics_picker` | Open diagnostic picker | normal: `` <space>d ``, select: `` <space>d `` |
 | `workspace_diagnostics_picker` | Open workspace diagnostic picker | normal: `` <space>D ``, select: `` <space>D `` |
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
-| `yazi` | Pick files to open with the yazi file manager |  |
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
 | `normal_mode_or_close_compilation` | Close the *compilation* buffer if it is open, otherwise enter normal mode | normal: `` <esc> `` |
 | `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>z ``, select: `` <space>z `` |

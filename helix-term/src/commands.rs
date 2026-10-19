@@ -2,6 +2,7 @@ pub(crate) mod compilation;
 pub(crate) mod dap;
 pub(crate) mod lsp;
 pub(crate) mod quickfix;
+pub mod substitute_preview;
 pub(crate) mod syntax;
 pub(crate) mod typed;
 
@@ -423,7 +424,6 @@ impl MappableCommand {
         diagnostics_picker, "Open diagnostic picker",
         workspace_diagnostics_picker, "Open workspace diagnostic picker",
         last_picker, "Open last picker",
-        yazi, "Pick files to open with the yazi file manager",
         compile, "Prompt for a shell command and run it like Emacs' M-x compile",
         normal_mode_or_close_compilation, "Close the *compilation* buffer if it is open, otherwise enter normal mode",
         run_and_wait, "Prompt for a shell command and run it like Vim's :!, then press any key to return",
@@ -3760,19 +3760,6 @@ pub fn command_palette(cx: &mut Context) {
             compositor.push(Box::new(overlaid(picker)));
         },
     ));
-}
-
-/// Pick files with yazi, starting at the current file (or the working
-/// directory), and open them.
-fn yazi(cx: &mut Context) {
-    let start = doc!(cx.editor)
-        .path()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(helix_stdx::env::current_working_dir);
-    let interactive = crate::interactive::yazi(&start);
-    cx.callback.push(Box::new(move |compositor, _| {
-        compositor.interactive = Some(interactive);
-    }));
 }
 
 /// Like Emacs' `M-x compile`: prompt for a command (defaulting to the previous

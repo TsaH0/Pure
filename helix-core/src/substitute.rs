@@ -51,6 +51,10 @@ pub struct Command {
     /// Empty means "the last search pattern".
     pub pattern: String,
     pub replacement: String,
+    /// Whether the delimiter after the pattern was typed, so a (possibly
+    /// empty) replacement was given. Used by the live preview to tell "still
+    /// typing the pattern" from "replace with nothing".
+    pub has_replacement: bool,
     pub flags: Flags,
 }
 
@@ -76,10 +80,14 @@ fn is_delimiter(c: char) -> bool {
     !c.is_alphanumeric() && !c.is_whitespace() && c != '\\' && c != '"' && c != '|'
 }
 
-/// Split a leading range (`%`, `.`, `N`, `N,M`) off `input`.
+/// Split a leading range (`%`, `.`, `N`, `N,M`, Vim's visual `'<,'>`) off
+/// `input`.
 fn split_range(input: &str) -> (&str, &str) {
     if let Some(rest) = input.strip_prefix('%') {
         return ("%", rest);
+    }
+    if let Some(rest) = input.strip_prefix("'<,'>") {
+        return ("'<,'>", rest);
     }
     let end = input
         .find(|c: char| !(c.is_ascii_digit() || c == ',' || c == '.' || c == '$'))
@@ -103,7 +111,8 @@ fn parse_line(s: &str) -> Result<Option<usize>, String> {
 pub fn parse(input: &str) -> Result<Command, String> {
     let (range, rest) = split_range(input.trim_start());
     let scope = match range {
-        "" => Scope::Selections,
+        // There are no marks: Vim's visual range means the selections.
+        "" | "'<,'>" => Scope::Selections,
         "%" => Scope::Document,
         range => match range.split_once(',') {
             Some((from, to)) => Scope::Lines(parse_line(from)?, parse_line(to)?),
@@ -124,6 +133,7 @@ pub fn parse(input: &str) -> Result<Command, String> {
     let rest = chars.as_str();
 
     let (pattern, rest) = take_part(rest, delimiter, true);
+    let has_replacement = rest.is_some();
     let (replacement, rest) = match rest {
         Some(rest) => {
             let (replacement, rest) = take_part(rest, delimiter, false);
@@ -148,6 +158,7 @@ pub fn parse(input: &str) -> Result<Command, String> {
         scope,
         pattern,
         replacement,
+        has_replacement,
         flags,
     })
 }
@@ -807,6 +818,7 @@ mod test {
                 scope: Scope::Document,
                 pattern: "a/b".into(),
                 replacement: "c".into(),
+                has_replacement: true,
                 flags: Flags {
                     global: true,
                     ignore_case: Some(true),
@@ -828,6 +840,10 @@ mod test {
             Scope::Lines(None, Some(usize::MAX))
         );
         assert_eq!(parse("s/x/y/").unwrap().scope, Scope::Selections);
+        assert_eq!(parse("'<,'>s/x/y/").unwrap().scope, Scope::Selections);
+        assert!(is_substitute("'<,'>s/x/y/"));
+        assert!(!parse("s/x").unwrap().has_replacement);
+        assert!(parse("s/x/").unwrap().has_replacement);
         // Missing parts.
         let command = parse("s/x").unwrap();
         assert_eq!(
