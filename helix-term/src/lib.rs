@@ -12,6 +12,7 @@ pub mod interactive;
 pub mod job;
 pub mod keymap;
 pub mod logging;
+pub mod plugins;
 pub mod ui;
 
 #[cfg(not(windows))]

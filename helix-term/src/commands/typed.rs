@@ -2698,6 +2698,54 @@ fn run_interactive(
     Ok(())
 }
 
+fn plugin_run(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut args = args.iter();
+    let name = args.next().unwrap();
+    let rest = args.map(|arg| arg.to_string()).collect();
+    crate::plugins::run_command(cx.editor, cx.jobs, name, rest)
+}
+
+fn plugin_list(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let contents = crate::plugins::describe();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugins", contents).auto_close(true);
+                compositor.replace_or_push("plugins", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn plugin_reload(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.editor.clear_status();
+    crate::plugins::load(cx.editor);
+    if cx.editor.get_status().is_none() {
+        let count = crate::plugins::with_host(|host| host.plugins().len()).unwrap_or(0);
+        cx.editor.set_status(format!("Loaded {count} plugin(s)"));
+    }
+    Ok(())
+}
+
 fn run_and_wait(
     cx: &mut compositor::Context,
     args: Args,
@@ -4018,6 +4066,39 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: run_interactive,
         completer: SHELL_COMPLETER,
         signature: SHELL_SIGNATURE,
+    },
+    TypableCommand {
+        name: "plugin-run",
+        aliases: &[],
+        doc: "Run a plugin command: `:plugin-run <plugin>/<command> [args...]`.",
+        fun: plugin_run,
+        completer: CommandCompleter::positional(&[completers::plugin_command]),
+        signature: Signature {
+            positionals: (1, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-list",
+        aliases: &[],
+        doc: "Show the loaded plugins and their commands.",
+        fun: plugin_list,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-reload",
+        aliases: &[],
+        doc: "Reload all plugins and plugins.toml.",
+        fun: plugin_reload,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
     },
     TypableCommand {
         name: "run-and-wait",

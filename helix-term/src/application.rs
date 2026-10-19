@@ -141,6 +141,12 @@ impl Application {
 
         let jobs = Jobs::new();
 
+        // Before opening files, so plugins see them being opened. Tests load
+        // their plugins explicitly instead of the user's.
+        if !cfg!(feature = "integration") {
+            crate::plugins::load(&mut editor);
+        }
+
         if args.load_tutor {
             let path = helix_loader::runtime_file(Path::new("tutor"));
             editor.open(&path, Action::VerticalSplit)?;

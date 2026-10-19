@@ -1,6 +1,22 @@
 # Plugin system design (WebAssembly)
 
-Status: **proposal** — nothing here is implemented yet.
+Status: **phases 1–3 are implemented** (see `helix-plugin/README.md` for how
+to use and write plugins). Differences from the plan below:
+
+- Plugin commands run with `:plugin-run <plugin>/<command>` (bindable like any
+  typable command, e.g. `u = ":plugin-run text-tools/upper"`) instead of a new
+  `@plugin:` keymap syntax. That avoids touching `MappableCommand` and keeps
+  upstream merges simple.
+- Plugin settings live in `~/.config/helix/plugins.toml` instead of
+  `config.toml`, so Helix's `Config` struct is unchanged.
+- Permissions are checked when a host function is called (it returns a
+  "permission denied" error) rather than by not linking the function, which the
+  component model's per-interface linking doesn't allow cleanly.
+- Wasmtime 41 is used: the newest release that builds with the toolchain this
+  repository pins (Rust 1.90).
+
+Not done yet: phase 4 (async plugin calls, UI APIs) and phase 5 (installing
+plugins, several API versions side by side).
 
 This fork wants plugins: small pieces of user code that add commands, react to
 editor events and change buffers, without rebuilding Helix. This document picks
