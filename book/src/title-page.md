@@ -1,7 +1,7 @@
 # Pure
 
-> *“Immortal enlightenment is repentant enlightenment, perhaps only by making a
-> mountain using salt is fastest way to reach heavens.”*
+> *“Immortal enlightenment is repentant enlightenment; perhaps only by making a
+> mountain out of salt can one reach the heavens fastest.”*
 
 Pure is a modal editor forked from [Helix](https://helix-editor.com). This book
 is Helix's documentation with Pure's additions (plugins, `:s`, the quickfix

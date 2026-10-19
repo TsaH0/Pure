@@ -15,7 +15,8 @@ to use and write plugins). Differences from the plan below:
 - Wasmtime 41 is used: the newest release that builds with the toolchain this
   repository pins (Rust 1.90).
 
-Not done yet: phase 4 (async plugin calls, UI APIs) and phase 5 (installing
+Not done yet (task list: [`plugin-roadmap.md`](plugin-roadmap.md)): phase 4 (async plugin calls, UI APIs; the next part is designed in
+[`plugin-processes-and-pickers.md`](plugin-processes-and-pickers.md)) and phase 5 (installing
 plugins, several API versions side by side).
 
 This fork wants plugins: small pieces of user code that add commands, react to

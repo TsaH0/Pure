@@ -2,8 +2,8 @@
 
 <h1>Pure</h1>
 
-<p><em>“Immortal enlightenment is repentant enlightenment, perhaps only by making
-a mountain using salt is fastest way to reach heavens.”</em></p>
+<p><em>“Immortal enlightenment is repentant enlightenment; perhaps only by making
+a mountain out of salt can one reach the heavens fastest.”</em></p>
 
 </div>
 
