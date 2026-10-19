@@ -2,7 +2,7 @@
 //! output) and `run-interactive` (with the terminal handed over).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -221,7 +221,6 @@ pub fn interactive(
     let mut interactive = Interactive::new(command, move |_editor, _, status| {
         let chosen = chooser.as_ref().map(|path| {
             let chosen = std::fs::read(path).unwrap_or_default();
-            let _ = std::fs::remove_file(path);
             String::from_utf8_lossy(&chosen).into_owned()
         });
         let result = status
@@ -243,7 +242,29 @@ pub fn interactive(
 
 /// A new, empty file only the user can read, for a program to write its
 /// choice to.
-fn create_chooser_file() -> std::io::Result<PathBuf> {
+#[derive(Debug, PartialEq, Eq)]
+struct ChooserFile(PathBuf);
+
+impl std::ops::Deref for ChooserFile {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for ChooserFile {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for ChooserFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn create_chooser_file() -> std::io::Result<ChooserFile> {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -256,7 +277,7 @@ fn create_chooser_file() -> std::io::Result<PathBuf> {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         match options.open(&path) {
-            Ok(_) => return Ok(path),
+            Ok(_) => return Ok(ChooserFile(path)),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
         }
@@ -371,7 +392,30 @@ mod test {
             let mode = std::fs::metadata(&a).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-        std::fs::remove_file(a).unwrap();
-        std::fs::remove_file(b).unwrap();
+        let a_path = a.0.clone();
+        let b_path = b.0.clone();
+        drop((a, b));
+        assert!(!a_path.exists());
+        assert!(!b_path.exists());
+    }
+
+    #[test]
+    fn dropping_a_queued_interactive_request_removes_its_chooser() {
+        let request = interactive(
+            "test".into(),
+            1,
+            vec!["true".into(), "{chooser}".into()],
+            None,
+            true,
+            false,
+        )
+        .unwrap();
+        let path = PathBuf::from(request.command.as_std().get_args().next().unwrap());
+        assert!(path.is_file());
+        drop(request);
+        assert!(
+            !path.exists(),
+            "a request discarded before launch must clean up"
+        );
     }
 }

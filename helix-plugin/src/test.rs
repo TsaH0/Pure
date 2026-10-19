@@ -2045,3 +2045,87 @@ fn failed_commands_restore_picker_item_accounting() {
     .unwrap();
     assert_eq!(host.plugins[0].store.data().picker_items[&id], 3);
 }
+
+#[test]
+fn obsolete_cache_versions_are_removed_without_touching_other_plugins() {
+    let host = host();
+    let cache = tempfile::tempdir().unwrap();
+    let names = || {
+        let mut names: Vec<_> = std::fs::read_dir(cache.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    compile(
+        &host.engine,
+        Some(cache.path()),
+        "owner",
+        &testplugin_wasm(),
+    )
+    .unwrap();
+    let original = names().pop().unwrap();
+    let obsolete = cache.path().join("owner-0000000000000000.cwasm");
+    let other = cache.path().join("owner-other-0000000000000000.cwasm");
+    let unrelated = cache.path().join("owner-not-a-hash.cwasm");
+    for path in [&obsolete, &other, &unrelated] {
+        std::fs::write(path, "keep unless obsolete").unwrap();
+    }
+    // A warm cache hit also removes old entries.
+    compile(
+        &host.engine,
+        Some(cache.path()),
+        "owner",
+        &testplugin_wasm(),
+    )
+    .unwrap();
+    assert!(!obsolete.exists());
+    assert!(other.exists());
+    assert!(unrelated.exists());
+    assert!(cache.path().join(&original).exists());
+    // Changed component contents replace the old version, without leaving tmp files.
+    compile(
+        &host.engine,
+        Some(cache.path()),
+        "owner",
+        &text_tools_wasm(),
+    )
+    .unwrap();
+    assert!(!cache.path().join(&original).exists());
+    assert_eq!(names().len(), 3);
+}
+
+#[test]
+fn failed_cache_rename_removes_the_unfinished_write() {
+    let host = host();
+    let cache = tempfile::tempdir().unwrap();
+    compile(
+        &host.engine,
+        Some(cache.path()),
+        "owner",
+        &testplugin_wasm(),
+    )
+    .unwrap();
+    let target = std::fs::read_dir(cache.path())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    std::fs::remove_file(&target).unwrap();
+    // Force the real writer's rename to fail after it created its temp file.
+    std::fs::create_dir(&target).unwrap();
+    compile(
+        &host.engine,
+        Some(cache.path()),
+        "owner",
+        &testplugin_wasm(),
+    )
+    .unwrap();
+    let remaining: Vec<_> = std::fs::read_dir(cache.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(remaining, [target]);
+}

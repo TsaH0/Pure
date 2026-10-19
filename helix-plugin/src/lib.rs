@@ -1610,7 +1610,10 @@ fn compile(
             // the configuration) and lives in the user's own cache
             // directory. Wasmtime still checks the header and version.
             match unsafe { Component::deserialize(engine, &cached) } {
-                Ok(component) => return Ok(component),
+                Ok(component) => {
+                    prune_cache(cache_file, name);
+                    return Ok(component);
+                }
                 Err(err) => {
                     log::warn!("ignoring cached plugin {}: {err:#}", cache_file.display())
                 }
@@ -1629,8 +1632,10 @@ fn compile(
                 std::process::id(),
                 COUNTER.fetch_add(1, Ordering::Relaxed)
             ));
-            std::fs::write(&tmp, component.serialize()?)?;
-            std::fs::rename(tmp, cache_file)?;
+            let temporary = CacheTemp(tmp);
+            std::fs::write(&temporary.0, component.serialize()?)?;
+            std::fs::rename(&temporary.0, cache_file)?;
+            prune_cache(cache_file, name);
             Ok(())
         };
         if let Err(err) = write() {
@@ -1638,6 +1643,45 @@ fn compile(
         }
     }
     Ok(component)
+}
+
+/// Remove obsolete compiled versions of this plugin after a successful
+/// load/write. Loading reads the compiled bytes into memory, so another
+/// editor using an older version does not retain a mapping of these files.
+fn prune_cache(current: &Path, name: &str) {
+    let Some(parent) = current.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let prefix = format!("{name}-");
+    for entry in entries.flatten() {
+        let filename = entry.file_name();
+        let Some(hash) = filename
+            .to_str()
+            .and_then(|name| name.strip_prefix(&prefix))
+            .and_then(|name| name.strip_suffix(".cwasm"))
+        else {
+            continue;
+        };
+        if hash.len() == 16
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && entry.path() != current
+        {
+            if let Err(error) = std::fs::remove_file(entry.path()) {
+                log::debug!("could not remove obsolete plugin cache: {error}");
+            }
+        }
+    }
+}
+
+/// Clean up an unfinished cache write on serialization, I/O or rename errors.
+struct CacheTemp(PathBuf);
+impl Drop for CacheTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 type CallFuture<'a, R> = Pin<Box<dyn Future<Output = wasmtime::Result<R>> + Send + 'a>>;

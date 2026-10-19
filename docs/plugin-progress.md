@@ -103,6 +103,22 @@ git hooks; legacy `run-commands` also requires trust. No prompts or permission
 semantics changed. Documentation reviewed; formatting and workspace Clippy
 passed with no warnings. No runtime code changed.
 
+## M11.5 Chooser and compiled-cache cleanup
+
+Chooser files now have an owning guard captured by the terminal request;
+dropping a queued request (including on editor shutdown) removes its file,
+as does normal completion. Successful compiled-cache reads/writes remove
+older hash-named versions of the same plugin, preserving other plugins and
+unrecognized files. Failed writes remove their temporary file, including
+when the final rename fails.
+
+Validation: 64 host tests, 30 editor library tests and 35 in-editor plugin
+tests passed; a targeted test forces a real cache rename failure and checks
+cleanup. A tmux chooser command returned its result, removed the chooser and
+restored the editor. Formatting, workspace Clippy (no warnings) and a normal
+editor build passed. Separate chooser-read and queued-request issues are
+recorded in the roadmap for follow-up.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds

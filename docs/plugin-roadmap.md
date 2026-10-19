@@ -424,7 +424,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
 - [x] **M11.4 Document that `allow-process` is not a sandbox**: allowed
   programs like `rg --pre` or `git -c alias.x=!sh` can run anything, and
   a write grant to the workspace can change a project's git hooks.
-- [ ] **M11.5 Chooser file leaks** if the editor quits before a queued
+- [x] **M11.5 Chooser file leaks** if the editor quits before a queued
   `run-interactive` runs; old `.cwasm` cache files are never cleaned up.
 - [ ] **M11.6 `:s` preview cosmetics:** extra lines of multi-line
   replacements are numbered `first_line + n`; CR-only line endings are not
@@ -471,6 +471,13 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 ## Future TODOs (not yet milestones)
 
+- [ ] **Bound chooser reads:** `process::interactive` still reads the chooser
+  synchronously without a size cap. Check that it is a regular file using a
+  nonblocking open (a program can replace it with a FIFO), read at most the
+  process-output cap, and test oversized/replaced files without blocking the UI.
+- [ ] **Revalidate queued terminal requests:** a queued `run-interactive` can
+  outlive plugin reload/disable. Check its owner/request immediately before
+  handing over the terminal; dropping it must retain chooser cleanup.
 - [ ] **Cancel blocked filesystem workers:** async timeouts stop the guest
   and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
   pool can survive until the FIFO wakes. Track upstream WASI/cap-std support
