@@ -2709,44 +2709,7 @@ fn substitute(editor: &mut Editor, input: &str) -> anyhow::Result<()> {
 
     let (view, doc) = current!(editor);
     let text = doc.text();
-    let selection = doc.selection(view.id);
-    let line_span = |from_line: usize, to_line: usize| {
-        let last = text.len_lines() - 1;
-        let (from_line, to_line) = (from_line.min(last), to_line.min(last));
-        let (from_line, to_line) = (from_line.min(to_line), from_line.max(to_line));
-        (text.line_to_char(from_line), text.line_to_char(to_line + 1))
-    };
-    let mut scopes: Vec<(usize, usize)> = match command.scope {
-        Scope::Document => vec![(0, text.len_chars())],
-        Scope::Lines(from, to) => {
-            let current = text.char_to_line(selection.primary().cursor(text.slice(..)));
-            vec![line_span(from.unwrap_or(current), to.unwrap_or(current))]
-        }
-        Scope::Selections => selection
-            .ranges()
-            .iter()
-            .map(|range| {
-                if range.len() > 1 {
-                    (range.from(), range.to())
-                } else {
-                    // Just a cursor: its line.
-                    let line = text.char_to_line(range.cursor(text.slice(..)));
-                    line_span(line, line)
-                }
-            })
-            .collect(),
-    };
-    // Merge overlapping scopes (several cursors on one line).
-    scopes.sort_unstable();
-    scopes.dedup_by(|next, prev| {
-        if next.0 <= prev.1 {
-            prev.1 = prev.1.max(next.1);
-            true
-        } else {
-            false
-        }
-    });
-
+    let scopes = super::substitute_preview::scopes(text, doc.selection(view.id), &command.scope);
     let outcome = substitution.apply(text, &scopes);
 
     // Like Vim, the pattern becomes the last search, so `n` finds the next match.
@@ -3014,6 +2977,33 @@ fn plugin_list(
             },
         )))
     });
+    Ok(())
+}
+
+fn plugin_log(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let mut lines = crate::plugins::log_lines(&args[0])?;
+    if lines.is_empty() {
+        cx.editor
+            .set_status(format!("Plugin '{}' hasn't logged anything", &args[0]));
+        return Ok(());
+    }
+    lines.push(String::new());
+    cx.editor.new_file(Action::Replace);
+    let (view, doc) = current!(cx.editor);
+    // Replace the new buffer's empty line.
+    let transaction = Transaction::change(
+        doc.text(),
+        std::iter::once((
+            0,
+            doc.text().len_chars(),
+            Some(lines.join(doc.line_ending.as_str()).into()),
+        )),
+    );
+    doc.apply(&transaction, view.id);
+    doc.append_changes_to_history(view);
     Ok(())
 }
 
@@ -4500,6 +4490,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
+        name: "plugin-log",
+        aliases: &[],
+        doc: "Show the latest lines a plugin logged in a new buffer: `:plugin-log <plugin>`.",
+        fun: plugin_log,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "plugin-reload",
         aliases: &[],
         doc: "Reload all plugins and plugins.toml.",
@@ -4687,11 +4688,17 @@ fn execute_command_line(
 ) -> anyhow::Result<()> {
     // `:s/pattern/replacement/flags` has no space after the command name.
     if helix_core::substitute::is_substitute(input) {
-        if event == PromptEvent::Validate {
-            return substitute(cx.editor, input);
+        match event {
+            PromptEvent::Update => super::substitute_preview::update(cx.editor, input),
+            PromptEvent::Validate => {
+                super::substitute_preview::clear();
+                return substitute(cx.editor, input);
+            }
+            PromptEvent::Abort => super::substitute_preview::clear(),
         }
         return Ok(());
     }
+    super::substitute_preview::clear();
 
     let (command, rest, _) = command_line::split(input);
     if command.is_empty() {

@@ -372,3 +372,312 @@ async fn no_plugins_directory() -> anyhow::Result<()> {
     assert_eq!(text(&app), "xhello");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_02_sdk_plugin_edits_alongside_legacy_plugins() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_plugins("#[hé|]#llo\n", ALL, "");
+    let plugin = dir.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin2\"\nversion = \"1\"\napi = \"0.2\"\npermissions = [{ALL}]\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    let names = helix_term::plugins::command_names();
+    assert!(names.contains(&"testplugin/status".to_owned()));
+    assert!(names.contains(&"testplugin2/inspect".to_owned()));
+    assert!(names.contains(&"text-tools/upper".to_owned()));
+    keys(&mut app, ":plugin-run testplugin2/inspect<ret>").await;
+    assert_eq!(text(&app), "v2:héllo\n");
+    assert_eq!(status(&app).0, "héllo\n:Mode::Normal");
+    keys(&mut app, "u").await;
+    assert_eq!(text(&app), "héllo\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn picker_close_hook_runs_only_on_cancel_and_only_once() -> anyhow::Result<()> {
+    use helix_term::ui::{overlay::overlaid, Picker, PickerColumn};
+    use helix_view::editor::Action;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    let mut app = AppBuilder::new().with_input_text("#[a|]#").build()?;
+    for (key, expected_close, expected_action) in [
+        ("<esc>", 1, 0),
+        ("<C-c>", 1, 0),
+        ("<ret>", 0, 1),
+        ("<C-s>", 0, 2),
+        ("<C-v>", 0, 3),
+    ] {
+        let closed = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let close_count = closed.clone();
+        let accept_action = accepted.clone();
+        let owned_message = String::from("picker closed");
+        helix_term::job::dispatch(move |_, compositor| {
+            let picker = Picker::new(
+                [PickerColumn::new("Name", |item: &String, _: &()| {
+                    item.clone().into()
+                })],
+                0,
+                ["item".to_owned()],
+                (),
+                move |_, _, action| {
+                    accept_action.store(
+                        match action {
+                            Action::Replace => 1,
+                            Action::HorizontalSplit => 2,
+                            Action::VerticalSplit => 3,
+                            Action::Load => 4,
+                        },
+                        Ordering::Relaxed,
+                    );
+                },
+            )
+            .with_on_close(move |ctx| {
+                close_count.fetch_add(1, Ordering::Relaxed);
+                ctx.editor.set_status(owned_message);
+            });
+            compositor.push(Box::new(overlaid(picker)));
+        })
+        .await;
+        keys(&mut app, "").await;
+        keys(&mut app, key).await;
+        assert_eq!(closed.load(Ordering::Relaxed), expected_close, "{key}");
+        assert_eq!(accepted.load(Ordering::Relaxed), expected_action, "{key}");
+        keys(&mut app, "<space>'").await;
+        keys(&mut app, "<esc>").await;
+        assert_eq!(
+            closed.load(Ordering::Relaxed),
+            expected_close,
+            "reopened {key}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn picker_close_hook_cancels_empty_picker_on_enter() -> anyhow::Result<()> {
+    use helix_term::ui::{overlay::overlaid, Picker, PickerColumn};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let mut app = AppBuilder::new().with_input_text("#[a|]#").build()?;
+    let closed = Arc::new(AtomicUsize::new(0));
+    let count = closed.clone();
+    helix_term::job::dispatch(move |_, compositor| {
+        let picker = Picker::new(
+            [PickerColumn::new("Name", |item: &String, _: &()| {
+                item.clone().into()
+            })],
+            0,
+            Vec::new(),
+            (),
+            |_, _, _| panic!("empty picker cannot accept"),
+        )
+        .with_on_close(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        compositor.push(Box::new(overlaid(picker)));
+    })
+    .await;
+    keys(&mut app, "").await;
+    keys(&mut app, "<ret>").await;
+    assert_eq!(closed.load(Ordering::Relaxed), 1);
+    Ok(())
+}
+
+/// An editor with only the 0.2 test plugin, with `permissions` and the
+/// plugin's `plugins.toml` table `settings`.
+fn app_with_v2(permissions: &str, settings: &str) -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let plugin = root.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin2\"\nversion = \"1\"\napi = \"0.2\"\npermissions = [{permissions}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        root.path(),
+        &format!("[testplugin2]\n{settings}\n"),
+    )
+    .unwrap();
+    (app, root)
+}
+
+const WITH_PROCESS: &str =
+    r#""read-buffers", "edit-buffers", "open-files", "run-commands", "process""#;
+
+/// Wait until the status message satisfies `done` (results of programs and
+/// pickers arrive asynchronously).
+async fn wait_for_status(app: &mut Application, done: impl Fn(&str) -> bool) -> String {
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        app.editor.reset_idle_timer();
+        run_event_loop_until_idle(app).await;
+        if let Some((message, _)) = app.editor.get_status() {
+            if done(message) {
+                return message.to_string();
+            }
+        }
+    }
+    panic!("timed out; status: {:?}", app.editor.get_status());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_programs_when_granted() -> anyhow::Result<()> {
+    // Without the user's grant, the permission alone is not enough.
+    let (mut app, dir) = app_with_v2(WITH_PROCESS, "");
+    keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
+    assert_error(&app, "allow-process");
+
+    // Grant `sh` only. (Reload rather than build a second application: only
+    // the first one in a runtime gets the job queue.)
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin2]\nallow-process = [\"sh\"]\n",
+    )?;
+    keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
+    assert_error(&app, "'echo' is not in allow-process");
+    keys(
+        &mut app,
+        r#":plugin-run testplugin2/spawn sh -c "echo out; echo err <gt>&2; exit 4"<ret>"#,
+    )
+    .await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("exit:")).await;
+    assert_eq!(message, "exit:Some(4);out:out\n;err:err\n");
+
+    // `:plugin-list` shows the grant.
+    assert!(helix_term::plugins::describe().contains("process: only sh"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    for (keys_, expected) in [
+        ("<down><ret>", "choice:[1]:Some(OpenAction::Replace)"),
+        ("<C-v>", "choice:[0]:Some(OpenAction::Vsplit)"),
+        ("<C-s>", "choice:[0]:Some(OpenAction::Hsplit)"),
+        ("<esc>", "choice:[]:None"),
+        // Filtering keeps the original index.
+        ("gam<ret>", "choice:[2]:Some(OpenAction::Replace)"),
+    ] {
+        keys(
+            &mut app,
+            ":plugin-run testplugin2/picker alpha beta gamma<ret>",
+        )
+        .await;
+        // The picker opens once the command's event is handled.
+        deliver_events(&mut app).await;
+        app.editor.set_status("");
+        keys(&mut app, keys_).await;
+        let message = wait_for_status(&mut app, |s| s.starts_with("choice:")).await;
+        assert_eq!(message, expected, "{keys_}");
+    }
+    // Answered pickers are not kept for `space '`: it reopens nothing.
+    app.editor.set_status("");
+    keys(&mut app, "<space>'").await;
+    keys(&mut app, "<ret>").await;
+    deliver_events(&mut app).await;
+    assert!(!app
+        .editor
+        .get_status()
+        .is_some_and(|(s, _)| s.starts_with("choice:")));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_prompts_return_the_answer() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/prompt one two<ret>").await;
+    deliver_events(&mut app).await;
+    // The prompt starts with "init".
+    keys(&mut app, "x<ret>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("answer:")).await;
+    assert_eq!(message, "answer:Some(\"initx\")");
+
+    keys(&mut app, ":plugin-run testplugin2/prompt<ret>").await;
+    deliver_events(&mut app).await;
+    app.editor.set_status("");
+    keys(&mut app, "<esc>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("answer:")).await;
+    assert_eq!(message, "answer:None");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pickers_show_the_plugins_items_for_the_query() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/live<ret>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "ab").await;
+    // Debounced query, then the plugin's answer.
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        deliver_events(&mut app).await;
+    }
+    keys(&mut app, "<down><ret>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("live:")).await;
+    assert_eq!(message, "live:[\"ab-2\"]");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_saves_closes_and_selection_changes() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    let doc = helix_view::doc!(app.editor).id().to_string();
+
+    keys(&mut app, "l").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("selection:")).await;
+    assert_eq!(message, format!("selection:{doc}"));
+
+    let file = tempfile::NamedTempFile::new()?;
+    app.editor.set_status("");
+    keys(&mut app, &format!(":w! {}<ret>", file.path().display())).await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("save:")).await;
+    assert_eq!(message, format!("save:{doc}"));
+
+    keys(&mut app, ":new<ret>").await;
+    app.editor.set_status("");
+    keys(&mut app, ":buffer-close! <ret>").await;
+    let closed = wait_for_status(&mut app, |s| s.starts_with("close:")).await;
+    assert!(closed.starts_with("close:"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_log_shows_what_a_plugin_logged() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "Plugin 'testplugin2' hasn't logged anything"
+    );
+    keys(&mut app, ":plugin-run testplugin2/log first second<ret>").await;
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(text(&app), "first\nsecond\n");
+    keys(&mut app, ":plugin-log nope<ret>").await;
+    assert_error(&app, "no plugin named 'nope'");
+    Ok(())
+}

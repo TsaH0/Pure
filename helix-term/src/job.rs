@@ -12,6 +12,8 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 pub type EditorCompositorCallback = Box<dyn FnOnce(&mut Editor, &mut Compositor) + Send>;
 pub type EditorCallback = Box<dyn FnOnce(&mut Editor) + Send>;
 pub type EditorCallbackFollowup = Box<dyn FnOnce(&mut Editor) -> Option<Job> + Send>;
+pub type EditorCompositorJobsCallback =
+    Box<dyn FnOnce(&mut Editor, &mut Compositor, &mut Jobs) + Send>;
 
 runtime_local! {
     static JOB_QUEUE: OnceLock<Sender<Callback>> = OnceLock::new();
@@ -37,6 +39,8 @@ pub enum Callback {
     EditorCompositor(EditorCompositorCallback),
     Editor(EditorCallback),
     Followup(EditorCallbackFollowup),
+    /// Like `EditorCompositor`, with the jobs too (to run commands).
+    EditorCompositorJobs(EditorCompositorJobsCallback),
 }
 
 pub type JobFuture = BoxFuture<'static, anyhow::Result<Option<Callback>>>;
@@ -102,7 +106,7 @@ impl Jobs {
     }
 
     pub fn handle_callback(
-        &self,
+        &mut self,
         editor: &mut Editor,
         compositor: &mut Compositor,
         call: anyhow::Result<Option<Callback>>,
@@ -119,6 +123,10 @@ impl Jobs {
                     None
                 }
                 Callback::Followup(call) => call(editor),
+                Callback::EditorCompositorJobs(call) => {
+                    call(editor, compositor, self);
+                    None
+                }
             },
             Err(e) => {
                 editor.set_error(format!("Async job failed: {}", e));

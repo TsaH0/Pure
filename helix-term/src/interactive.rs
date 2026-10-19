@@ -1,4 +1,4 @@
-//! Running interactive terminal programs (e.g. yazi, lazygit) on top of the
+//! Running interactive terminal programs (e.g. lazygit, a file manager) on top of the
 //! editor.
 //!
 //! The program gets the terminal to itself: the application stops reading
@@ -8,10 +8,9 @@
 //! (buffers, jumplist, history, ...) is untouched.
 
 use std::io;
-use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 
-use helix_view::{editor::Action, Editor};
+use helix_view::Editor;
 use tokio::process::Command;
 
 use crate::compositor::Compositor;
@@ -175,43 +174,4 @@ fn report_failure(editor: &mut Editor, program: &str, status: io::Result<ExitSta
             false
         }
     }
-}
-
-/// Pick files with [yazi](https://yazi-rs.github.io), starting at `start`, and
-/// open the chosen ones.
-pub fn yazi(start: &Path) -> Interactive {
-    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let chooser = std::env::temp_dir().join(format!(
-        "helix-yazi-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_file(&chooser);
-
-    let mut command = Command::new("yazi");
-    command
-        .arg(start)
-        .arg(format!("--chooser-file={}", chooser.display()));
-
-    Interactive::new(command, move |editor, _, status| {
-        let chosen = std::fs::read_to_string(&chooser).unwrap_or_default();
-        let _ = std::fs::remove_file(&chooser);
-        // Quitting without choosing anything is not an error.
-        if chosen.trim().is_empty() {
-            if let Err(err) = &status {
-                editor.set_error(format!("Failed to run yazi: {err}"));
-            }
-            return;
-        }
-        for path in chosen.lines().filter(|line| !line.is_empty()) {
-            let path = PathBuf::from(path);
-            if path.is_dir() {
-                editor.set_error(format!("'{}' is a directory", path.display()));
-                continue;
-            }
-            if let Err(err) = editor.open(&path, Action::Replace) {
-                editor.set_error(format!("Failed to open '{}': {err}", path.display()));
-            }
-        }
-    })
 }

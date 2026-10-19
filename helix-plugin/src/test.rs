@@ -14,7 +14,7 @@ fn testplugin_wasm() -> PathBuf {
 }
 
 fn text_tools_wasm() -> PathBuf {
-    fixture("examples/text-tools/plugin.wasm")
+    fixture("tests/fixtures/text-tools-v0.1.wasm")
 }
 
 /// Compiled components are cached here so not every test compiles them.
@@ -69,12 +69,16 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             path: Some(PathBuf::from("/tmp/file.rs")),
             language: Some("rust".into()),
             selection: Some(Selection::single(anchor, head)),
+            modified: true,
         },
     );
     Snapshot {
         documents,
         current: Some(1),
         mode: Mode::Normal,
+        workspace: Some(PathBuf::from("/work")),
+        cwd: PathBuf::from("/work/src"),
+        config_dir: PathBuf::from("/config"),
     }
 }
 
@@ -233,7 +237,7 @@ fn load_all_skips_disabled_and_reports_broken_plugins() {
 
     let mut host = host();
     let (_actions, errors) = host.load_all(root.path(), |name| {
-        (name != "off").then(|| "{}".to_string())
+        (name != "off").then(|| PluginSettings::new("{}"))
     });
     let mut names: Vec<_> = host
         .plugins()
@@ -250,7 +254,7 @@ fn load_all_skips_disabled_and_reports_broken_plugins() {
 fn load_all_with_missing_directory() {
     let mut host = host();
     let (actions, errors) = host.load_all(Path::new("/nonexistent/helix/plugins"), |_| {
-        Some("{}".into())
+        Some(PluginSettings::new("{}"))
     });
     assert!(actions.is_empty() && errors.is_empty() && host.plugins().is_empty());
 }
@@ -629,17 +633,21 @@ fn slow_event_handlers_are_disabled() {
 
 // -- the example plugin
 
-fn text_tools() -> (PluginHost, tempfile::TempDir) {
+fn text_tools(api: &str) -> (PluginHost, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let mut host = host();
     let dir = root.path().join("text-tools");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(text_tools_wasm(), dir.join("plugin.wasm")).unwrap();
-    std::fs::copy(
-        fixture("examples/text-tools/plugin.toml"),
-        dir.join("plugin.toml"),
-    )
-    .unwrap();
+    let wasm = if api == "0.1" {
+        text_tools_wasm()
+    } else {
+        fixture("examples/text-tools/plugin.wasm")
+    };
+    std::fs::copy(wasm, dir.join("plugin.wasm")).unwrap();
+    let manifest = std::fs::read_to_string(fixture("examples/text-tools/plugin.toml"))
+        .unwrap()
+        .replace("api = \"0.2\"", &format!("api = \"{api}\""));
+    std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
     host.load(&dir, "{}").unwrap();
     (host, root)
 }
@@ -651,7 +659,16 @@ fn text_tools_run(host: &mut PluginHost, command: &str, snapshot: Snapshot) -> V
 
 #[test]
 fn example_text_tools() {
-    let (mut host, _root) = text_tools();
+    check_text_tools("0.2");
+}
+
+#[test]
+fn legacy_example_text_tools() {
+    check_text_tools("0.1");
+}
+
+fn check_text_tools(api: &str) {
+    let (mut host, _root) = text_tools(api);
     let names: Vec<_> = host.commands().into_iter().map(|(_, c)| c.name).collect();
     assert_eq!(names, ["upper", "lower", "sort-lines", "count"]);
 
@@ -729,4 +746,990 @@ async fn plugins_work_inside_a_single_threaded_runtime() {
     let (mut host, _root) = testplugin("{}");
     let err = run(&mut host, "panic", &[], Snapshot::default()).unwrap_err();
     assert!(err.to_string().contains("crashed"), "{err}");
+}
+
+#[test]
+fn both_api_versions_share_host_state() {
+    let (mut host, root) = testplugin("{}");
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        ALL,
+    );
+    let manifest_path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(manifest_path, manifest).unwrap();
+    let actions = host.load(&dir, "{\"answer\":42}").unwrap();
+    assert_eq!(statuses(&actions), ["0.2 init:{\"answer\":42}"]);
+    assert_eq!(host.plugins().len(), 2);
+    let actions = host
+        .run_command("testplugin2", "inspect", vec![], snapshot("héllo", 0, 1))
+        .unwrap();
+    assert_eq!(apply("héllo", &actions), "v2:héllo");
+    assert_eq!(statuses(&actions), ["héllo:Mode::Normal"]);
+    let results = host.dispatch(
+        Event::ModeSwitch {
+            old: Mode::Normal,
+            new: Mode::Insert,
+        },
+        &Snapshot::default(),
+    );
+    let actions = &results
+        .into_iter()
+        .find(|(name, _)| name == "testplugin2")
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(statuses(actions), ["Mode::Normal->Mode::Insert"]);
+    assert!(run(&mut host, "status", &["old"], Snapshot::default()).is_ok());
+}
+
+#[test]
+fn manifest_selects_the_component_world() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(root.path(), "wrong-world", &testplugin_wasm(), ALL);
+    let path = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(path, source).unwrap();
+    assert!(host()
+        .load(&dir, "{}")
+        .unwrap_err()
+        .to_string()
+        .contains("failed to start"));
+    let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
+    assert!(err.to_string().contains("supports 0.1 and 0.2"));
+}
+
+fn testplugin2() -> (PluginHost, tempfile::TempDir) {
+    testplugin2_with(ALL)
+}
+
+fn testplugin2_with(permissions: &[&str]) -> (PluginHost, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        permissions,
+    );
+    let path = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(path, source).unwrap();
+    let mut host = host();
+    host.load(&dir, "{}").unwrap();
+    (host, root)
+}
+
+fn process_done(id: u32, stdout: &str) -> Callback {
+    Callback::ProcessDone {
+        id,
+        result: Ok(ProcessOutput {
+            exit_code: Some(0),
+            stdout: stdout.into(),
+            stderr: String::new(),
+        }),
+    }
+}
+
+#[test]
+fn callbacks_are_delivered_once_and_check_their_kind() {
+    let (mut host, _root) = testplugin2();
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let wrong_kind = Callback::PickerDone {
+        id,
+        result: PickerResult::Cancelled,
+    };
+    assert!(host
+        .callback("testplugin2", wrong_kind, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "hello"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    let messages = statuses(&actions);
+    assert_eq!(messages.len(), 1);
+    assert!(
+        messages[0].starts_with(&format!("process:{id}:")),
+        "{messages:?}"
+    );
+    assert!(messages[0].contains("hello"), "{messages:?}");
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(id, "duplicate"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    assert!(host
+        .callback("missing", process_done(id, "late"), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    let picker = arm_request(&mut host, PendingKind::Picker).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id: picker,
+                result: PickerResult::Cancelled,
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(statuses(&actions)[0].starts_with(&format!("picker:{picker}:")));
+}
+
+#[test]
+fn request_ids_are_not_reused_after_clear_or_host_recreation() {
+    let (mut host, root) = testplugin2();
+    let old = arm_request(&mut host, PendingKind::Process).unwrap();
+    host.clear();
+    host.load(&root.path().join("testplugin2"), "{}").unwrap();
+    let new = arm_request(&mut host, PendingKind::Process).unwrap();
+    assert_ne!(old, new);
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(old, "stale"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    drop(host);
+    let (mut host, _root) = testplugin2();
+    let recreated = arm_request(&mut host, PendingKind::Process).unwrap();
+    assert_ne!(new, recreated);
+    assert!(host
+        .callback(
+            "testplugin2",
+            process_done(new, "stale"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn ui_is_restricted_to_commands_and_callbacks() {
+    use v0_2::helix::plugin::{process, ui};
+    let (mut host, _root) = testplugin2();
+    let state = host.plugins[0].store.data_mut();
+    for context in [
+        CallContext::Init,
+        CallContext::Event,
+        CallContext::Command,
+        CallContext::Callback,
+    ] {
+        state.context = context;
+        let command = state.run_command("goto_line_end".into());
+        let interactive = process::Host::run_interactive(
+            state,
+            vec!["true".into()],
+            process::InteractiveOptions {
+                cwd: None,
+                chooser_file: false,
+                wait_for_key: false,
+            },
+        );
+        let picker = ui::Host::show_picker(
+            state,
+            ui::Picker {
+                title: "Test".into(),
+                columns: vec!["name".into()],
+                items: vec![],
+                initial: None,
+                live: false,
+            },
+        );
+        if context.allows_ui() {
+            assert!(command.is_ok());
+            // Past the context check: testplugin2 has no `process` permission.
+            assert!(interactive.unwrap_err().contains("permission denied"));
+            assert!(picker.is_ok());
+        } else {
+            assert!(command.unwrap_err().contains("only available"));
+            assert!(interactive.unwrap_err().contains("only available"));
+            assert!(picker.unwrap_err().contains("only available"));
+        }
+    }
+}
+
+#[test]
+fn legacy_plugins_cannot_reserve_callbacks() {
+    let (mut host, _root) = testplugin("{}");
+    assert!(host
+        .register_request("testplugin", PendingKind::Process)
+        .is_err());
+    assert!(host
+        .callback(
+            "testplugin",
+            process_done(123, "ignored"),
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> {
+    let id = host.register_request("testplugin2", kind)?;
+    let command = match kind {
+        PendingKind::Process => "arm-process",
+        PendingKind::Picker => "arm-picker",
+        PendingKind::Prompt => unreachable!(),
+    };
+    host.run_command(
+        "testplugin2",
+        command,
+        vec![id.to_string()],
+        Snapshot::default(),
+    )?;
+    Ok(id)
+}
+
+#[test]
+fn sdk_callbacks_use_fresh_snapshots_and_can_run_commands() {
+    let (mut host, _root) = testplugin2();
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "read"),
+            &snapshot("fresh snapshot", 0, 1),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["fresh snapshot"]);
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "command"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::RunCommand(command)] if command == "goto_line_end"));
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "fail"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Error(message)] if message == "plugin callback: callback failed on purpose")
+    );
+}
+
+#[test]
+fn callback_deadlines_disable_the_plugin_and_clear_pending_requests() {
+    let (mut host, _root) = testplugin2();
+    host.limits.command = Duration::from_millis(100);
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let other = arm_request(&mut host, PendingKind::Picker).unwrap();
+    let err = host
+        .callback(
+            "testplugin2",
+            process_done(id, "spin"),
+            &Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("took longer than"));
+    assert!(host.plugins[0].store.data().pending.is_empty());
+    assert!(host.plugin("testplugin2").unwrap().disabled().is_some());
+    assert!(host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id: other,
+                result: PickerResult::Cancelled
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn sdk_ui_requests_are_refused_from_wasm_event_handlers() {
+    let (mut host, root) = testplugin2();
+    host.clear();
+    host.load(&root.path().join("testplugin2"), "{\"event-ui\":true}")
+        .unwrap();
+    let results = host.dispatch(Event::DocumentOpen(1), &snapshot("text", 0, 1));
+    let actions = results
+        .into_iter()
+        .find(|(name, _)| name == "testplugin2")
+        .unwrap()
+        .1
+        .unwrap();
+    let messages = statuses(&actions);
+    assert_eq!(messages.len(), 3);
+    assert!(messages[0].starts_with("run-interactive is only available"));
+    assert!(messages[1].starts_with("show-picker is only available"));
+    assert!(messages[2].starts_with("run-command is only available"));
+}
+
+const WITH_PROCESS: &[&str] = &[
+    "read-buffers",
+    "edit-buffers",
+    "open-files",
+    "run-commands",
+    "process",
+];
+
+fn args(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn spawn_id(actions: &[Action]) -> u32 {
+    match actions {
+        [Action::Spawn { id, .. }] => *id,
+        other => panic!("expected one spawn, got {other:?}"),
+    }
+}
+
+#[test]
+fn processes_need_the_permission_and_the_users_grant() {
+    let (mut host, _root) = testplugin2();
+    let err = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            args(&["echo", "hi"]),
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    let err = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            args(&["echo", "hi"]),
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("allow-process"), "{err}");
+    assert_eq!(host.info()[0].process, ProcessGrant::None);
+
+    host.set_process_grant("testplugin2", ProcessGrant::Only(args(&["echo"])));
+    let err = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            args(&["sh", "-c", "echo hi"]),
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("'sh' is not in allow-process"),
+        "{err}"
+    );
+    // The program must match exactly, not just by name.
+    let err = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            args(&["/tmp/echo"]),
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("not in allow-process"), "{err}");
+
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "spawn",
+            args(&["echo", "hi"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    match &actions[..] {
+        [Action::Spawn {
+            plugin,
+            argv,
+            cwd,
+            stdin,
+            timeout,
+            ..
+        }] => {
+            assert_eq!(plugin, "testplugin2");
+            assert_eq!(argv, &args(&["echo", "hi"]));
+            assert_eq!((cwd, stdin), (&None, &None));
+            assert_eq!(*timeout, DEFAULT_PROCESS_TIMEOUT);
+        }
+        other => panic!("expected a spawn, got {other:?}"),
+    }
+}
+
+#[test]
+fn spawn_results_reach_the_plugin_once() {
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    host.set_process_grant("testplugin2", ProcessGrant::Any);
+    let id = spawn_id(
+        &host
+            .run_command("testplugin2", "spawn", args(&["echo"]), Snapshot::default())
+            .unwrap(),
+    );
+    let done = Callback::ProcessDone {
+        id,
+        result: Ok(ProcessOutput {
+            exit_code: Some(3),
+            stdout: "out".into(),
+            stderr: "err".into(),
+        }),
+    };
+    let actions = host
+        .callback("testplugin2", done.clone(), &Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Status(s)] if s == "exit:Some(3);out:out;err:err"),
+        "{actions:?}"
+    );
+    assert!(host
+        .callback("testplugin2", done, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn kill_and_process_limit() {
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    host.set_process_grant("testplugin2", ProcessGrant::Any);
+    let mut ids = Vec::new();
+    for _ in 0..MAX_PROCESSES {
+        let actions = host
+            .run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+            .unwrap();
+        ids.push(spawn_id(&actions));
+    }
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("at most"), "{err}");
+
+    // Killing a running program asks the editor to kill it; unknown ids are
+    // ignored.
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "kill",
+            vec![ids[0].to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Kill { id, .. }] if *id == ids[0]),
+        "{actions:?}"
+    );
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "kill",
+            vec!["999999".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(actions.is_empty());
+
+    // A finished program frees its slot.
+    host.callback(
+        "testplugin2",
+        process_done(ids[1], ""),
+        &Snapshot::default(),
+    )
+    .unwrap();
+    host.run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+        .unwrap();
+}
+
+#[test]
+fn pickers_and_push_items() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "picker",
+            args(&["a", "b"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPicker { id, picker, .. }] => {
+            assert_eq!(picker.items.len(), 2);
+            assert_eq!(picker.items[1].data, "b");
+            *id
+        }
+        other => panic!("expected a picker, got {other:?}"),
+    };
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "push-items",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::PushItems { items, .. }] if items.len() == 1),
+        "{actions:?}"
+    );
+    let err = host
+        .run_command(
+            "testplugin2",
+            "push-items",
+            vec!["999999".into()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no open picker"), "{err}");
+
+    // Choosing delivers the indices and the split; the picker is then gone.
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id,
+                result: PickerResult::Accepted((vec![1], OpenAction::Vsplit)),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Status(s)] if s == "choice:[1]:Some(OpenAction::Vsplit)"),
+        "{actions:?}"
+    );
+    let err = host
+        .run_command(
+            "testplugin2",
+            "push-items",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no open picker"), "{err}");
+}
+
+#[test]
+fn prompts_and_popups() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "popup",
+            args(&["**hi**", "there"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Popup(md)] if md == "**hi** there"),
+        "{actions:?}"
+    );
+
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "prompt",
+            args(&["one", "two"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPrompt { id, prompt, .. }] => {
+            assert_eq!(prompt.message, "answer:");
+            assert_eq!(prompt.initial, "init");
+            assert_eq!(prompt.completions, args(&["one", "two"]));
+            *id
+        }
+        other => panic!("expected a prompt, got {other:?}"),
+    };
+    let answer = |result: Option<&str>| Callback::PromptDone {
+        id,
+        result: result.map(str::to_owned),
+    };
+    let actions = host
+        .callback("testplugin2", answer(Some("two")), &Snapshot::default())
+        .unwrap();
+    assert_eq!(statuses(&actions), ["answer:Some(\"two\")"]);
+    // Answered once.
+    assert!(host
+        .callback("testplugin2", answer(None), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn live_pickers_answer_every_query() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command("testplugin2", "live", vec![], Snapshot::default())
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPicker { id, picker, .. }] => {
+            assert!(picker.live);
+            *id
+        }
+        other => panic!("expected a picker, got {other:?}"),
+    };
+    for query in ["a", "ab"] {
+        let actions = host
+            .callback(
+                "testplugin2",
+                Callback::PickerQuery {
+                    id,
+                    query: query.into(),
+                },
+                &Snapshot::default(),
+            )
+            .unwrap();
+        match &actions[..] {
+            [Action::SetItems { items, .. }] => {
+                let data: Vec<_> = items.iter().map(|item| item.data.as_str()).collect();
+                assert_eq!(
+                    data,
+                    [
+                        format!("{query}-1"),
+                        format!("{query}-2"),
+                        format!("{query}-3")
+                    ]
+                );
+            }
+            other => panic!("expected new items, got {other:?}"),
+        }
+    }
+    // The choice refers to the latest items.
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id,
+                result: PickerResult::Accepted((vec![2], OpenAction::Replace)),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["live:[\"ab-3\"]"]);
+}
+
+#[test]
+fn directories_and_modified_documents() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command("testplugin2", "dirs", vec![], snapshot("x", 0, 0))
+        .unwrap();
+    // No data root was set: no directory of its own.
+    assert_eq!(
+        statuses(&actions),
+        ["workspace:Some(\"/work\");cwd:/work/src;config:/config;data:;modified:true"]
+    );
+}
+
+/// testplugin2 with `filesystem`, the user's `files` grant, a workspace with
+/// `file.txt` and a data root.
+fn testplugin2_files(files: FileGrant) -> (PluginHost, tempfile::TempDir, PathBuf, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    let data = root.path().join("data");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("file.txt"), "content").unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        &["read-buffers", "filesystem"],
+    );
+    let manifest = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(manifest, source).unwrap();
+    let mut host = host();
+    host.set_dirs(Some(workspace.clone()), Some(data.clone()));
+    host.load_with(
+        &dir,
+        PluginSettings {
+            config: "{}".into(),
+            files,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    (host, root, workspace, data)
+}
+
+#[test]
+fn workspace_files_need_the_users_grant() {
+    let read = |host: &mut PluginHost, path: &Path| {
+        let actions = host
+            .run_command(
+                "testplugin2",
+                "read-file",
+                vec![path.to_string_lossy().into_owned()],
+                Snapshot::default(),
+            )
+            .unwrap();
+        statuses(&actions).remove(0)
+    };
+
+    let (mut host, _root, workspace, _data) = testplugin2_files(FileGrant::None);
+    assert!(read(&mut host, &workspace.join("file.txt")).starts_with("read-error:"));
+    assert_eq!(host.info()[0].files, FileGrant::None);
+
+    let (mut host, _root, workspace, _data) = testplugin2_files(FileGrant::Read);
+    assert_eq!(read(&mut host, &workspace.join("file.txt")), "read:content");
+    // Only the workspace.
+    assert!(read(&mut host, Path::new("/etc/hostname")).starts_with("read-error:"));
+    // Read only: writing fails.
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "write-data",
+            vec![workspace.join("new.txt").to_string_lossy().into_owned()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let status = statuses(&actions).remove(0);
+    assert!(status.starts_with("own:mine;other:Some(Err("), "{status}");
+    assert!(!workspace.join("new.txt").exists());
+
+    let (mut host, _root, workspace, data) = testplugin2_files(FileGrant::Write);
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "write-data",
+            vec![workspace.join("new.txt").to_string_lossy().into_owned()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["own:mine;other:Some(Ok(()))"]);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("new.txt")).unwrap(),
+        "theirs"
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("testplugin2/note.txt")).unwrap(),
+        "mine"
+    );
+}
+
+#[test]
+fn plugins_own_directory_needs_no_grant() {
+    let (mut host, _root, _workspace, data) = testplugin2_files(FileGrant::None);
+    let actions = host
+        .run_command("testplugin2", "write-data", vec![], Snapshot::default())
+        .unwrap();
+    assert_eq!(statuses(&actions), ["own:mine;other:None"]);
+    assert!(data.join("testplugin2/note.txt").is_file());
+}
+
+#[test]
+fn new_events_reach_0_2_plugins() {
+    let (mut host, _root) = testplugin2();
+    for (event, expected) in [
+        (Event::DocumentSave(7), "save:7"),
+        (Event::DocumentClose(8), "close:8"),
+        (Event::SelectionChange(9), "selection:9"),
+    ] {
+        assert!(host.wants(event.kind()));
+        let results = host.dispatch(event, &Snapshot::default());
+        let actions = results[0].1.as_ref().unwrap();
+        assert_eq!(statuses(actions), [expected]);
+    }
+}
+
+/// Property tests of the validation of what plugins send (M9.1).
+mod properties {
+    use quickcheck::{QuickCheck, TestResult};
+
+    use super::*;
+
+    /// The text after applying sorted, non-overlapping `edits`, simply.
+    fn model(text: &str, edits: &[(usize, usize, String)]) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut edits = edits.to_vec();
+        edits.sort_by_key(|(from, to, _)| (*from, *to));
+        let mut out = String::new();
+        let mut pos = 0;
+        for (from, to, insert) in edits {
+            out.extend(&chars[pos..from]);
+            out.push_str(&insert);
+            pos = to;
+        }
+        out.extend(&chars[pos..]);
+        out
+    }
+
+    fn valid(len: usize, edits: &[(usize, usize, String)]) -> bool {
+        let mut sorted = edits.to_vec();
+        sorted.sort_by_key(|(from, to, _)| (*from, *to));
+        let mut end = 0;
+        for (from, to, _) in sorted {
+            if from > to || to > len || from < end {
+                return false;
+            }
+            end = to;
+        }
+        true
+    }
+
+    #[test]
+    fn edits_apply_like_the_model_or_are_rejected() {
+        fn property(text: String, raw: Vec<(u8, u8, String)>) -> TestResult {
+            let len = text.chars().count();
+            // Offsets around the text's length, some out of range.
+            let edits: Vec<(usize, usize, String)> = raw
+                .into_iter()
+                .take(6)
+                .map(|(a, b, s)| (a as usize % (len + 3), b as usize % (len + 3), s))
+                .collect();
+            let rope = Rope::from(text.as_str());
+            let wit: Vec<types::Edit> = edits
+                .iter()
+                .map(|(from, to, text)| types::Edit {
+                    from: *from as u32,
+                    to: *to as u32,
+                    text: text.clone(),
+                })
+                .collect();
+            match transaction_from_edits(&rope, wit) {
+                Ok(transaction) => {
+                    if !valid(len, &edits) {
+                        return TestResult::error("accepted invalid edits");
+                    }
+                    let mut result = rope.clone();
+                    transaction.apply(&mut result);
+                    TestResult::from_bool(result == model(&text, &edits).as_str())
+                }
+                Err(_) => TestResult::from_bool(!valid(len, &edits)),
+            }
+        }
+        QuickCheck::new()
+            .tests(2000)
+            .quickcheck(property as fn(String, Vec<(u8, u8, String)>) -> TestResult);
+    }
+
+    #[test]
+    fn selections_are_validated_not_panicking() {
+        fn property(text: String, raw: Vec<(u8, u8)>) -> bool {
+            let len = text.chars().count();
+            let ranges: Vec<types::Range> = raw
+                .iter()
+                .take(8)
+                .map(|(a, h)| types::Range {
+                    anchor: (*a as usize % (len + 3)) as u32,
+                    head: (*h as usize % (len + 3)) as u32,
+                })
+                .collect();
+            let rope = Rope::from(text.as_str());
+            let in_bounds = !ranges.is_empty()
+                && ranges
+                    .iter()
+                    .all(|r| r.anchor as usize <= len && r.head as usize <= len);
+            match selection_from_ranges(&rope, &ranges) {
+                Ok(selection) => {
+                    in_bounds
+                        && selection
+                            .ensure_invariants(rope.slice(..))
+                            .ranges()
+                            .iter()
+                            .all(|r| r.to() <= len)
+                }
+                Err(_) => !in_bounds,
+            }
+        }
+        QuickCheck::new()
+            .tests(2000)
+            .quickcheck(property as fn(String, Vec<(u8, u8)>) -> bool);
+    }
+
+    #[test]
+    fn text_ranges_never_panic() {
+        fn property(text: String, from: u16, to: u16) -> bool {
+            let (mut host, _root) = testplugin2();
+            let state = host.plugins[0].store.data_mut();
+            state.snapshot = snapshot(&text, 0, 0);
+            let len = text.chars().count();
+            let result = state.text_range(1, from.into(), to.into());
+            match result {
+                Ok(slice) => {
+                    (from as usize) <= (to as usize)
+                        && (to as usize) <= len
+                        && slice.chars().count() == (to - from) as usize
+                }
+                Err(_) => from > to || to as usize > len,
+            }
+        }
+        QuickCheck::new()
+            .tests(50)
+            .quickcheck(property as fn(String, u16, u16) -> bool);
+    }
+}
+
+/// Startup and event costs (M9.2). Run with
+/// `cargo test -p helix-plugin --release -- --ignored --nocapture benchmarks`.
+#[test]
+#[ignore]
+fn benchmarks() {
+    let cache = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let plugins = 20;
+    for i in 0..plugins {
+        let name = format!("tools{i}");
+        let dir = plugin_dir(
+            root.path(),
+            &name,
+            &fixture("examples/text-tools/plugin.wasm"),
+            ALL,
+        );
+        let manifest = dir.join("plugin.toml");
+        let source = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("api = \"0.1\"", "api = \"0.2\"");
+        std::fs::write(manifest, source).unwrap();
+    }
+    for (label, cold) in [("cold cache", true), ("warm cache", false)] {
+        for count in [1, 5, 20] {
+            let cache_dir = if cold {
+                // A fresh cache: every plugin is compiled.
+                cache.path().join(format!("cold-{count}"))
+            } else {
+                cache.path().join("cold-20")
+            };
+            let started = Instant::now();
+            let mut host = PluginHost::new(Some(cache_dir)).unwrap();
+            let (_, errors) = host.load_all(root.path(), |name| {
+                let n: usize = name.trim_start_matches("tools").parse().unwrap();
+                (n < count).then(|| PluginSettings::new("{}"))
+            });
+            assert!(errors.is_empty(), "{errors:?}");
+            eprintln!(
+                "load {count:>2} plugins ({label}): {:>7.1} ms",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
+
+    let (mut host, _root) = testplugin2();
+    let snapshot = snapshot(&"some text\n".repeat(10_000), 0, 0);
+    let rounds = 200;
+    let started = Instant::now();
+    for _ in 0..rounds {
+        host.dispatch(Event::SelectionChange(1), &snapshot);
+    }
+    eprintln!(
+        "dispatch one event to one plugin: {:>7.3} ms",
+        started.elapsed().as_secs_f64() * 1000.0 / rounds as f64
+    );
 }

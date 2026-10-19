@@ -1,7 +1,7 @@
 //! WebAssembly plugin host for Helix.
 //!
 //! Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
-//! implementing the `helix-plugin` world in `wit/helix-plugin.wit`, run with
+//! implementing the `helix-plugin` world in `wit/v0.1/helix-plugin.wit`, run with
 //! Wasmtime. Each plugin lives in its own directory with a `plugin.toml`
 //! manifest and its `plugin.wasm`.
 //!
@@ -13,10 +13,10 @@
 //! WASI, and every call runs with a time and memory limit. A plugin that traps
 //! or runs out of time is disabled.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,22 +25,16 @@ use helix_core::{Range as CoreRange, Rope, Selection, Transaction};
 use serde::Deserialize;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
-mod bindings {
-    wasmtime::component::bindgen!({
-        path: "wit",
-        world: "helix-plugin",
-    });
-}
+mod api;
 
-use bindings::exports::helix::plugin::plugin::Guest;
-use bindings::helix::plugin::{host, types};
-pub use types::{CommandInfo, EventKind, Mode};
+use api::{v0_1, v0_2, Instance};
+pub use types::{CommandInfo, Mode};
+use v0_1::helix::plugin::types;
 
-/// Version of the plugin API (the `helix:plugin` WIT package) this host
-/// implements. A plugin's manifest has to ask for it in its `api` field.
-pub const API_VERSION: &str = "0.1";
+/// The newest supported plugin API. API 0.1 remains supported unchanged.
+pub const API_VERSION: &str = "0.2";
 
 pub type DocumentId = u32;
 
@@ -60,6 +54,12 @@ pub enum Permission {
     OpenFiles,
     /// Run editor commands.
     RunCommands,
+    /// Run programs (`spawn`, `run-interactive`). Programs run outside the
+    /// sandbox, so the user must also grant it, see [`ProcessGrant`].
+    Process,
+    /// Read (or write) files in the workspace through WASI. The user must
+    /// also grant it, see [`FileGrant`].
+    Filesystem,
 }
 
 impl Permission {
@@ -69,9 +69,95 @@ impl Permission {
             Permission::EditBuffers => "edit-buffers",
             Permission::OpenFiles => "open-files",
             Permission::RunCommands => "run-commands",
+            Permission::Process => "process",
+            Permission::Filesystem => "filesystem",
         }
     }
 }
+
+/// Which programs the user lets a plugin run (`allow-process` in
+/// `plugins.toml`). Asking for the `process` permission in `plugin.toml` is
+/// not enough on its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ProcessGrant {
+    #[default]
+    None,
+    /// Any program.
+    Any,
+    /// Only these programs, compared with the program (the first argument)
+    /// exactly as the plugin passes it.
+    Only(Vec<String>),
+}
+
+impl std::fmt::Display for ProcessGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "not granted"),
+            Self::Any => write!(f, "granted"),
+            Self::Only(programs) => write!(f, "only {}", programs.join(", ")),
+        }
+    }
+}
+
+/// Workspace file access the user grants a plugin (`allow-files` in
+/// `plugins.toml`), on top of the `filesystem` permission.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FileGrant {
+    #[default]
+    None,
+    Read,
+    Write,
+}
+
+impl std::fmt::Display for FileGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "not granted",
+            Self::Read => "read",
+            Self::Write => "read and write",
+        })
+    }
+}
+
+/// What the user configured for a plugin in `plugins.toml`.
+#[derive(Debug, Clone, Default)]
+pub struct PluginSettings {
+    /// Passed to `init`, as JSON.
+    pub config: String,
+    pub process: ProcessGrant,
+    pub files: FileGrant,
+}
+
+impl PluginSettings {
+    pub fn new(config: impl Into<String>) -> Self {
+        Self {
+            config: config.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Events a plugin can subscribe to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventKind {
+    DocumentOpen,
+    DocumentChange,
+    ModeSwitch,
+    /// API 0.2 and later.
+    DocumentSave,
+    DocumentClose,
+    SelectionChange,
+}
+
+/// Most programs a plugin may run at once.
+pub const MAX_PROCESSES: usize = 16;
+/// Default and largest time limits of a background program.
+pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
+pub const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// Most items in a plugin picker.
+pub const MAX_PICKER_ITEMS: usize = 1_000_000;
+/// Most columns in a plugin picker.
+pub const MAX_PICKER_COLUMNS: usize = 8;
 
 /// `plugin.toml`
 #[derive(Debug, Clone, Deserialize)]
@@ -103,9 +189,9 @@ impl Manifest {
                 manifest.name
             );
         }
-        if manifest.api != API_VERSION {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure provides {API_VERSION}",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1 and 0.2",
                 manifest.name,
                 manifest.api
             );
@@ -130,6 +216,8 @@ pub struct DocumentSnapshot {
     /// Selection in the focused view on this document (or the first view
     /// showing it). `None` if no view shows the document.
     pub selection: Option<Selection>,
+    /// Whether it has unsaved changes.
+    pub modified: bool,
 }
 
 /// The editor state a plugin call can read.
@@ -138,6 +226,9 @@ pub struct Snapshot {
     pub documents: BTreeMap<DocumentId, DocumentSnapshot>,
     pub current: Option<DocumentId>,
     pub mode: Mode,
+    pub workspace: Option<PathBuf>,
+    pub cwd: PathBuf,
+    pub config_dir: PathBuf,
 }
 
 impl Default for Snapshot {
@@ -146,6 +237,9 @@ impl Default for Snapshot {
             documents: BTreeMap::new(),
             current: None,
             mode: Mode::Normal,
+            workspace: None,
+            cwd: PathBuf::new(),
+            config_dir: PathBuf::new(),
         }
     }
 }
@@ -167,7 +261,134 @@ pub enum Action {
     RunCommand(String),
     Status(String),
     Error(String),
+    /// Run a program in the background and deliver
+    /// [`Callback::ProcessDone`] when it exits.
+    Spawn {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        stdin: Option<String>,
+        timeout: Duration,
+    },
+    /// Hand the terminal to a program, then deliver
+    /// [`Callback::ProcessDone`].
+    RunInteractive {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        chooser_file: bool,
+        wait_for_key: bool,
+    },
+    /// Kill a program started with `Spawn`.
+    Kill {
+        plugin: String,
+        id: u32,
+    },
+    /// Show a picker and deliver [`Callback::PickerDone`].
+    ShowPicker {
+        plugin: String,
+        id: u32,
+        picker: PickerSpec,
+    },
+    /// Add items to an open picker.
+    PushItems {
+        plugin: String,
+        id: u32,
+        items: Vec<PickerItem>,
+    },
+    /// Replace the items of an open picker.
+    SetItems {
+        plugin: String,
+        id: u32,
+        items: Vec<PickerItem>,
+    },
+    /// Show markdown in a popup.
+    Popup(String),
+    /// Ask for a line of text and deliver [`Callback::PromptDone`].
+    ShowPrompt {
+        plugin: String,
+        id: u32,
+        prompt: PromptSpec,
+    },
 }
+
+/// Result of a background program or interactive chooser.
+pub use v0_2::helix::plugin::process::Output as ProcessOutput;
+/// How to open a picked item.
+pub use v0_2::helix::plugin::types::OpenAction;
+/// A picker choice, including the requested split action.
+pub use v0_2::helix::plugin::ui::PickerResult;
+/// A picker as a plugin describes it.
+pub use v0_2::helix::plugin::ui::{
+    Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview, Prompt as PromptSpec,
+};
+
+/// The completion expected for an outstanding request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingKind {
+    Process,
+    Picker,
+    Prompt,
+}
+
+/// A result delivered after the original plugin call returned.
+#[derive(Debug, Clone)]
+pub enum Callback {
+    ProcessDone {
+        id: u32,
+        result: Result<ProcessOutput, String>,
+    },
+    PickerDone {
+        id: u32,
+        result: PickerResult,
+    },
+    PromptDone {
+        id: u32,
+        result: Option<String>,
+    },
+    /// What the user typed in a live picker. Unlike the others, it doesn't
+    /// complete the request.
+    PickerQuery {
+        id: u32,
+        query: String,
+    },
+}
+
+impl Callback {
+    fn request(&self) -> (u32, PendingKind) {
+        match self {
+            Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
+            Self::PickerDone { id, .. } | Self::PickerQuery { id, .. } => {
+                (*id, PendingKind::Picker)
+            }
+            Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
+        }
+    }
+
+    fn completes(&self) -> bool {
+        !matches!(self, Self::PickerQuery { .. })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallContext {
+    Init,
+    Command,
+    Event,
+    Callback,
+}
+
+impl CallContext {
+    fn allows_ui(self) -> bool {
+        matches!(self, Self::Command | Self::Callback)
+    }
+}
+
+// Never reuse an id, even after recreating the host on reload. Late results
+// must not reach a new instance of a plugin with the same name.
+static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 /// What happened in the editor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +396,9 @@ pub enum Event {
     DocumentOpen(DocumentId),
     DocumentChange(DocumentId),
     ModeSwitch { old: Mode, new: Mode },
+    DocumentSave(DocumentId),
+    DocumentClose(DocumentId),
+    SelectionChange(DocumentId),
 }
 
 impl Event {
@@ -183,6 +407,9 @@ impl Event {
             Event::DocumentOpen(_) => EventKind::DocumentOpen,
             Event::DocumentChange(_) => EventKind::DocumentChange,
             Event::ModeSwitch { .. } => EventKind::ModeSwitch,
+            Event::DocumentSave(_) => EventKind::DocumentSave,
+            Event::DocumentClose(_) => EventKind::DocumentClose,
+            Event::SelectionChange(_) => EventKind::SelectionChange,
         }
     }
 }
@@ -220,10 +447,19 @@ struct State {
     permissions: HashSet<Permission>,
     snapshot: Snapshot,
     actions: Vec<Action>,
-    /// Whether the current call runs one of the plugin's commands (as opposed
-    /// to `init` or an event handler).
-    in_command: bool,
+    context: CallContext,
+    next_id: &'static AtomicU32,
+    pending: HashMap<u32, PendingKind>,
+    process: ProcessGrant,
+    files: FileGrant,
+    /// The plugin's own directory (`data-dir`), preopened read-write.
+    data_dir: Option<PathBuf>,
+    /// The latest `log` lines, for `:plugin-log`.
+    log: std::collections::VecDeque<String>,
 }
+
+/// `log` lines kept per plugin.
+const LOG_LINES: usize = 1000;
 
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -235,6 +471,25 @@ impl WasiView for State {
 }
 
 impl State {
+    fn request(&mut self, kind: PendingKind) -> Result<u32, String> {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| "plugin request ids exhausted".to_string())?;
+        self.pending.insert(id, kind);
+        Ok(id)
+    }
+
+    fn need_ui(&self, function: &str) -> Result<(), String> {
+        if self.context.allows_ui() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{function} is only available from plugin commands and callbacks"
+            ))
+        }
+    }
+
     fn need(&self, permission: Permission) -> Result<(), String> {
         if self.permissions.contains(&permission) {
             Ok(())
@@ -261,9 +516,7 @@ impl State {
     }
 }
 
-impl types::Host for State {}
-
-impl host::Host for State {
+impl State {
     fn current_document(&mut self) -> Option<DocumentId> {
         self.snapshot.current
     }
@@ -373,8 +626,10 @@ impl host::Host for State {
 
     fn run_command(&mut self, command: String) -> Result<(), String> {
         self.need(Permission::RunCommands)?;
-        if !self.in_command {
-            return Err("run-command is only available while running a plugin command".into());
+        if !self.context.allows_ui() {
+            return Err(
+                "run-command is only available while running a plugin command or callback".into(),
+            );
         }
         if command.trim().is_empty() {
             return Err("empty command".into());
@@ -393,6 +648,196 @@ impl host::Host for State {
 
     fn log(&mut self, message: String) {
         log::info!("[plugin {}] {message}", self.plugin);
+        if self.log.len() == LOG_LINES {
+            self.log.pop_front();
+        }
+        self.log.push_back(message);
+    }
+
+    /// Check that the plugin may run `argv` now.
+    fn need_process(&self, argv: &[String]) -> Result<(), String> {
+        self.need(Permission::Process)?;
+        if self.context == CallContext::Init {
+            return Err("programs can't be started from init".into());
+        }
+        let program = argv
+            .first()
+            .filter(|program| !program.is_empty())
+            .ok_or("no program given")?;
+        match &self.process {
+            ProcessGrant::None => Err(format!(
+                "process not granted: add `allow-process = true` (or a list of programs) \
+                 under [{}] in plugins.toml",
+                self.plugin
+            )),
+            ProcessGrant::Any => Ok(()),
+            ProcessGrant::Only(programs) if programs.iter().any(|p| p == program) => Ok(()),
+            ProcessGrant::Only(_) => Err(format!(
+                "'{program}' is not in allow-process for [{}] in plugins.toml",
+                self.plugin
+            )),
+        }?;
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Process)
+            .count();
+        if running >= MAX_PROCESSES {
+            return Err(format!("at most {MAX_PROCESSES} programs can run at once"));
+        }
+        Ok(())
+    }
+
+    fn spawn(
+        &mut self,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        stdin: Option<String>,
+        timeout_ms: Option<u32>,
+    ) -> Result<u32, String> {
+        self.need_process(&argv)?;
+        let timeout = timeout_ms
+            .map(|ms| Duration::from_millis(ms.into()))
+            .unwrap_or(DEFAULT_PROCESS_TIMEOUT)
+            .min(MAX_PROCESS_TIMEOUT);
+        let id = self.request(PendingKind::Process)?;
+        self.actions.push(Action::Spawn {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            cwd: cwd.map(PathBuf::from),
+            stdin,
+            timeout,
+        });
+        Ok(id)
+    }
+
+    fn run_interactive(
+        &mut self,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        chooser_file: bool,
+        wait_for_key: bool,
+    ) -> Result<u32, String> {
+        self.need_ui("run-interactive")?;
+        self.need_process(&argv)?;
+        let id = self.request(PendingKind::Process)?;
+        self.actions.push(Action::RunInteractive {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            cwd: cwd.map(PathBuf::from),
+            chooser_file,
+            wait_for_key,
+        });
+        Ok(id)
+    }
+
+    fn kill(&mut self, id: u32) {
+        if self.pending.get(&id) == Some(&PendingKind::Process) {
+            self.actions.push(Action::Kill {
+                plugin: self.plugin.clone(),
+                id,
+            });
+        }
+    }
+
+    fn show_picker(&mut self, picker: PickerSpec) -> Result<u32, String> {
+        self.need_ui("show-picker")?;
+        if picker.columns.is_empty() || picker.columns.len() > MAX_PICKER_COLUMNS {
+            return Err(format!(
+                "a picker needs 1 to {MAX_PICKER_COLUMNS} columns, got {}",
+                picker.columns.len()
+            ));
+        }
+        if picker.items.len() > MAX_PICKER_ITEMS {
+            return Err(format!(
+                "a picker can have at most {MAX_PICKER_ITEMS} items"
+            ));
+        }
+        let id = self.request(PendingKind::Picker)?;
+        self.actions.push(Action::ShowPicker {
+            plugin: self.plugin.clone(),
+            id,
+            picker,
+        });
+        Ok(id)
+    }
+
+    fn push_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+        if self.pending.get(&id) != Some(&PendingKind::Picker) {
+            return Err(format!("no open picker with id {id}"));
+        }
+        if self.context == CallContext::Init {
+            return Err("push-items can't be used from init".into());
+        }
+        self.actions.push(Action::PushItems {
+            plugin: self.plugin.clone(),
+            id,
+            items,
+        });
+        Ok(())
+    }
+
+    fn set_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+        if self.pending.get(&id) != Some(&PendingKind::Picker) {
+            return Err(format!("no open picker with id {id}"));
+        }
+        if items.len() > MAX_PICKER_ITEMS {
+            return Err(format!(
+                "a picker can have at most {MAX_PICKER_ITEMS} items"
+            ));
+        }
+        self.actions.push(Action::SetItems {
+            plugin: self.plugin.clone(),
+            id,
+            items,
+        });
+        Ok(())
+    }
+
+    fn show_popup(&mut self, markdown: String) -> Result<(), String> {
+        self.need_ui("show-popup")?;
+        self.actions.push(Action::Popup(markdown));
+        Ok(())
+    }
+
+    fn show_prompt(&mut self, prompt: PromptSpec) -> Result<u32, String> {
+        self.need_ui("show-prompt")?;
+        let id = self.request(PendingKind::Prompt)?;
+        self.actions.push(Action::ShowPrompt {
+            plugin: self.plugin.clone(),
+            id,
+            prompt,
+        });
+        Ok(id)
+    }
+
+    fn workspace_root(&mut self) -> Option<String> {
+        self.snapshot
+            .workspace
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn cwd(&mut self) -> String {
+        self.snapshot.cwd.to_string_lossy().into_owned()
+    }
+
+    fn config_dir(&mut self) -> String {
+        self.snapshot.config_dir.to_string_lossy().into_owned()
+    }
+
+    fn data_dir(&mut self) -> String {
+        self.data_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn document_modified(&mut self, doc: DocumentId) -> Result<bool, String> {
+        self.need(Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.modified)
     }
 }
 
@@ -451,7 +896,7 @@ pub struct Plugin {
     manifest: Manifest,
     dir: PathBuf,
     store: Store<State>,
-    instance: bindings::HelixPlugin,
+    instance: Instance,
     commands: Vec<CommandInfo>,
     events: Vec<EventKind>,
     /// Why the plugin was disabled.
@@ -489,9 +934,9 @@ impl Plugin {
     fn call<R>(
         &mut self,
         snapshot: Snapshot,
-        in_command: bool,
+        context: CallContext,
         limit: Duration,
-        f: impl FnOnce(&Guest, &mut Store<State>) -> wasmtime::Result<R> + Send,
+        f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R> + Send,
     ) -> anyhow::Result<(R, Vec<Action>)>
     where
         R: Send,
@@ -502,19 +947,21 @@ impl Plugin {
         let state = self.store.data_mut();
         state.snapshot = snapshot;
         state.actions.clear();
-        state.in_command = in_command;
+        state.context = context;
         let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
         self.store.set_epoch_deadline(ticks);
 
-        let guest = self.instance.helix_plugin_plugin();
+        let guest = &self.instance;
         let store = &mut self.store;
         let result = outside_async_runtime(move || f(guest, store));
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
+        state.context = CallContext::Init;
         match result {
             Ok(value) => Ok((value, actions)),
             Err(err) => {
+                state.pending.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
                         format!("it took longer than {} ms", limit.as_millis())
@@ -542,6 +989,8 @@ pub struct PluginInfo {
     pub permissions: Vec<Permission>,
     pub commands: Vec<CommandInfo>,
     pub disabled: Option<String>,
+    pub process: ProcessGrant,
+    pub files: FileGrant,
 }
 
 /// Loads and runs plugins.
@@ -551,6 +1000,10 @@ pub struct PluginHost {
     plugins: Vec<Plugin>,
     limits: Limits,
     cache_dir: Option<PathBuf>,
+    /// Shared with plugins granted `allow-files`.
+    workspace: Option<PathBuf>,
+    /// Plugins get `<data_root>/<name>` as their own directory.
+    data_root: Option<PathBuf>,
     stop_ticker: Arc<AtomicBool>,
 }
 
@@ -574,7 +1027,8 @@ impl PluginHost {
 
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        bindings::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         // Advance the epoch regularly so calls can be interrupted.
         let stop_ticker = Arc::new(AtomicBool::new(false));
@@ -598,6 +1052,8 @@ impl PluginHost {
             plugins: Vec::new(),
             limits,
             cache_dir,
+            workspace: None,
+            data_root: None,
             stop_ticker,
         })
     }
@@ -621,6 +1077,8 @@ impl PluginHost {
                 permissions: plugin.manifest.permissions.clone(),
                 commands: plugin.commands.clone(),
                 disabled: plugin.disabled.clone(),
+                process: plugin.store.data().process.clone(),
+                files: plugin.store.data().files,
             })
             .collect()
     }
@@ -630,14 +1088,22 @@ impl PluginHost {
         self.plugins.clear();
     }
 
+    /// The workspace plugins granted `allow-files` can access, and where
+    /// plugins keep their own files. Set before loading: plugins see the
+    /// directories as they were when they were loaded.
+    pub fn set_dirs(&mut self, workspace: Option<PathBuf>, data_root: Option<PathBuf>) {
+        self.workspace = workspace;
+        self.data_root = data_root;
+    }
+
     /// Load every plugin in the subdirectories of `dir`. `settings` gives the
-    /// JSON settings for a plugin, or `None` if it is disabled. Returns the
+    /// settings for a plugin, or `None` if it is disabled. Returns the
     /// actions of the plugins' `init` calls and the errors of plugins that
     /// failed to load.
     pub fn load_all(
         &mut self,
         dir: &Path,
-        mut settings: impl FnMut(&str) -> Option<String>,
+        mut settings: impl FnMut(&str) -> Option<PluginSettings>,
     ) -> (Vec<Action>, Vec<anyhow::Error>) {
         let mut actions = Vec::new();
         let mut errors = Vec::new();
@@ -658,10 +1124,10 @@ impl PluginHost {
                     continue;
                 }
             };
-            let Some(config) = settings(&manifest.name) else {
+            let Some(settings) = settings(&manifest.name) else {
                 continue;
             };
-            match self.load_with_manifest(&dir, manifest, &config) {
+            match self.load_with_manifest(&dir, manifest, settings) {
                 Ok(init_actions) => actions.extend(init_actions),
                 Err(err) => errors.push(err),
             }
@@ -671,15 +1137,66 @@ impl PluginHost {
 
     /// Load the plugin in `dir` and call its `init` with `config` (JSON).
     pub fn load(&mut self, dir: &Path, config: &str) -> anyhow::Result<Vec<Action>> {
+        self.load_with(dir, PluginSettings::new(config))
+    }
+
+    /// Load the plugin in `dir` with the user's `settings`.
+    pub fn load_with(
+        &mut self,
+        dir: &Path,
+        settings: PluginSettings,
+    ) -> anyhow::Result<Vec<Action>> {
         let manifest = read_manifest(dir)?;
-        self.load_with_manifest(dir, manifest, config)
+        self.load_with_manifest(dir, manifest, settings)
+    }
+
+    /// WASI for a plugin: its own directory, and the workspace if granted.
+    /// No arguments, environment, network or stdio.
+    fn wasi(
+        &self,
+        name: &str,
+        manifest: &Manifest,
+        files: FileGrant,
+    ) -> anyhow::Result<(WasiCtx, Option<PathBuf>)> {
+        let mut wasi = WasiCtx::builder();
+        let data_dir = match &self.data_root {
+            Some(root) => {
+                let dir = root.join(name);
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("failed to create {}", dir.display()))?;
+                wasi.preopened_dir(
+                    &dir,
+                    dir.to_string_lossy(),
+                    DirPerms::all(),
+                    FilePerms::all(),
+                )?;
+                Some(dir)
+            }
+            None => None,
+        };
+        if let (true, Some(workspace)) = (
+            manifest.permissions.contains(&Permission::Filesystem) && files != FileGrant::None,
+            &self.workspace,
+        ) {
+            let (dir_perms, file_perms) = match files {
+                FileGrant::Write => (DirPerms::all(), FilePerms::all()),
+                _ => (DirPerms::READ, FilePerms::READ),
+            };
+            wasi.preopened_dir(
+                workspace,
+                workspace.to_string_lossy(),
+                dir_perms,
+                file_perms,
+            )?;
+        }
+        Ok((wasi.build(), data_dir))
     }
 
     fn load_with_manifest(
         &mut self,
         dir: &Path,
         manifest: Manifest,
-        config: &str,
+        settings: PluginSettings,
     ) -> anyhow::Result<Vec<Action>> {
         let name = manifest.name.clone();
         if self.plugin(&name).is_some() {
@@ -690,9 +1207,9 @@ impl PluginHost {
             .compile(&name, &wasm)
             .with_context(|| format!("failed to load plugin '{name}' from {}", wasm.display()))?;
 
+        let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files)?;
         let state = State {
-            // No arguments, environment, preopened directories, network or stdio.
-            wasi: WasiCtx::builder().build(),
+            wasi,
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(self.limits.memory)
@@ -704,7 +1221,13 @@ impl PluginHost {
             permissions: manifest.permissions.iter().copied().collect(),
             snapshot: Snapshot::default(),
             actions: Vec::new(),
-            in_command: false,
+            context: CallContext::Init,
+            next_id: &NEXT_REQUEST_ID,
+            pending: HashMap::new(),
+            process: settings.process,
+            files: settings.files,
+            data_dir,
+            log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -712,10 +1235,15 @@ impl PluginHost {
             (self.limits.init.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64,
         );
         let linker = &self.linker;
-        let instance = outside_async_runtime(|| {
-            bindings::HelixPlugin::instantiate(&mut store, &component, linker)
-        })
-        .with_context(|| format!("failed to start plugin '{name}'"))?;
+        let instance =
+            outside_async_runtime(|| match manifest.api.as_str() {
+                "0.1" => v0_1::HelixPlugin::instantiate(&mut store, &component, linker)
+                    .map(Instance::V0_1),
+                "0.2" => v0_2::HelixPlugin::instantiate(&mut store, &component, linker)
+                    .map(Instance::V0_2),
+                _ => unreachable!("manifest API was validated"),
+            })
+            .with_context(|| format!("failed to start plugin '{name}'"))?;
 
         let mut plugin = Plugin {
             manifest,
@@ -728,13 +1256,13 @@ impl PluginHost {
         };
         let (registration, actions) = plugin.call(
             Snapshot::default(),
-            false,
+            CallContext::Init,
             self.limits.init,
-            |guest, store| guest.call_init(store, config),
+            |guest, store| guest.call_init(store, &settings.config),
         )?;
-        let registration =
+        let (commands, events) =
             registration.map_err(|err| anyhow!("plugin '{name}' failed to start: {err}"))?;
-        for command in &registration.commands {
+        for command in &commands {
             if !is_valid_name(&command.name) {
                 bail!(
                     "plugin '{name}' registered an invalid command name '{}'",
@@ -742,8 +1270,8 @@ impl PluginHost {
                 );
             }
         }
-        plugin.commands = registration.commands;
-        plugin.events = registration.events;
+        plugin.commands = commands;
+        plugin.events = events;
         plugin.events.dedup();
         self.plugins.push(plugin);
         Ok(actions)
@@ -838,11 +1366,82 @@ impl PluginHost {
             );
         }
         let name = plugin.manifest.name.clone();
-        let (result, actions) = plugin.call(snapshot, true, limit, |guest, store| {
-            guest.call_run_command(store, command, &args)
-        })?;
-        result.map_err(|err| anyhow!("{name}/{command}: {err}"))?;
+        let pending = plugin.store.data().pending.clone();
+        let (result, actions) =
+            plugin.call(snapshot, CallContext::Command, limit, |guest, store| {
+                guest.call_run_command(store, command, &args)
+            })?;
+        if let Err(err) = result {
+            plugin.store.data_mut().pending = pending;
+            bail!("{name}/{command}: {err}");
+        }
         Ok(actions)
+    }
+
+    /// Reserve a result id for an API 0.2 host operation, as the host
+    /// functions do. For tests; ids are never reused after reload.
+    #[doc(hidden)]
+    pub fn register_request(&mut self, plugin: &str, kind: PendingKind) -> anyhow::Result<u32> {
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin)
+            .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
+        if plugin.manifest.api != "0.2" || plugin.disabled.is_some() {
+            bail!("requests require an enabled API 0.2 plugin");
+        }
+        plugin
+            .store
+            .data_mut()
+            .request(kind)
+            .map_err(anyhow::Error::msg)
+    }
+
+    /// The latest lines `plugin` wrote with `log` (oldest first).
+    pub fn log_lines(&self, plugin: &str) -> Option<Vec<String>> {
+        let plugin = self.plugin(plugin)?;
+        Some(plugin.store.data().log.iter().cloned().collect())
+    }
+
+    /// Set which programs `plugin` may run (`allow-process` in
+    /// `plugins.toml`). Plugins can't run programs from `init`, so this is set
+    /// after loading.
+    pub fn set_process_grant(&mut self, plugin: &str, grant: ProcessGrant) {
+        if let Some(plugin) = self.plugins.iter_mut().find(|p| p.name() == plugin) {
+            plugin.store.data_mut().process = grant;
+        }
+    }
+
+    /// Deliver a completion with the command time limit and a fresh snapshot.
+    /// Unknown, duplicate, wrong-kind and late results are ignored.
+    pub fn callback(
+        &mut self,
+        plugin: &str,
+        callback: Callback,
+        snapshot: &Snapshot,
+    ) -> anyhow::Result<Vec<Action>> {
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none())
+        else {
+            return Ok(Vec::new());
+        };
+        let (id, kind) = callback.request();
+        if plugin.store.data().pending.get(&id) != Some(&kind) {
+            return Ok(Vec::new());
+        }
+        if callback.completes() {
+            plugin.store.data_mut().pending.remove(&id);
+        }
+        plugin
+            .call(
+                snapshot.clone(),
+                CallContext::Callback,
+                self.limits.command,
+                |guest, store| guest.call_callback(store, &callback),
+            )
+            .map(|((), actions)| actions)
     }
 
     /// Send `event` to the plugins that subscribed to it. Returns the actions
@@ -859,13 +1458,12 @@ impl PluginHost {
             .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
             .map(|plugin| {
                 let result = plugin
-                    .call(snapshot.clone(), false, limit, |guest, store| match event {
-                        Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                        Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
-                        Event::ModeSwitch { old, new } => {
-                            guest.call_on_mode_switch(store, old, new)
-                        }
-                    })
+                    .call(
+                        snapshot.clone(),
+                        CallContext::Event,
+                        limit,
+                        |guest, store| guest.call_event(store, event),
+                    )
                     .map(|((), actions)| actions);
                 (plugin.manifest.name.clone(), result)
             })

@@ -1,0 +1,6 @@
+name = "finder"
+version = "0.1.0"
+api = "0.2"
+description = "Find files, grep live and switch git branches, with rg and git"
+permissions = ["open-files", "run-commands", "process"]
+wasm = "plugin.wasm"

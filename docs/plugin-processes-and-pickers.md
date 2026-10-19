@@ -1,6 +1,11 @@
 # Plugin API 0.2: processes, the terminal and pickers
 
-Status: **design, not implemented yet.** This is the next step after phases 1–3
+Status: **implemented** (M0–M2 of [`plugin-roadmap.md`](plugin-roadmap.md),
+except text previews). Nothing is built into the editor; the opt-in example
+plugins `helix-plugin/examples/yazi` and `examples/finder` (files, live grep,
+branches) replace the "Examples to ship" section below.
+
+This is the next step after phases 1–3
 of [`plugin-system.md`](plugin-system.md). It lets plugins do what yazi, fzf,
 lazygit and Telescope-style integrations need:
 

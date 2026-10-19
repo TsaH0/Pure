@@ -836,9 +836,11 @@ impl<'a> Args<'a> {
             // argument.
             self.flags.insert(flag.name, arg);
             self.state = CompletionState::FlagArgument(flag);
-        } else if !self.only_positionals && arg.starts_with('-') {
+        } else if !self.only_positionals && !self.signature.flags.is_empty() && arg.starts_with('-')
+        {
             // If the token starts with '-' and we are not only accepting positional arguments,
-            // treat this token as a flag.
+            // treat this token as a flag. Commands without flags (like `:plugin-run`) take it as
+            // a positional, e.g. `sh -c`.
             let flag = if let Some(longhand) = arg.strip_prefix("--") {
                 self.signature
                     .flags
@@ -1135,6 +1137,16 @@ mod test {
         signature: Signature,
     ) -> Result<Args<'a>, Box<dyn std::error::Error + 'a>> {
         Args::parse(input, signature, true, |token| Ok(token.content))
+    }
+
+    #[test]
+    fn dashes_are_positionals_without_flags() {
+        let signature = Signature {
+            positionals: (1, None),
+            ..Signature::DEFAULT
+        };
+        let args = parse_signature("sh -c --x", signature).unwrap();
+        assert_eq!(args.iter().collect::<Vec<_>>(), ["sh", "-c", "--x"]);
     }
 
     #[test]

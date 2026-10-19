@@ -101,6 +101,7 @@
 | `:cclear` | Empty the quickfix list. |
 | `:plugin-run` | Run a plugin command: `:plugin-run <plugin>/<command> [args...]`. |
 | `:plugin-list` | Show the loaded plugins and their commands. |
+| `:plugin-log` | Show the latest lines a plugin logged in a new buffer: `:plugin-log <plugin>`. |
 | `:plugin-reload` | Reload all plugins and plugins.toml. |
 | `:run-and-wait`, `:bang` | Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again. |
 | `:compile` | Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again. |

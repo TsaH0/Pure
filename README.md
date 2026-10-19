@@ -15,14 +15,15 @@ inspired editor, written in Rust) that keeps up with Helix and adds:
   components, with permissions, time and memory limits. See
   [`helix-plugin/README.md`](helix-plugin/README.md).
 - **Vim's `:s`**: `:%s/\(.*\)/"\1",/`, `:s/(\w+) (\w+)/\U\2\E \1/g`, ranges,
-  capture groups (Vim and regex syntax), case changes and flags; `space v`
-  starts a very magic `:s/\v` on the selection.
+  capture groups (Vim and regex syntax), case changes and flags, with a live
+  preview of the matches and the result while you type; `space v` starts a
+  very magic `:s/\v` on the selection.
 - **Quickfix list**: filled from compiler output, `:grep`, diagnostics or a
   buffer; `]q` / `[q` / `]Q` / `[Q`, `space q`, `:cnext` and friends.
 - **Running commands**: `space x` streams a command's output into an
   Emacs-style `*compilation*` buffer, `space z` runs it like Vim's `:!`,
-  `:run-interactive` hands the terminal to full-screen programs, and a
-  built-in `yazi` file picker.
+  and `:run-interactive` hands the terminal to full-screen programs (yazi,
+  lazygit, ...).
 - **Smarter text objects**: `mi(`/`ma"` find the nearest pair on the line,
   and letters work for pairs (`mib`, `miB`, `mir`, `miA`, `mid`, `mis`, `miq`).
 
