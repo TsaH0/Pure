@@ -127,3 +127,21 @@ API 0.2 was extended in place (it is not released yet):
   Dispatching one event to one plugin (with a 10 000-line document): 0.05 ms.
   Warm-cache startup is within the 5 ms per plugin budget; cold-cache
   compilation is sequential (a TODO).
+
+## Performance (done)
+
+Goal from the owner: plugins must never make Pure slower than vanilla Helix.
+
+- **Startup:** plugins load in the background (`load_in_background`):
+  compiling and `init` run on a blocking thread; the editor draws right away
+  and plugins get `document-open` for files opened meanwhile. Without a
+  plugin directory (or with an empty one) no plugin host or engine is
+  created at all. Components compile in parallel on a cold cache.
+- **Idle:** the epoch ticker (time limits) parks unless a plugin call runs:
+  0 wake-ups while idle (it used to wake every 5 ms).
+- **Typing and moving:** editor hooks check a lock-free bitmask of the
+  events plugins subscribed to and return at once if none did.
+- **Plugin calls:** the workspace root is cached per working directory.
+- Benchmark (release, 4 cores, `text-tools`): warm cache 1.4 / 2.9 / 12.6 ms
+  for 1 / 5 / 20 plugins (all off the startup path now); cold cache 56 /
+  231 / 731 ms; one event to one plugin 0.05 ms.

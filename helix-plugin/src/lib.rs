@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -901,6 +901,7 @@ pub struct Plugin {
     events: Vec<EventKind>,
     /// Why the plugin was disabled.
     disabled: Option<String>,
+    ticker: Arc<Ticker>,
 }
 
 impl Plugin {
@@ -953,7 +954,9 @@ impl Plugin {
 
         let guest = &self.instance;
         let store = &mut self.store;
+        let busy = self.ticker.busy();
         let result = outside_async_runtime(move || f(guest, store));
+        drop(busy);
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
@@ -1004,12 +1007,71 @@ pub struct PluginHost {
     workspace: Option<PathBuf>,
     /// Plugins get `<data_root>/<name>` as their own directory.
     data_root: Option<PathBuf>,
-    stop_ticker: Arc<AtomicBool>,
+    ticker: Arc<Ticker>,
+}
+
+/// Advances the engine's epoch so plugin calls can be interrupted, but only
+/// while a call runs: when no plugin runs, the thread sleeps and the editor
+/// has no extra wake-ups.
+struct Ticker {
+    /// Plugin calls running.
+    busy: AtomicUsize,
+    stop: AtomicBool,
+    thread: std::thread::Thread,
+}
+
+impl Ticker {
+    fn start(engine: &Engine) -> anyhow::Result<Arc<Self>> {
+        let engine = engine.weak();
+        let (sender, receiver) = std::sync::mpsc::channel::<Arc<Ticker>>();
+        let handle = std::thread::Builder::new()
+            .name("helix-plugin-epoch".into())
+            .spawn(move || {
+                let Ok(ticker) = receiver.recv() else {
+                    return;
+                };
+                while !ticker.stop.load(Ordering::Relaxed) {
+                    if ticker.busy.load(Ordering::Acquire) == 0 {
+                        // Woken by `busy()` or on drop.
+                        std::thread::park();
+                        continue;
+                    }
+                    std::thread::sleep(EPOCH_TICK);
+                    match engine.upgrade() {
+                        Some(engine) => engine.increment_epoch(),
+                        None => break,
+                    }
+                }
+            })?;
+        let ticker = Arc::new(Self {
+            busy: AtomicUsize::new(0),
+            stop: AtomicBool::new(false),
+            thread: handle.thread().clone(),
+        });
+        let _ = sender.send(ticker.clone());
+        Ok(ticker)
+    }
+
+    /// Tick until the returned guard is dropped.
+    fn busy(self: &Arc<Self>) -> TickerGuard {
+        self.busy.fetch_add(1, Ordering::AcqRel);
+        self.thread.unpark();
+        TickerGuard(self.clone())
+    }
+}
+
+struct TickerGuard(Arc<Ticker>);
+
+impl Drop for TickerGuard {
+    fn drop(&mut self) {
+        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Drop for PluginHost {
     fn drop(&mut self) {
-        self.stop_ticker.store(true, Ordering::Relaxed);
+        self.ticker.stop.store(true, Ordering::Relaxed);
+        self.ticker.thread.unpark();
     }
 }
 
@@ -1030,21 +1092,7 @@ impl PluginHost {
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
-        // Advance the epoch regularly so calls can be interrupted.
-        let stop_ticker = Arc::new(AtomicBool::new(false));
-        let ticker_engine = engine.weak();
-        let stop = stop_ticker.clone();
-        std::thread::Builder::new()
-            .name("helix-plugin-epoch".into())
-            .spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    std::thread::sleep(EPOCH_TICK);
-                    match ticker_engine.upgrade() {
-                        Some(engine) => engine.increment_epoch(),
-                        None => break,
-                    }
-                }
-            })?;
+        let ticker = Ticker::start(&engine)?;
 
         Ok(Self {
             engine,
@@ -1054,7 +1102,7 @@ impl PluginHost {
             cache_dir,
             workspace: None,
             data_root: None,
-            stop_ticker,
+            ticker,
         })
     }
 
@@ -1116,6 +1164,7 @@ impl PluginHost {
             .filter(|path| path.join("plugin.toml").is_file())
             .collect();
         dirs.sort();
+        let mut enabled = Vec::new();
         for dir in dirs {
             let manifest = match read_manifest(&dir) {
                 Ok(manifest) => manifest,
@@ -1124,10 +1173,33 @@ impl PluginHost {
                     continue;
                 }
             };
-            let Some(settings) = settings(&manifest.name) else {
-                continue;
-            };
-            match self.load_with_manifest(&dir, manifest, settings) {
+            if let Some(settings) = settings(&manifest.name) {
+                enabled.push((dir, manifest, settings));
+            }
+        }
+        // Compiling (on a cold cache) is the slow part: do it in parallel,
+        // then load in order.
+        let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
+        let components: Vec<_> = std::thread::scope(|scope| {
+            let compiling: Vec<_> = enabled
+                .iter()
+                .map(|(dir, manifest, _)| {
+                    scope.spawn(move || {
+                        compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+                    })
+                })
+                .collect();
+            compiling
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow!("compiling the plugin panicked")))
+                })
+                .collect()
+        });
+        for ((dir, manifest, settings), component) in enabled.into_iter().zip(components) {
+            match self.load_compiled(&dir, manifest, settings, component) {
                 Ok(init_actions) => actions.extend(init_actions),
                 Err(err) => errors.push(err),
             }
@@ -1198,14 +1270,32 @@ impl PluginHost {
         manifest: Manifest,
         settings: PluginSettings,
     ) -> anyhow::Result<Vec<Action>> {
+        let component = compile(
+            &self.engine,
+            self.cache_dir.as_deref(),
+            &manifest.name,
+            &dir.join(&manifest.wasm),
+        );
+        self.load_compiled(dir, manifest, settings, component)
+    }
+
+    fn load_compiled(
+        &mut self,
+        dir: &Path,
+        manifest: Manifest,
+        settings: PluginSettings,
+        component: anyhow::Result<Component>,
+    ) -> anyhow::Result<Vec<Action>> {
         let name = manifest.name.clone();
         if self.plugin(&name).is_some() {
             bail!("plugin '{name}' is already loaded");
         }
-        let wasm = dir.join(&manifest.wasm);
-        let component = self
-            .compile(&name, &wasm)
-            .with_context(|| format!("failed to load plugin '{name}' from {}", wasm.display()))?;
+        let component = component.with_context(|| {
+            format!(
+                "failed to load plugin '{name}' from {}",
+                dir.join(&manifest.wasm).display()
+            )
+        })?;
 
         let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files)?;
         let state = State {
@@ -1235,6 +1325,7 @@ impl PluginHost {
             (self.limits.init.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64,
         );
         let linker = &self.linker;
+        let busy = self.ticker.busy();
         let instance =
             outside_async_runtime(|| match manifest.api.as_str() {
                 "0.1" => v0_1::HelixPlugin::instantiate(&mut store, &component, linker)
@@ -1244,6 +1335,7 @@ impl PluginHost {
                 _ => unreachable!("manifest API was validated"),
             })
             .with_context(|| format!("failed to start plugin '{name}'"))?;
+        drop(busy);
 
         let mut plugin = Plugin {
             manifest,
@@ -1253,6 +1345,7 @@ impl PluginHost {
             commands: Vec::new(),
             events: Vec::new(),
             disabled: None,
+            ticker: self.ticker.clone(),
         };
         let (registration, actions) = plugin.call(
             Snapshot::default(),
@@ -1275,58 +1368,6 @@ impl PluginHost {
         plugin.events.dedup();
         self.plugins.push(plugin);
         Ok(actions)
-    }
-
-    /// Compile a component, using the cache when possible.
-    fn compile(&self, name: &str, wasm: &Path) -> anyhow::Result<Component> {
-        let bytes = std::fs::read(wasm)?;
-        let cache_file = self.cache_dir.as_ref().map(|dir| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            self.engine
-                .precompile_compatibility_hash()
-                .hash(&mut hasher);
-            dir.join(format!("{name}-{:016x}.cwasm", hasher.finish()))
-        });
-        if let Some(cache_file) = &cache_file {
-            // Read into memory rather than `deserialize_file`, which maps the
-            // file: if the file was changed in place while mapped (by another
-            // program, or an older Helix), accessing the code would crash.
-            if let Ok(cached) = std::fs::read(cache_file) {
-                // SAFETY: the file was written by `Component::serialize` below
-                // for this engine configuration (its name includes a hash of
-                // the configuration) and lives in the user's own cache
-                // directory. Wasmtime still checks the header and version.
-                match unsafe { Component::deserialize(&self.engine, &cached) } {
-                    Ok(component) => return Ok(component),
-                    Err(err) => {
-                        log::warn!("ignoring cached plugin {}: {err:#}", cache_file.display())
-                    }
-                }
-            }
-        }
-        let component = Component::new(&self.engine, &bytes)?;
-        if let Some(cache_file) = &cache_file {
-            let write = || -> anyhow::Result<()> {
-                std::fs::create_dir_all(cache_file.parent().unwrap())?;
-                // Write to a temporary file first so a crash can't leave a
-                // truncated file behind.
-                static COUNTER: std::sync::atomic::AtomicUsize =
-                    std::sync::atomic::AtomicUsize::new(0);
-                let tmp = cache_file.with_extension(format!(
-                    "tmp{}-{}",
-                    std::process::id(),
-                    COUNTER.fetch_add(1, Ordering::Relaxed)
-                ));
-                std::fs::write(&tmp, component.serialize()?)?;
-                std::fs::rename(tmp, cache_file)?;
-                Ok(())
-            };
-            if let Err(err) = write() {
-                log::warn!("failed to cache plugin '{name}': {err:#}");
-            }
-        }
-        Ok(component)
     }
 
     /// All commands of enabled plugins, as `(plugin, command)`.
@@ -1476,6 +1517,60 @@ impl PluginHost {
             .iter()
             .any(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
     }
+}
+
+/// Compile a component, using the cache when possible.
+fn compile(
+    engine: &Engine,
+    cache_dir: Option<&Path>,
+    name: &str,
+    wasm: &Path,
+) -> anyhow::Result<Component> {
+    let bytes = std::fs::read(wasm)?;
+    let cache_file = cache_dir.map(|dir| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        engine.precompile_compatibility_hash().hash(&mut hasher);
+        dir.join(format!("{name}-{:016x}.cwasm", hasher.finish()))
+    });
+    if let Some(cache_file) = &cache_file {
+        // Read into memory rather than `deserialize_file`, which maps the
+        // file: if the file was changed in place while mapped (by another
+        // program, or an older Helix), accessing the code would crash.
+        if let Ok(cached) = std::fs::read(cache_file) {
+            // SAFETY: the file was written by `Component::serialize` below
+            // for this engine configuration (its name includes a hash of
+            // the configuration) and lives in the user's own cache
+            // directory. Wasmtime still checks the header and version.
+            match unsafe { Component::deserialize(engine, &cached) } {
+                Ok(component) => return Ok(component),
+                Err(err) => {
+                    log::warn!("ignoring cached plugin {}: {err:#}", cache_file.display())
+                }
+            }
+        }
+    }
+    let component = Component::new(engine, &bytes)?;
+    if let Some(cache_file) = &cache_file {
+        let write = || -> anyhow::Result<()> {
+            std::fs::create_dir_all(cache_file.parent().unwrap())?;
+            // Write to a temporary file first so a crash can't leave a
+            // truncated file behind.
+            static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let tmp = cache_file.with_extension(format!(
+                "tmp{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&tmp, component.serialize()?)?;
+            std::fs::rename(tmp, cache_file)?;
+            Ok(())
+        };
+        if let Err(err) = write() {
+            log::warn!("failed to cache plugin '{name}': {err:#}");
+        }
+    }
+    Ok(component)
 }
 
 /// Run `f` on a thread without an entered async runtime.

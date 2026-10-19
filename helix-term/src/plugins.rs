@@ -25,7 +25,7 @@ mod prompt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -55,6 +55,45 @@ runtime_local! {
     /// Set while plugin actions are applied, so a plugin's own edits don't
     /// produce change events (which could loop forever).
     static APPLYING: AtomicBool = AtomicBool::new(false);
+    /// The events some plugin subscribed to (bits of `event_bit`), so editor
+    /// hooks cost nothing when no plugin listens.
+    static WANTED: AtomicU32 = AtomicU32::new(0);
+    /// The workspace of the working directory, cached: `(cwd, workspace)`.
+    static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+}
+
+fn event_bit(kind: EventKind) -> u32 {
+    1 << match kind {
+        EventKind::DocumentOpen => 0,
+        EventKind::DocumentChange => 1,
+        EventKind::ModeSwitch => 2,
+        EventKind::DocumentSave => 3,
+        EventKind::DocumentClose => 4,
+        EventKind::SelectionChange => 5,
+    }
+}
+
+const EVENT_KINDS: [EventKind; 6] = [
+    EventKind::DocumentOpen,
+    EventKind::DocumentChange,
+    EventKind::ModeSwitch,
+    EventKind::DocumentSave,
+    EventKind::DocumentClose,
+    EventKind::SelectionChange,
+];
+
+/// The workspace root for the current working directory.
+fn workspace() -> PathBuf {
+    let cwd = helix_stdx::env::current_working_dir();
+    let mut cache = WORKSPACE.lock();
+    match &*cache {
+        Some((cached_cwd, workspace)) if *cached_cwd == cwd => workspace.clone(),
+        _ => {
+            let workspace = helix_loader::find_workspace_in(&cwd).0;
+            *cache = Some((cwd, workspace.clone()));
+            workspace
+        }
+    }
 }
 
 struct Pending {
@@ -70,41 +109,93 @@ pub fn settings_file() -> PathBuf {
     helix_loader::config_dir().join("plugins.toml")
 }
 
-/// Load the user's plugins. Problems are reported in the status line and the
-/// log; they never stop the editor from starting.
-pub fn load(editor: &mut Editor) {
-    let settings = match std::fs::read_to_string(settings_file()) {
+/// The user's `plugins.toml`, and an error if it is invalid.
+fn read_settings() -> (toml::Table, Option<anyhow::Error>) {
+    match std::fs::read_to_string(settings_file()) {
         Ok(source) => match toml::from_str::<toml::Table>(&source) {
-            Ok(settings) => settings,
-            Err(err) => {
-                editor.set_error(format!("Invalid {}: {err}", settings_file().display()));
-                toml::Table::new()
-            }
+            Ok(settings) => (settings, None),
+            Err(err) => (
+                toml::Table::new(),
+                Some(anyhow::anyhow!(
+                    "Invalid {}: {err}",
+                    settings_file().display()
+                )),
+            ),
         },
-        Err(_) => toml::Table::new(),
-    };
+        Err(_) => (toml::Table::new(), None),
+    }
+}
+
+/// Load the user's plugins now (`:plugin-reload`). Problems are reported in
+/// the status line and the log.
+pub fn load(editor: &mut Editor) {
+    let (settings, error) = read_settings();
+    if let Some(err) = error {
+        editor.set_error(err.to_string());
+    }
     load_from(editor, &plugin_dir(), &settings);
 }
 
-/// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
-/// replacing any loaded plugins.
-pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
-    // The old plugins' programs and pickers are of no use to the new ones.
-    process::kill_all();
-    if !dir.is_dir() {
-        *HOST.lock() = None;
+/// Load the user's plugins without delaying startup: compiling and starting
+/// them happens on another thread, then they are installed and see the
+/// documents opened in the meantime. Without plugins this costs nothing.
+pub fn load_in_background() {
+    let dir = plugin_dir();
+    if !has_plugins(&dir) {
         return;
+    }
+    tokio::spawn(async move {
+        let (settings, error) = read_settings();
+        let built = tokio::task::spawn_blocking(move || {
+            let (host, actions, mut errors) = build_host(&dir, &settings);
+            errors.extend(error);
+            (host, actions, errors)
+        })
+        .await;
+        let Ok((host, actions, errors)) = built else {
+            return;
+        };
+        job::dispatch(move |editor, _| {
+            install(editor, host, actions, errors);
+            // Documents opened while the plugins were loading.
+            let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
+            for doc in open {
+                queue(Event::DocumentOpen(plugin_doc_id(doc)));
+            }
+        })
+        .await;
+    });
+}
+
+/// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).
+fn has_plugins(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().join("plugin.toml").is_file())
+    })
+}
+
+/// Start a plugin host with the plugins in `dir`; `None` if there are none.
+fn build_host(
+    dir: &Path,
+    settings: &toml::Table,
+) -> (Option<PluginHost>, Vec<Action>, Vec<anyhow::Error>) {
+    if !has_plugins(dir) {
+        return (None, Vec::new(), Vec::new());
     }
     let mut host = match PluginHost::new(Some(helix_loader::cache_dir().join("plugins"))) {
         Ok(host) => host,
         Err(err) => {
-            log::error!("failed to start the plugin host: {err:#}");
-            editor.set_error(format!("Failed to start the plugin host: {err}"));
-            return;
+            return (
+                None,
+                Vec::new(),
+                vec![err.context("failed to start the plugin host")],
+            )
         }
     };
     host.set_dirs(
-        Some(helix_loader::find_workspace().0),
+        Some(workspace()),
         Some(helix_loader::data_dir().join("plugins")),
     );
     let mut setting_errors = Vec::new();
@@ -117,7 +208,25 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
         })
     });
     errors.extend(setting_errors);
-    *HOST.lock() = Some(host);
+    (Some(host), actions, errors)
+}
+
+/// Make `host` the editor's plugins and report what went wrong.
+fn install(
+    editor: &mut Editor,
+    host: Option<PluginHost>,
+    actions: Vec<Action>,
+    errors: Vec<anyhow::Error>,
+) {
+    let wanted = host.as_ref().map_or(0, |host| {
+        EVENT_KINDS
+            .into_iter()
+            .filter(|kind| host.wants(*kind))
+            .map(event_bit)
+            .fold(0, |mask, bit| mask | bit)
+    });
+    WANTED.store(wanted, Ordering::Relaxed);
+    *HOST.lock() = host;
 
     apply(editor, None, actions);
     for err in &errors {
@@ -130,6 +239,16 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
         };
         editor.set_error(format!("{err:#}{more}"));
     }
+}
+
+/// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
+/// replacing any loaded plugins.
+pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
+    // The old plugins' programs are of no use to the new ones.
+    process::kill_all();
+    *HOST.lock() = None;
+    let (host, actions, errors) = build_host(dir, settings);
+    install(editor, host, actions, errors);
 }
 
 /// Like [`load_from`] with the settings given as TOML source.
@@ -304,7 +423,7 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         documents,
         current: Some(plugin_doc_id(editor.tree.get(editor.tree.focus).doc)),
         mode: plugin_mode(editor.mode()),
-        workspace: Some(helix_loader::find_workspace().0),
+        workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
     }
@@ -504,7 +623,7 @@ pub fn document_saved(doc: DocumentId) {
 }
 
 fn queue(event: Event) {
-    if !with_host(|host| host.wants(event.kind())).unwrap_or(false) {
+    if WANTED.load(Ordering::Relaxed) & event_bit(event.kind()) == 0 {
         return;
     }
     let mut pending = PENDING.lock();

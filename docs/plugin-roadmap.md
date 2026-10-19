@@ -399,14 +399,14 @@ Small, self-contained; each one is a good single task.
   first time a plugin runs a program, remember the answer.
 - [ ] **Stale preopens**: plugins see the workspace from load time; reload
   their WASI context (or warn) after `:cd`.
-- [ ] **Parallel compilation on a cold cache**: plugins compile one after
-  another at startup (about 47 ms each, 0.9 s for 20, see M9.2). Compile
-  them in parallel, or load them after the first draw.
+- [x] **Parallel compilation on a cold cache**, and plugins load in the
+  background after startup (see "Performance" in `plugin-progress.md`).
+- [ ] **A `plugins` cargo feature** (on by default) to build Pure without
+  Wasmtime at all, for a smaller binary and faster builds.
 - [ ] **Fuzz the WASM boundary itself** (M9.1 covers the host's validation
   with quickcheck): a test plugin that sends random edits, ranges and
   picker data through the real ABI.
-- [ ] **Caching `find_workspace`** in `plugins::snapshot` (it walks up the
-  directory tree on every plugin call).
+- [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
 ## Guidelines for agents (lessons from earlier work)
 
@@ -445,3 +445,15 @@ Small, self-contained; each one is a good single task.
   `target/debug/incremental` when a build fails with "no space left".
 - **Scope:** API only in the editor; trial plugins stay in
   `helix-plugin/examples/`.
+- **Performance (owner's rule: plugins must never make Pure slower than
+  Helix):**
+  - nothing plugin-related may run on the startup path or per keystroke
+    unless a plugin asked for it: plugins load in the background
+    (`plugins::load_in_background`), editor hooks check the `WANTED`
+    bitmask (no lock) before doing anything;
+  - no background wake-ups while idle: the epoch ticker only runs during a
+    plugin call (`Ticker::busy`);
+  - anything that walks the file system or scans documents per call must be
+    cached (see `plugins::workspace`);
+  - measure with `cargo test -p helix-plugin --release -- --ignored
+    --nocapture benchmarks` and update the numbers in `plugin-progress.md`.

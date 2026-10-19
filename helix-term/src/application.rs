@@ -141,10 +141,11 @@ impl Application {
 
         let jobs = Jobs::new();
 
-        // Before opening files, so plugins see them being opened. Tests load
-        // their plugins explicitly instead of the user's.
+        // In the background, so plugins never delay startup; they hear about
+        // the files opened meanwhile once loaded. Tests load their plugins
+        // explicitly instead of the user's.
         if !cfg!(feature = "integration") {
-            crate::plugins::load(&mut editor);
+            crate::plugins::load_in_background();
         }
 
         if args.load_tutor {
