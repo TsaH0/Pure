@@ -40,7 +40,7 @@ A modal editor, forked from Helix (by Blaž Hrastnik and contributors)
 “{}”
 
 USAGE:
-    pure [FLAGS] [files]...   (`hx` works too)
+    pure [FLAGS] [files]...
 
 ARGS:
     <files>...    Set the input file to use, position can also be specified via file[:row[:col]]
