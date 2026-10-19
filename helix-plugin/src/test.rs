@@ -638,16 +638,18 @@ fn text_tools(api: &str) -> (PluginHost, tempfile::TempDir) {
     let mut host = host();
     let dir = root.path().join("text-tools");
     std::fs::create_dir_all(&dir).unwrap();
-    let wasm = if api == "0.1" {
-        text_tools_wasm()
-    } else {
-        fixture("examples/text-tools/plugin.wasm")
+    let wasm = match api {
+        "0.1" => text_tools_wasm(),
+        "0.2" => fixture("tests/fixtures/text-tools-v0.2.wasm"),
+        _ => fixture("examples/text-tools/plugin.wasm"),
     };
     std::fs::copy(wasm, dir.join("plugin.wasm")).unwrap();
-    let manifest = std::fs::read_to_string(fixture("examples/text-tools/plugin.toml"))
-        .unwrap()
-        .replace("api = \"0.2\"", &format!("api = \"{api}\""));
-    std::fs::write(dir.join("plugin.toml"), manifest).unwrap();
+    let mut manifest: toml::Table = toml::from_str(
+        &std::fs::read_to_string(fixture("examples/text-tools/plugin.toml")).unwrap(),
+    )
+    .unwrap();
+    manifest.insert("api".into(), toml::Value::String(api.into()));
+    std::fs::write(dir.join("plugin.toml"), toml::to_string(&manifest).unwrap()).unwrap();
     host.load(&dir, "{}").unwrap();
     (host, root)
 }
@@ -754,7 +756,7 @@ fn both_api_versions_share_host_state() {
     let dir = plugin_dir(
         root.path(),
         "testplugin2",
-        &fixture("tests/fixtures/testplugin2.wasm"),
+        &fixture("tests/fixtures/testplugin2-v0.2.wasm"),
         ALL,
     );
     let manifest_path = dir.join("plugin.toml");
@@ -814,7 +816,7 @@ fn testplugin2_with(permissions: &[&str]) -> (PluginHost, tempfile::TempDir) {
     let dir = plugin_dir(
         root.path(),
         "testplugin2",
-        &fixture("tests/fixtures/testplugin2.wasm"),
+        &fixture("tests/fixtures/testplugin2-v0.2.wasm"),
         permissions,
     );
     let path = dir.join("plugin.toml");
@@ -1447,7 +1449,7 @@ fn testplugin2_files(files: FileGrant) -> (PluginHost, tempfile::TempDir, PathBu
     let dir = plugin_dir(
         root.path(),
         "testplugin2",
-        &fixture("tests/fixtures/testplugin2.wasm"),
+        &fixture("tests/fixtures/testplugin2-v0.2.wasm"),
         &["read-buffers", "filesystem"],
     );
     let manifest = dir.join("plugin.toml");

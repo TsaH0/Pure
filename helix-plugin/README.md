@@ -175,7 +175,9 @@ See [`examples/text-tools`](examples/text-tools) for a complete plugin and
   tests plugins in a running editor.
 - `./build-plugins.sh` rebuilds the 0.1 and 0.2 test plugins (`tests/fixtures`)
   and the example after changing guest code or the SDK. The committed
-  `text-tools-v0.1.wasm` is a frozen compatibility fixture.
+  `text-tools-v0.1.wasm`, `text-tools-v0.2.wasm`, and
+  `testplugin2-v0.2.wasm` are frozen compatibility fixtures and are never
+  overwritten by the script.
 
 
 ## API versions and SDK callbacks

@@ -134,13 +134,25 @@ line. Preview work stops after the existing row cap.
 Validation: 32 editor library tests and all 14 substitution integration tests
 passed. A tmux check confirmed numbered source rows, unnumbered inserted rows,
 and cancellation restoring the view. Formatting, workspace Clippy (no warnings)
-and the normal editor build passed. The full documented suite is running.
+and the normal editor build passed. The full documented suite passed: 226 tests, zero failures, eight movement
+tests filtered out as documented.
 The panel's separate truncation-label issue is recorded in the roadmap.
 
 After cache cleanup, the release benchmark (rerun without concurrent builds)
 measured 1 / 5 / 20 plugin cold loads at 95.4 / 257.3 / 1140.8 ms and warm
 loads at 2.5 / 4.9 / 19.5 ms, within the per-plugin warm-cache budget. Event
 dispatch took 0.069 ms. The benchmark passed.
+
+## M10 Compatibility fixtures (groundwork)
+
+Frozen the API 0.2 test plugin and text-tools example before any SDK changes.
+Host and in-editor 0.2 tests now load the version-suffixed files; the build
+script leaves them untouched. Their hashes and purpose are recorded beside
+the fixtures. The text-tools test helper sets the manifest API explicitly,
+so changing the live example later cannot silently change the compatibility
+test's world. Validation: all 64 host tests and 35 in-editor plugin tests
+passed against the frozen components; formatting and workspace Clippy passed
+without warnings. API 0.3 host/editor/SDK functionality remains open.
 
 ## M0 API 0.2 groundwork (done)
 

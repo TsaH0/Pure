@@ -379,7 +379,7 @@ async fn api_02_sdk_plugin_edits_alongside_legacy_plugins() -> anyhow::Result<()
     let plugin = dir.path().join("testplugin2");
     std::fs::create_dir_all(&plugin)?;
     std::fs::copy(
-        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        helix_plugin_dir().join("tests/fixtures/testplugin2-v0.2.wasm"),
         plugin.join("plugin.wasm"),
     )?;
     std::fs::write(
@@ -506,7 +506,7 @@ fn app_with_v2(permissions: &str, settings: &str) -> (Application, tempfile::Tem
     let plugin = root.path().join("testplugin2");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::copy(
-        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        helix_plugin_dir().join("tests/fixtures/testplugin2-v0.2.wasm"),
         plugin.join("plugin.wasm"),
     )
     .unwrap();

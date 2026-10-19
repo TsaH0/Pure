@@ -3,6 +3,8 @@
 # into its own directory, ready to be copied into ~/.config/helix/plugins). The
 # tests load them. Needs the wasm32-wasip2 target:
 #   rustup target add wasm32-wasip2
+# Version-suffixed compatibility components are frozen. Never overwrite them
+# here: API 0.1/0.2 tests intentionally run components built before SDK changes.
 set -eu
 cd "$(dirname "$0")"
 # Keep machine-specific paths out of the committed components.
