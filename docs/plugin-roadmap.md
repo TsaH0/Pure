@@ -181,9 +181,8 @@ linters, fuzzy finders.
     `"process not granted: add allow-process = true under [<name>] in plugins.toml"`.
     `:plugin-list` and `--health` show "process: granted / not granted /
     only rg, fd".
-  - **Open decision for the owner:** whether to also ask once per program at
-    first use (like workspace trust). Implement the config grant; leave a
-    hook for the prompt.
+  - The owner decided against per-program prompts: `allow-process` is the
+    only process grant gate.
 - [x] **M1.2 `spawn` and `kill`.** Depends on: M0.3, M1.1.
   - Host function records `Action::Spawn { plugin, id, argv, options }`.
     `apply` runs it as a `tokio::process::Command` (no shell; `argv[0]`
@@ -426,7 +425,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   a write grant to the workspace can change a project's git hooks.
 - [x] **M11.5 Chooser file leaks** if the editor quits before a queued
   `run-interactive` runs; old `.cwasm` cache files are never cleaned up.
-- [ ] **M11.6 `:s` preview cosmetics:** extra lines of multi-line
+- [x] **M11.6 `:s` preview cosmetics:** extra lines of multi-line
   replacements are numbered `first_line + n`; CR-only line endings are not
   split.
 
@@ -471,6 +470,10 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 ## Future TODOs (not yet milestones)
 
+- [ ] **Preview truncation label:** the panel title counts matched source
+  lines, so generated multi-line replacements can be truncated without a
+  "showing" label. Track displayed-row truncation separately, retaining the
+  preview's bounded work and leaving the document untouched.
 - [ ] **Bound chooser reads:** `process::interactive` still reads the chooser
   synchronously without a size cap. Check that it is a regular file using a
   nonblocking open (a program can replace it with a FIFO), read at most the

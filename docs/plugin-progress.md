@@ -10,7 +10,10 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   access, workspace info), M6.1 (save, close and selection events).
 - Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
   (benchmarks).
-- Next: M11 hardening, then M10 (API 0.3), including M11.3 query generations.
+- Done: review-fix regression coverage and M11.1, M11.2, M11.4–M11.6.
+- Next: M10 (API 0.3), including M11.3 query generations. Frozen 0.2
+  fixtures, host/editor/SDK implementation, finder migration and guide updates
+  remain open. New follow-up findings are in the roadmap's Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -118,6 +121,26 @@ cleanup. A tmux chooser command returned its result, removed the chooser and
 restored the editor. Formatting, workspace Clippy (no warnings) and a normal
 editor build passed. Separate chooser-read and queued-request issues are
 recorded in the roadmap for follow-up.
+
+## M11.6 Substitution preview cosmetics
+
+Preview rows map back to source offsets through replacements. Generated
+continuation rows leave the number column blank instead of claiming another
+source line. CR, CRLF and LF split correctly with character-based highlight
+offsets; optional Unicode endings follow the core feature. CR-only text also
+splits in the default build, where the core still considers it one source
+line. Preview work stops after the existing row cap.
+
+Validation: 32 editor library tests and all 14 substitution integration tests
+passed. A tmux check confirmed numbered source rows, unnumbered inserted rows,
+and cancellation restoring the view. Formatting, workspace Clippy (no warnings)
+and the normal editor build passed. The full documented suite is running.
+The panel's separate truncation-label issue is recorded in the roadmap.
+
+After cache cleanup, the release benchmark (rerun without concurrent builds)
+measured 1 / 5 / 20 plugin cold loads at 95.4 / 257.3 / 1140.8 ms and warm
+loads at 2.5 / 4.9 / 19.5 ms, within the per-plugin warm-cache budget. Event
+dispatch took 0.069 ms. The benchmark passed.
 
 ## M0 API 0.2 groundwork (done)
 

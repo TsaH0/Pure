@@ -34,8 +34,8 @@ struct Preview {
 
 /// One line of the panel.
 struct Line {
-    /// 0-based line in the document.
-    number: usize,
+    /// 0-based source line; generated continuation lines have no number.
+    number: Option<usize>,
     text: String,
     /// Char ranges in `text` to highlight: the replacements, or the matches.
     highlights: Vec<Range<usize>>,
@@ -60,6 +60,16 @@ pub fn snapshot() -> Option<(String, Vec<String>)> {
         preview.title.clone(),
         preview.lines.iter().map(|line| line.text.clone()).collect(),
     ))
+}
+
+/// Source line numbers (0-based); inserted continuation lines are unnumbered.
+/// For tests of the preview's gutter.
+#[doc(hidden)]
+pub fn snapshot_line_numbers() -> Option<Vec<Option<usize>>> {
+    PREVIEW
+        .lock()
+        .as_ref()
+        .map(|preview| preview.lines.iter().map(|line| line.number).collect())
 }
 
 pub fn clear() {
@@ -181,7 +191,29 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
         }
         new.push_str(&String::from(text.slice(pos..end.max(pos))));
 
-        split_lines(&new, &highlights, first_line, &mut lines);
+        split_lines(
+            &new,
+            &highlights,
+            |offset| {
+                // Map each output line back through the replacements. Characters
+                // inside a replacement belong to its source start; unchanged
+                // suffixes retain their actual source offsets.
+                let source = if !replacing {
+                    start + offset
+                } else {
+                    let k = highlights.partition_point(|range| range.end <= offset);
+                    if highlights.get(k).is_some_and(|range| range.start <= offset) {
+                        changes[i + k].0
+                    } else if k > 0 {
+                        changes[i + k - 1].1 + offset - highlights[k - 1].end
+                    } else {
+                        start + offset
+                    }
+                };
+                text.char_to_line(source)
+            },
+            &mut lines,
+        );
         i = j;
     }
     lines.truncate(MAX_LINES);
@@ -213,17 +245,50 @@ fn line_end(text: &Rope, line: usize) -> usize {
     let line = line.min(text.len_lines() - 1);
     let end = text.line_to_char(line + 1);
     let slice = text.line(line);
-    let ending = helix_core::line_ending::get_line_ending(&slice).map_or(0, |e| e.len_chars());
+    let ending = helix_core::line_ending::get_line_ending(&slice).map_or_else(
+        || usize::from(slice.get_char(slice.len_chars().saturating_sub(1)) == Some('\r')),
+        |e| e.len_chars(),
+    );
     end - ending
 }
 
-/// Split `text` (starting at document line `first_line`) into panel lines,
-/// keeping the highlights.
-fn split_lines(text: &str, highlights: &[Range<usize>], first_line: usize, out: &mut Vec<Line>) {
+/// Split the hunk on CR/CRLF/LF (and enabled Unicode endings), retaining char
+/// offsets for highlights. Number a source line once; inserted rows continue it.
+fn split_lines(
+    text: &str,
+    highlights: &[Range<usize>],
+    mut source_line: impl FnMut(usize) -> usize,
+    out: &mut Vec<Line>,
+) {
+    let mut rest = text;
+    let mut finished = false;
+    let rows = std::iter::from_fn(move || {
+        if finished {
+            return None;
+        }
+        if let Some((byte, ch)) = rest.char_indices().find(|(_, ch)| {
+            *ch == '\r' || helix_core::line_ending::LineEnding::from_char(*ch).is_some()
+        }) {
+            let line = &rest[..byte];
+            let len = line.chars().count();
+            let ending = if ch == '\r' && rest[byte..].starts_with("\r\n") {
+                2
+            } else {
+                ch.len_utf8()
+            };
+            let ending_chars = if ending == 2 && ch == '\r' { 2 } else { 1 };
+            rest = &rest[byte + ending..];
+            Some((line, len, len + ending_chars))
+        } else {
+            finished = true;
+            let len = rest.chars().count();
+            Some((rest, len, len))
+        }
+    });
     let mut offset = 0;
-    for (n, raw) in text.split('\n').enumerate() {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        let len = line.chars().count();
+    let mut previous = None;
+    let remaining = MAX_LINES.saturating_sub(out.len());
+    for (line, len, raw_len) in rows.take(remaining) {
         let line_highlights = highlights
             .iter()
             .filter_map(|h| {
@@ -232,13 +297,15 @@ fn split_lines(text: &str, highlights: &[Range<usize>], first_line: usize, out: 
                 (from < to).then(|| from - offset..to - offset)
             })
             .collect();
+        let origin = source_line(offset);
         out.push(Line {
-            number: first_line + n,
+            number: (previous != Some(origin)).then_some(origin),
             // Tabs as one space each, so char offsets stay valid.
             text: line.replace('\t', " "),
             highlights: line_highlights,
         });
-        offset += raw.chars().count() + 1;
+        previous = Some(origin);
+        offset += raw_len;
     }
 }
 
@@ -311,7 +378,7 @@ pub fn render(editor: &Editor, area: Rect, surface: &mut Surface) {
         .lines
         .iter()
         .take(shown)
-        .map(|line| (line.number + 1).to_string().len())
+        .filter_map(|line| line.number.map(|number| (number + 1).to_string().len()))
         .max()
         .unwrap_or(1);
     for (row, line) in preview.lines.iter().take(shown).enumerate() {
@@ -320,7 +387,12 @@ pub fn render(editor: &Editor, area: Rect, surface: &mut Surface) {
         let (mut x, _) = surface.set_stringn(
             inner.x,
             y,
-            &format!("{:>number_width$} │ ", line.number + 1),
+            &format!(
+                "{:>number_width$} │ ",
+                line.number
+                    .map(|number| (number + 1).to_string())
+                    .unwrap_or_default()
+            ),
             inner.width as usize,
             background.patch(number_style),
         );
@@ -358,11 +430,61 @@ mod test {
     fn splits_hunks_into_lines() {
         let mut out = Vec::new();
         let highlights = [Range { start: 1, end: 4 }];
-        split_lines("ab\ncd", &highlights, 3, &mut out);
+        split_lines(
+            "ab\ncd",
+            &highlights,
+            |offset| if offset < 3 { 3 } else { 4 },
+            &mut out,
+        );
         assert_eq!(out.len(), 2);
-        assert_eq!((out[0].number, out[0].text.as_str()), (3, "ab"));
+        assert_eq!((out[0].number, out[0].text.as_str()), (Some(3), "ab"));
         assert_eq!(out[0].highlights, vec![1..2]);
-        assert_eq!((out[1].number, out[1].text.as_str()), (4, "cd"));
+        assert_eq!((out[1].number, out[1].text.as_str()), (Some(4), "cd"));
         assert_eq!(out[1].highlights, vec![0..1]);
+    }
+
+    #[test]
+    fn splits_cr_crlf_and_lf_with_char_highlights() {
+        let text = "éx\r\nyz\rq\n";
+        let mut out = Vec::new();
+        let mut source = 0;
+        split_lines(
+            text,
+            &[Range { start: 1, end: 8 }],
+            |_| {
+                let line = source;
+                source += 1;
+                line
+            },
+            &mut out,
+        );
+        assert_eq!(
+            out.iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["éx", "yz", "q", ""]
+        );
+        assert_eq!(
+            out.iter().map(|line| line.number).collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(out[0].highlights, [Range { start: 1, end: 2 }]);
+        assert_eq!(out[1].highlights, [Range { start: 0, end: 2 }]);
+        assert_eq!(out[2].highlights, [Range { start: 0, end: 1 }]);
+    }
+
+    #[test]
+    fn continuation_rows_do_not_claim_another_source_line() {
+        let mut out = Vec::new();
+        split_lines(
+            "x\ny\nz",
+            &[],
+            |offset| if offset < 4 { 3 } else { 4 },
+            &mut out,
+        );
+        assert_eq!(
+            out.iter().map(|line| line.number).collect::<Vec<_>>(),
+            [Some(3), None, Some(4)]
+        );
     }
 }
