@@ -152,17 +152,19 @@ use v0_2::helix::plugin::{process, ui};
 impl process::Host for State {
     fn spawn(
         &mut self,
-        _argv: Vec<String>,
+        argv: Vec<String>,
         _options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
+        self.authorize_process(&argv)?;
         Err("process support is not implemented yet".into())
     }
     fn run_interactive(
         &mut self,
-        _argv: Vec<String>,
+        argv: Vec<String>,
         _options: process::InteractiveOptions,
     ) -> std::result::Result<u32, String> {
         self.need_ui("run-interactive")?;
+        self.authorize_process(&argv)?;
         Err("interactive process support is not implemented yet".into())
     }
     fn kill(&mut self, _id: u32) {}

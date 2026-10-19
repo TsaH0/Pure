@@ -398,3 +398,36 @@ async fn api_02_sdk_plugin_edits_alongside_legacy_plugins() -> anyhow::Result<()
     assert_eq!(text(&app), "héllo\n");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn process_grants_are_listed_and_invalid_grants_do_not_load_plugins() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_plugins("#[a|]#", ALL, "");
+    let path = dir.path().join("testplugin/plugin.toml");
+    let source =
+        std::fs::read_to_string(&path)?.replace("permissions = [", "permissions = [\"process\", ");
+    std::fs::write(path, source)?;
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin]\nallow-process = ['rg', 'fd']\n",
+    )?;
+    assert!(helix_term::plugins::describe().contains("process: only rg, fd"));
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin]\nallow-process = true\n",
+    )?;
+    assert!(helix_term::plugins::describe().contains("process: granted"));
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert!(helix_term::plugins::describe().contains("process: not granted"));
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin]\nallow-process = 42\n",
+    )?;
+    assert_error(&app, "Invalid allow-process under [testplugin]");
+    let names = helix_term::plugins::command_names();
+    assert!(!names.iter().any(|name| name.starts_with("testplugin/")));
+    assert!(names.contains(&"text-tools/upper".to_owned()));
+    Ok(())
+}

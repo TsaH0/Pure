@@ -85,6 +85,9 @@ pub fn general() -> std::io::Result<()> {
         "Plugins: {} ({plugins} installed)",
         plugin_dir.display()
     )?;
+    for grant in crate::plugins::health_process_grants() {
+        writeln!(stdout, "{grant}")?;
+    }
     if config_file.exists() {
         writeln!(stdout, "Config file: {}", config_file.display())?;
     } else {

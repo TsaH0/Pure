@@ -28,6 +28,8 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+mod grants;
+pub use grants::ProcessGrant;
 
 use api::{v0_1, v0_2, Instance};
 pub use types::{CommandInfo, EventKind, Mode};
@@ -54,6 +56,8 @@ pub enum Permission {
     OpenFiles,
     /// Run editor commands.
     RunCommands,
+    /// Run external programs, with a separate user grant.
+    Process,
 }
 
 impl Permission {
@@ -63,6 +67,7 @@ impl Permission {
             Permission::EditBuffers => "edit-buffers",
             Permission::OpenFiles => "open-files",
             Permission::RunCommands => "run-commands",
+            Permission::Process => "process",
         }
     }
 }
@@ -272,6 +277,7 @@ struct State {
     limits: StoreLimits,
     plugin: String,
     permissions: HashSet<Permission>,
+    process_grant: ProcessGrant,
     snapshot: Snapshot,
     actions: Vec<Action>,
     context: CallContext,
@@ -309,6 +315,18 @@ impl State {
                 "{function} is only available from plugin commands and callbacks"
             ))
         }
+    }
+
+    fn authorize_process(&self, argv: &[String]) -> Result<(), String> {
+        self.need(Permission::Process)?;
+        let program = argv
+            .first()
+            .filter(|program| !program.is_empty())
+            .ok_or_else(|| "process argv must contain a nonempty program".to_string())?;
+        if argv.iter().any(|arg| arg.contains('\0')) {
+            return Err("process arguments must not contain NUL".into());
+        }
+        self.process_grant.authorize(&self.plugin, program)
     }
 
     fn need(&self, permission: Permission) -> Result<(), String> {
@@ -547,6 +565,11 @@ impl Plugin {
         &self.dir
     }
 
+    /// The explicit user grant for this plugin's process imports.
+    pub fn process_grant(&self) -> &ProcessGrant {
+        &self.store.data().process_grant
+    }
+
     pub fn commands(&self) -> &[CommandInfo] {
         &self.commands
     }
@@ -618,6 +641,7 @@ pub struct PluginInfo {
     pub description: String,
     pub dir: PathBuf,
     pub permissions: Vec<Permission>,
+    pub process_grant: ProcessGrant,
     pub commands: Vec<CommandInfo>,
     pub disabled: Option<String>,
 }
@@ -627,6 +651,7 @@ pub struct PluginHost {
     engine: Engine,
     linker: Linker<State>,
     plugins: Vec<Plugin>,
+    process_grants: HashMap<String, ProcessGrant>,
     limits: Limits,
     cache_dir: Option<PathBuf>,
     stop_ticker: Arc<AtomicBool>,
@@ -675,10 +700,20 @@ impl PluginHost {
             engine,
             linker,
             plugins: Vec::new(),
+            process_grants: HashMap::new(),
             limits,
             cache_dir,
             stop_ticker,
         })
+    }
+
+    /// Configure process authorization before loading a plugin, or for its
+    /// future calls. Editor configuration reloads replace the whole host.
+    pub fn set_process_grant(&mut self, name: &str, grant: ProcessGrant) {
+        if let Some(plugin) = self.plugins.iter_mut().find(|plugin| plugin.name() == name) {
+            plugin.store.data_mut().process_grant = grant.clone();
+        }
+        self.process_grants.insert(name.to_owned(), grant);
     }
 
     pub fn plugins(&self) -> &[Plugin] {
@@ -698,6 +733,7 @@ impl PluginHost {
                 description: plugin.manifest.description.clone(),
                 dir: plugin.dir.clone(),
                 permissions: plugin.manifest.permissions.clone(),
+                process_grant: plugin.process_grant().clone(),
                 commands: plugin.commands.clone(),
                 disabled: plugin.disabled.clone(),
             })
@@ -781,6 +817,7 @@ impl PluginHost {
                 .build(),
             plugin: name.clone(),
             permissions: manifest.permissions.iter().copied().collect(),
+            process_grant: self.process_grants.get(&name).cloned().unwrap_or_default(),
             snapshot: Snapshot::default(),
             actions: Vec::new(),
             context: CallContext::Init,

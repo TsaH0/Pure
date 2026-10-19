@@ -150,7 +150,7 @@ Nothing user-visible: the plumbing every later milestone needs.
 
 Unlocks yazi, lazygit, fzf, git and linter plugins.
 
-- [ ] **M1.1 `process` permission and grant.** Depends on: M0.2.
+- [x] **M1.1 `process` permission and grant.** Depends on: M0.2.
   - `Permission::Process` (`"process"` in `plugin.toml`). In
     `helix-term/src/plugins.rs`, read `allow-process = true | [programs]`
     from the plugin's `plugins.toml` table (and strip it before the config

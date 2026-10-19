@@ -4,7 +4,9 @@
 
 - Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2), M0.5 (0.2 test plugin).
 - M0 complete and pushed to `plugin-api-0.2`; 216/216 full integration tests pass. PR creation is blocked by GitHub API egress.
-- Next: M2.1, then the remaining authorized milestones in the requested order.
+- Done independently: M2.1 on `plugin-pickers` (commit `08fe41bf`); it will be rebased onto M1 for the single M2 PR.
+- Done: M1.1 on `plugin-processes`, based on completed M0.
+- In progress: M1.2 background processes and cancellation.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
 ## Open questions for the owner
@@ -66,7 +68,15 @@
 
 ## M0 milestone validation (2026-10-19)
 
-- Full integration suite: **216 passed, 0 failed, 0 ignored**, `--test-threads 4`, with `RUST_MIN_STACK=16777216` (197.46 s). This includes the existing yazi/shell-adjacent command paths, quickfix, Vim substitution, default keys and both plugin API versions. No known-failure exemptions were needed after installing the required HTML/JavaScript grammars.
+- Full integration suite: **216 passed, 0 failed, 0 ignored**, `--test-threads 4`, with `RUST_MIN_STACK=16777216` (197.46 s). This includes the existing quickfix, Vim substitution, default keys and both plugin API versions. No known-failure exemptions were needed after installing the required HTML/JavaScript grammars.
 - The larger Rust thread stack resolves the original baseline abort in this environment; it is captured in the activation script and saved startup instructions. Tests and assertions remain enabled and unchanged except for new coverage.
 - Host: 42 passed. Editor library: 21 passed. Plugin integrations: 19 passed. SDK: two unit tests and one generated export doctest passed; one existing illustrative snippet remains ignored. Workspace and standalone SDK Clippy passed without new warnings; formatting passed; wasm fixtures rebuilt.
 - All five M0 tasks are committed and the branch was successfully pushed using the platform Git proxy. PR draft text is prepared at `/workspace/m0-pr.md`; API access is separately blocked as described above.
+
+
+## M1.1 Process permission and explicit grant (done, 2026-10-19, M1 PR pending)
+
+- Added manifest `process` permission and user grants (`true`, `false`, or exact program lists), parsed before init and removed from plugin JSON settings. Missing grants default to deny; invalid grants skip only the affected plugin.
+- Host process imports enforce both checks. List and health diagnostics report grant status without instantiating components for health checks. The optional prompt hook is left unimplemented as requested.
+- Formatting, workspace Clippy (no warnings), all 45 host tests, all 23 editor library tests and all 20 plugin integration tests passed. Added checks for default denial, malformed grants, exact program paths, both permission layers, settings stripping and diagnostics. A development build and real CLI `--health` request also passed using a manifest without a component, confirming health does not run plugin code.
+- Guest code did not change; no fixture rebuild was necessary for this task.

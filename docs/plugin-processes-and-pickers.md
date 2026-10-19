@@ -1,6 +1,6 @@
 # Plugin API 0.2: processes, the terminal and pickers
 
-Status: **design, not implemented yet.** This is the next step after phases 1–3
+Status: **API 0.2 groundwork and explicit process grants implemented; execution and picker UI follow the roadmap.** This is the next step after phases 1–3
 of [`plugin-system.md`](plugin-system.md). It lets plugins do what yazi, fzf,
 lazygit and Telescope-style integrations need:
 

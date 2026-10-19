@@ -31,7 +31,7 @@ u = ":plugin-run text-tools/upper"
 why a plugin was disabled.
 
 Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
-except `enabled` is passed to the plugin's `init` as JSON:
+except `enabled` and `allow-process` is passed to the plugin's `init` as JSON:
 
 ```toml
 [text-tools]
@@ -51,7 +51,8 @@ Try the example: copy [`examples/text-tools`](examples/text-tools) (its
   - `read-buffers`: document text, paths, languages, selections
   - `edit-buffers`: change text and selections
   - `open-files`: open files
-  - `run-commands`: run editor commands (only from the plugin's own commands)
+  - `run-commands`: run editor commands (from plugin commands and callbacks)
+  - `process`: request external programs, with a separate explicit user grant
 - No file system, network, environment variables or standard streams (WASI is
   linked with nothing granted).
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
@@ -196,3 +197,33 @@ then those imports return an explicit unsupported error. UI is restricted to
 plugin commands and callbacks, so events cannot interrupt typing. API 0.1's
 WIT remains at [`wit/v0.1/`](wit/v0.1/); existing versioned interfaces are never
 extended in place.
+
+
+## Running programs: permission and grant
+
+A program runs outside WebAssembly with the user's rights. A plugin must list
+`"process"` in its `plugin.toml` permissions **and** receive a user grant in
+`~/.config/helix/plugins.toml`:
+
+```toml
+[yazi]
+allow-process = ["yazi"]
+
+[git]
+allow-process = ["git"]
+
+[trusted-tools]
+allow-process = true
+```
+
+Missing grants, `false`, and empty lists deny execution. Lists match the exact
+program argument (`argv[0]`), looked up in `PATH`; granting `rg` does not also
+grant `/tmp/rg`. Arguments are passed directly, without a shell. Shell execution
+requires explicitly granting the shell program. Reload plugins after changing
+grants. Invalid grant values prevent that plugin loading, while other plugins
+continue to load. Grants are host settings and are not forwarded to `init`.
+
+`:plugin-list` and the general `--health` report `process: granted`,
+`process: not granted`, or `process: only rg, fd`. No first-use prompt is
+implemented; explicit configuration is the current grant mechanism. Process
+execution itself follows in M1.2; permission/grant checks are already enforced.

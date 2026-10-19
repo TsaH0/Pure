@@ -945,7 +945,7 @@ fn ui_is_restricted_to_commands_and_callbacks() {
         );
         if context.allows_ui() {
             assert!(command.is_ok());
-            assert!(interactive.unwrap_err().contains("not implemented"));
+            assert!(interactive.unwrap_err().contains("permission denied"));
             assert!(picker.unwrap_err().contains("not implemented"));
         } else {
             assert!(command.unwrap_err().contains("only available"));
@@ -1068,4 +1068,45 @@ fn sdk_ui_requests_are_refused_from_wasm_event_handlers() {
     assert!(messages[0].starts_with("run-interactive is only available"));
     assert!(messages[1].starts_with("show-picker is only available"));
     assert!(messages[2].starts_with("run-command is only available"));
+}
+
+#[test]
+fn process_imports_require_both_manifest_permission_and_user_grant() {
+    let (mut host, root) = testplugin2();
+    host.set_process_grant("testplugin2", ProcessGrant::All);
+    let spawn = |host: &mut PluginHost, program: &str| {
+        host.run_command(
+            "testplugin2",
+            "spawn",
+            vec![program.into()],
+            Snapshot::default(),
+        )
+    };
+    assert!(spawn(&mut host, "rg")
+        .unwrap_err()
+        .to_string()
+        .contains("permission denied"));
+    let path = root.path().join("testplugin2/plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("permissions = [", "permissions = [\"process\", ");
+    std::fs::write(&path, source).unwrap();
+    host.clear();
+    host.set_process_grant("testplugin2", ProcessGrant::Denied);
+    host.load(path.parent().unwrap(), "{}").unwrap();
+    assert!(spawn(&mut host, "rg").unwrap_err().to_string().contains(
+        "process not granted: add allow-process = true under [testplugin2] in plugins.toml"
+    ));
+    host.set_process_grant("testplugin2", ProcessGrant::Programs(vec!["rg".into()]));
+    assert!(spawn(&mut host, "/tmp/rg")
+        .unwrap_err()
+        .to_string()
+        .contains("not granted"));
+    // The grant gate now succeeds; execution itself lands in M1.2.
+    assert!(spawn(&mut host, "rg")
+        .unwrap_err()
+        .to_string()
+        .contains("process support is not implemented yet"));
+    assert_eq!(host.info()[0].process_grant.describe(), "only rg");
+    assert!(host.plugin("testplugin2").unwrap().disabled().is_none());
 }

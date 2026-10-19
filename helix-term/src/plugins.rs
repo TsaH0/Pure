@@ -11,14 +11,16 @@
 //! some-option = 3      # everything but `enabled` is passed to the plugin
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
-use helix_plugin::{Action, DocumentSnapshot, Event, EventKind, PluginHost, Snapshot};
+use helix_plugin::{
+    Action, DocumentSnapshot, Event, EventKind, PluginHost, ProcessGrant, Snapshot,
+};
 use helix_view::document::Mode;
 use helix_view::events::{DocumentDidChange, DocumentDidOpen};
 use helix_view::{DocumentId, Editor, ViewId};
@@ -84,7 +86,28 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
             return;
         }
     };
-    let (actions, errors) = host.load_all(dir, |name| plugin_settings(settings, name));
+    let mut invalid = HashSet::new();
+    let mut grant_errors = Vec::new();
+    for name in settings.keys() {
+        if plugin_settings(settings, name).is_none() {
+            continue;
+        }
+        match process_grant(settings, name) {
+            Ok(grant) => host.set_process_grant(name, grant),
+            Err(err) => {
+                invalid.insert(name.as_str());
+                grant_errors.push(err);
+            }
+        }
+    }
+    let (actions, mut errors) = host.load_all(dir, |name| {
+        if invalid.contains(name) {
+            None
+        } else {
+            plugin_settings(settings, name)
+        }
+    });
+    errors.extend(grant_errors);
     *HOST.lock() = Some(host);
 
     apply(editor, None, actions);
@@ -118,7 +141,56 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<String> {
             return None;
         }
     }
+    table.remove("allow-process");
     Some(serde_json::to_string(&table).unwrap_or_else(|_| "{}".into()))
+}
+
+fn process_grant(settings: &toml::Table, name: &str) -> anyhow::Result<ProcessGrant> {
+    let Some(value) = settings
+        .get(name)
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("allow-process"))
+    else {
+        return Ok(ProcessGrant::default());
+    };
+    value.clone().try_into().map_err(|err| {
+        anyhow::anyhow!("Invalid allow-process under [{name}] in plugins.toml: {err}")
+    })
+}
+
+/// Static grant diagnostics for `--health`; no components are instantiated.
+pub fn health_process_grants() -> Vec<String> {
+    let settings = std::fs::read_to_string(settings_file())
+        .ok()
+        .and_then(|source| toml::from_str(&source).ok())
+        .unwrap_or_default();
+    health_process_grants_from(&plugin_dir(), &settings)
+}
+
+fn health_process_grants_from(dir: &Path, settings: &toml::Table) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for entry in entries.flatten() {
+        let Some(manifest) = std::fs::read_to_string(entry.path().join("plugin.toml"))
+            .ok()
+            .and_then(|source| helix_plugin::Manifest::parse(&source).ok())
+        else {
+            continue;
+        };
+        if manifest
+            .permissions
+            .contains(&helix_plugin::Permission::Process)
+        {
+            let grant = process_grant(settings, &manifest.name)
+                .map(|grant| grant.describe())
+                .unwrap_or_else(|err| err.to_string());
+            lines.push(format!("{}: process: {grant}", manifest.name));
+        }
+    }
+    lines.sort();
+    lines
 }
 
 /// Run `f` with the plugin host, if plugins are loaded.
@@ -382,6 +454,12 @@ pub fn describe() -> String {
         if !permissions.is_empty() {
             out.push_str(&format!("permissions: {}\n", permissions.join(", ")));
         }
+        if plugin
+            .permissions
+            .contains(&helix_plugin::Permission::Process)
+        {
+            out.push_str(&format!("process: {}\n", plugin.process_grant.describe()));
+        }
         for command in &plugin.commands {
             out.push_str(&format!(
                 "- `{}/{}` {}\n",
@@ -396,4 +474,57 @@ pub fn describe() -> String {
 /// Whether any plugin subscribes to events of `kind`.
 pub fn wants(kind: EventKind) -> bool {
     with_host(|host| host.wants(kind)).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_grants_are_not_forwarded_to_plugin_init() {
+        let settings: toml::Table =
+            toml::from_str("[files]\nallow-process = ['rg', 'fd']\nwidth = 80\n").unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&plugin_settings(&settings, "files").unwrap()).unwrap();
+        assert_eq!(config, serde_json::json!({ "width": 80 }));
+        assert_eq!(
+            process_grant(&settings, "files").unwrap(),
+            ProcessGrant::Programs(vec!["rg".into(), "fd".into()])
+        );
+        assert_eq!(
+            process_grant(&settings, "missing").unwrap(),
+            ProcessGrant::Denied
+        );
+        let invalid: toml::Table = toml::from_str("[files]\nallow-process = 42\n").unwrap();
+        assert!(process_grant(&invalid, "files")
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid allow-process under [files]"));
+    }
+
+    #[test]
+    fn health_reports_configured_process_grants_without_loading_components() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("files");
+        std::fs::create_dir(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.toml"),
+            "name = 'files'\nversion = '1'\napi = '0.2'\npermissions = ['process']\n",
+        )
+        .unwrap();
+        assert_eq!(
+            health_process_grants_from(dir.path(), &toml::Table::new()),
+            ["files: process: not granted"]
+        );
+        let settings = toml::from_str("[files]\nallow-process = ['rg', 'fd']\n").unwrap();
+        assert_eq!(
+            health_process_grants_from(dir.path(), &settings),
+            ["files: process: only rg, fd"]
+        );
+        let settings = toml::from_str("[files]\nallow-process = true\n").unwrap();
+        assert_eq!(
+            health_process_grants_from(dir.path(), &settings),
+            ["files: process: granted"]
+        );
+    }
 }
