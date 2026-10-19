@@ -391,6 +391,54 @@ Do them together, as one version.
   final `on-process-done` still comes. Use it in `examples/finder` `files`
   with `push-items`.
 
+## M11. Review fixes still open (from a code review)
+
+Already fixed: plugin-closed documents no longer crash `apply`; events go
+to plugins one at a time with fresh snapshots; out-of-range selections are
+skipped; `:plugin-run` recursion is limited (depth 4); UI actions of a call
+run in order; file grants only cover real project directories (not `$HOME`,
+`/`, or anything containing the config/data dirs); one plugin picker at a
+time; `alt-Enter` closes plugin pickers; `--` is passed to flagless
+commands; stale background loads are dropped; programs are killed with
+their process group; `name = false` in `plugins.toml` disables a plugin.
+**These fixes are committed but not yet covered by new tests: add some.**
+
+- [ ] **M11.1 Blocking WASI calls can hang the editor** (high). The epoch
+  time limit only interrupts running wasm; a plugin calling
+  `std::thread::sleep` or reading a FIFO blocks the UI forever. Fix: enable
+  Wasmtime `async_support`, call exports with `call_*_async` under
+  `tokio::time::timeout`; or deny blocking clock/poll imports.
+- [ ] **M11.2 `push-items` has no cumulative cap.** Track items per open
+  picker in `State` (count on `show_picker`, add on `push_items`, reset on
+  `set_items`, drop when the picker request completes) and refuse beyond
+  `MAX_PICKER_ITEMS`.
+- [ ] **M11.3 Live pickers mix in results of old queries.** Give
+  `on-picker-query` a generation number and have `set-items` / `push-items`
+  carry it (API 0.3), dropping stale ones.
+- [ ] **M11.4 Document that `allow-process` is not a sandbox**: allowed
+  programs like `rg --pre` or `git -c alias.x=!sh` can run anything, and
+  a write grant to the workspace can change a project's git hooks.
+- [ ] **M11.5 Chooser file leaks** if the editor quits before a queued
+  `run-interactive` runs; old `.cwasm` cache files are never cleaned up.
+- [ ] **M11.6 `:s` preview cosmetics:** extra lines of multi-line
+  replacements are numbered `first_line + n`; CR-only line endings are not
+  split.
+
+## API 0.3 work in progress
+
+A started (uncompiled) M10 implementation is in `git stash` only on the
+original machine, so it is lost: start M10 from the plan above. The WIT
+draft lived at `helix-plugin/wit/v0.3/helix-plugin.wit` (copy of 0.2 plus:
+`open-file-at`, popups with ids + `close-popup` + `on-popup-close`,
+`spawn-options.%stream` + `on-process-output`, events `post-command`,
+`focus-gained`, `focus-lost`, `editor-idle`). Host design: `Event` becomes
+`Clone` (`PostCommand(String)`), `Action::Popup { markdown, centered,
+owner }`, `Action::ClosePopup`, `Action::OpenFileAt`, `Spawn { stream }`,
+`Callback::ProcessOutput` / `PopupClosed` (non-completing / completing),
+`PendingKind::Popup`. Detect popup closing by wrapping the popup contents
+in a component that delivers `PopupClosed` on `Drop`. Hooks: `PostCommand`
+event, `EditorView` focus events, `Application` `IdleTimer`.
+
 ## Later: APIs for file-manager style plugins
 
 Pure won't ship a file manager (see Scope), but users should be able to write

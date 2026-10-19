@@ -97,7 +97,8 @@ pub fn scopes(text: &Rope, selection: &Selection, scope: &Scope) -> Vec<(usize, 
     // Merge overlapping scopes (several cursors on one line).
     scopes.sort_unstable();
     scopes.dedup_by(|next, prev| {
-        if next.0 <= prev.1 {
+        // Overlapping only: adjacent selections stay separate.
+        if next.0 < prev.1 {
             prev.1 = prev.1.max(next.1);
             true
         } else {

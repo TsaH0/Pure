@@ -25,7 +25,7 @@ mod prompt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -54,12 +54,17 @@ runtime_local! {
     static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), scheduled: false });
     /// Set while plugin actions are applied, so a plugin's own edits don't
     /// produce change events (which could loop forever).
-    static APPLYING: AtomicBool = AtomicBool::new(false);
+    static APPLYING: AtomicUsize = AtomicUsize::new(0);
+    /// Plugin commands running inside each other (a plugin command running
+    /// `:plugin-run`), to stop runaway recursion.
+    static DEPTH: AtomicUsize = AtomicUsize::new(0);
     /// The events some plugin subscribed to (bits of `event_bit`), so editor
     /// hooks cost nothing when no plugin listens.
     static WANTED: AtomicU32 = AtomicU32::new(0);
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+    /// Counts loads, so a slow background load can't replace a newer one.
+    static GENERATION: AtomicUsize = AtomicUsize::new(0);
     /// The plugin directory and settings loaded last, to reload them.
     static LOADED: Mutex<Option<(PathBuf, toml::Table)>> = Mutex::new(None);
 }
@@ -101,6 +106,29 @@ fn workspace() -> PathBuf {
 struct Pending {
     events: Vec<Event>,
     scheduled: bool,
+}
+
+/// The directory plugins with `allow-files` may use: the workspace, but only
+/// a real project (with a `.git`, `.helix`, ... marker), never the home
+/// directory, `/`, or anything containing Pure's own configuration or data
+/// (a plugin could otherwise grant itself permissions in `plugins.toml`).
+fn file_workspace() -> Option<PathBuf> {
+    let cwd = helix_stdx::env::current_working_dir();
+    let (workspace, is_fallback) = helix_loader::find_workspace_in(&cwd);
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let too_broad = is_fallback
+        || workspace.parent().is_none()
+        || home.as_ref() == Some(&workspace)
+        || helix_loader::config_dir().starts_with(&workspace)
+        || helix_loader::data_dir().starts_with(&workspace);
+    if too_broad {
+        log::info!(
+            "plugins get no file access to {}: not a project directory",
+            workspace.display()
+        );
+        return None;
+    }
+    Some(workspace)
 }
 
 pub fn plugin_dir() -> PathBuf {
@@ -146,6 +174,7 @@ pub fn load_in_background() {
     if !has_plugins(&dir) {
         return;
     }
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     tokio::spawn(async move {
         let (settings, error) = read_settings();
         *LOADED.lock() = Some((dir.clone(), settings.clone()));
@@ -159,6 +188,9 @@ pub fn load_in_background() {
             return;
         };
         job::dispatch(move |editor, _| {
+            if GENERATION.load(Ordering::Relaxed) != generation {
+                return; // reloaded in the meantime
+            }
             install(editor, host, actions, errors);
             // Documents opened while the plugins were loading.
             let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
@@ -198,7 +230,7 @@ fn build_host(
         }
     };
     host.set_dirs(
-        Some(workspace()),
+        file_workspace(),
         Some(helix_loader::data_dir().join("plugins")),
     );
     let mut setting_errors = Vec::new();
@@ -249,6 +281,7 @@ fn install(
 pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     // The old plugins' programs are of no use to the new ones.
     process::kill_all();
+    GENERATION.fetch_add(1, Ordering::Relaxed);
     *HOST.lock() = None;
     *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
     let (host, actions, errors) = build_host(dir, settings);
@@ -266,6 +299,8 @@ pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> an
 fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<PluginSettings>> {
     let mut table = match settings.get(name) {
         Some(toml::Value::Table(table)) => table.clone(),
+        // `name = false` disables it too.
+        Some(toml::Value::Boolean(false)) => return None,
         _ => toml::Table::new(),
     };
     if let Some(enabled) = table.remove("enabled") {
@@ -340,11 +375,13 @@ pub fn command_names() -> Vec<String> {
 /// fixed when a plugin starts), so reload them if the workspace changed.
 pub fn directory_changed(editor: &mut Editor) {
     let stale = with_host(|host| {
-        host.workspace() != Some(workspace().as_path())
-            && host
-                .info()
-                .iter()
-                .any(|plugin| plugin.files != FileGrant::None)
+        host.workspace() != file_workspace().as_deref()
+            && host.info().iter().any(|plugin| {
+                plugin.files != FileGrant::None
+                    && plugin
+                        .permissions
+                        .contains(&helix_plugin::Permission::Filesystem)
+            })
     })
     .unwrap_or(false);
     let loaded = LOADED.lock().clone();
@@ -386,10 +423,17 @@ pub fn run_command(
     let (plugin, command) = name
         .split_once('/')
         .ok_or_else(|| anyhow::anyhow!("expected <plugin>/<command>, got '{name}'"))?;
+    // A plugin command may run other plugin commands, but not endlessly.
+    const MAX_DEPTH: usize = 4;
+    if DEPTH.load(Ordering::Relaxed) >= MAX_DEPTH {
+        anyhow::bail!("plugin commands nested too deeply (running {name})");
+    }
     let snapshot = snapshot(editor);
     let actions = with_host(|host| host.run_command(plugin, command, args, snapshot))
         .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))??;
+    DEPTH.fetch_add(1, Ordering::Relaxed);
     apply(editor, Some(jobs), actions);
+    DEPTH.fetch_sub(1, Ordering::Relaxed);
     Ok(())
 }
 
@@ -458,9 +502,13 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
 
 /// Apply the actions of a plugin call. `jobs` is needed to run commands; it is
 /// only available when a plugin command runs (not for events).
+type UiJob = Box<dyn FnOnce(&mut Editor, &mut Compositor) + Send>;
+
 fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>) {
-    APPLYING.store(true, Ordering::Relaxed);
+    APPLYING.fetch_add(1, Ordering::Relaxed);
     let mut edited: HashMap<DocumentId, ViewId> = HashMap::new();
+    // UI changes need the compositor: run them later, together, in order.
+    let mut ui: Vec<UiJob> = Vec::new();
     for action in actions {
         match action {
             Action::Edit { doc, transaction } => {
@@ -472,6 +520,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     continue;
                 };
                 let doc = editor.documents.get_mut(&doc_id).unwrap();
+                // Refused if the text changed since the plugin read it.
                 if doc.apply(&transaction, view_id) {
                     edited.insert(doc_id, view_id);
                 }
@@ -484,6 +533,11 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     continue;
                 };
                 let doc = editor.documents.get_mut(&doc_id).unwrap();
+                // The text may have changed since the plugin read it.
+                let len = doc.text().len_chars();
+                if selection.ranges().iter().any(|range| range.to() > len) {
+                    continue;
+                }
                 let selection = selection.ensure_invariants(doc.text().slice(..));
                 doc.set_selection(view_id, selection);
             }
@@ -522,9 +576,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 chooser_file,
                 wait_for_key,
             ) {
-                Ok(interactive) => later(move |_, compositor| {
+                Ok(interactive) => ui.push(Box::new(move |_, compositor| {
                     compositor.interactive = Some(interactive);
-                }),
+                })),
                 Err(err) => deliver_later(
                     plugin,
                     Callback::ProcessDone {
@@ -534,37 +588,50 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 ),
             },
             Action::Kill { plugin, id } => process::kill(&plugin, id),
-            Action::ShowPicker { plugin, id, picker } => {
-                later(move |_, compositor| picker::show(compositor, plugin, id, picker))
-            }
-            Action::PushItems { plugin, id, items } => {
-                later(move |_, compositor| picker::push_items(compositor, &plugin, id, items))
-            }
-            Action::SetItems { plugin, id, items } => {
-                later(move |_, compositor| picker::set_items(compositor, &plugin, id, items))
-            }
-            Action::Popup(markdown) => later(move |editor, compositor| {
+            Action::ShowPicker { plugin, id, picker } => ui.push(Box::new(move |_, compositor| {
+                picker::show(compositor, plugin, id, picker)
+            })),
+            Action::PushItems { plugin, id, items } => ui.push(Box::new(move |_, compositor| {
+                picker::push_items(compositor, &plugin, id, items)
+            })),
+            Action::SetItems { plugin, id, items } => ui.push(Box::new(move |_, compositor| {
+                picker::set_items(compositor, &plugin, id, items)
+            })),
+            Action::Popup(markdown) => ui.push(Box::new(move |editor, compositor| {
                 let contents = crate::ui::Markdown::new(markdown, editor.syn_loader.clone());
                 let popup = crate::ui::Popup::new("plugin-popup", contents).auto_close(true);
                 compositor.replace_or_push("plugin-popup", popup);
-            }),
-            Action::ShowPrompt { plugin, id, prompt } => later(move |editor, compositor| {
-                prompt::show(editor, compositor, plugin, id, prompt)
-            }),
+            })),
+            Action::ShowPrompt { plugin, id, prompt } => {
+                ui.push(Box::new(move |editor, compositor| {
+                    prompt::show(editor, compositor, plugin, id, prompt)
+                }))
+            }
         }
     }
     // All edits of one call are one undo step.
     let scrolloff = editor.config().scrolloff;
     for (doc_id, view_id) in edited {
-        if !editor.tree.contains(view_id) {
+        // A command the plugin ran may have closed the document or shown
+        // another one in the view.
+        if !editor.tree.contains(view_id) || editor.tree.get(view_id).doc != doc_id {
             continue;
         }
+        let Some(doc) = editor.documents.get_mut(&doc_id) else {
+            continue;
+        };
         let view = editor.tree.get_mut(view_id);
-        let doc = editor.documents.get_mut(&doc_id).unwrap();
         doc.append_changes_to_history(view);
         view.ensure_cursor_in_view(doc, scrolloff);
     }
-    APPLYING.store(false, Ordering::Relaxed);
+    if !ui.is_empty() {
+        later(move |editor, compositor| {
+            for job in ui {
+                job(editor, compositor);
+            }
+        });
+    }
+    APPLYING.fetch_sub(1, Ordering::Relaxed);
 }
 
 /// Run `f` once the current event is handled (with the compositor, which
@@ -620,7 +687,7 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
-        if !event.ghost_transaction && !APPLYING.load(Ordering::Relaxed) {
+        if !event.ghost_transaction && APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::DocumentChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
@@ -630,7 +697,7 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut SelectionDidChange<'_>| {
-        if !APPLYING.load(Ordering::Relaxed) {
+        if APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::SelectionChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
@@ -687,14 +754,17 @@ pub fn deliver_events(editor: &mut Editor) {
                 continue; // closed in the meantime
             }
         }
-        let snapshot = snapshot(editor);
-        let Some(results) = with_host(|host| host.dispatch(event, &snapshot)) else {
+        let Some(plugins) = with_host(|host| host.subscribers(event.kind())) else {
             return;
         };
-        for (_plugin, result) in results {
-            match result {
-                Ok(actions) => apply(editor, None, actions),
-                Err(err) => editor.set_error(err.to_string()),
+        // One plugin at a time, each seeing what the previous ones changed.
+        for plugin in plugins {
+            let snapshot = snapshot(editor);
+            let result = with_host(|host| host.dispatch_to(&plugin, event.clone(), &snapshot));
+            match result.flatten() {
+                Some(Ok(actions)) => apply(editor, None, actions),
+                Some(Err(err)) => editor.set_error(err.to_string()),
+                None => {}
             }
         }
     }

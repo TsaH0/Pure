@@ -1170,6 +1170,10 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                 }
                 if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, self.default_action);
+                    // A picker that can only be answered once is done.
+                    if !self.reopenable {
+                        return close_fn(self, ctx, false);
+                    }
                 }
             }
             key!(Enter) => {

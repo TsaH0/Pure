@@ -1497,23 +1497,48 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Vec<(String, anyhow::Result<Vec<Action>>)> {
-        let limit = self.limits.event;
-        let kind = event.kind();
-        self.plugins
-            .iter_mut()
-            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
-            .map(|plugin| {
-                let result = plugin
-                    .call(
-                        snapshot.clone(),
-                        CallContext::Event,
-                        limit,
-                        |guest, store| guest.call_event(store, event),
-                    )
-                    .map(|((), actions)| actions);
-                (plugin.manifest.name.clone(), result)
+        self.subscribers(event.kind())
+            .into_iter()
+            .filter_map(|name| {
+                let result = self.dispatch_to(&name, event.clone(), snapshot)?;
+                Some((name, result))
             })
             .collect()
+    }
+
+    /// The enabled plugins subscribed to events of `kind`.
+    pub fn subscribers(&self, kind: EventKind) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .map(|plugin| plugin.manifest.name.clone())
+            .collect()
+    }
+
+    /// Send `event` to `plugin` only (if it is enabled and subscribed), so
+    /// the editor can apply each plugin's actions before the next plugin
+    /// sees the state.
+    pub fn dispatch_to(
+        &mut self,
+        plugin: &str,
+        event: Event,
+        snapshot: &Snapshot,
+    ) -> Option<anyhow::Result<Vec<Action>>> {
+        let limit = self.limits.event;
+        let kind = event.kind();
+        let plugin = self.plugins.iter_mut().find(|p| {
+            p.manifest.name == plugin && p.disabled.is_none() && p.events.contains(&kind)
+        })?;
+        Some(
+            plugin
+                .call(
+                    snapshot.clone(),
+                    CallContext::Event,
+                    limit,
+                    move |guest, store| guest.call_event(store, event),
+                )
+                .map(|((), actions)| actions),
+        )
     }
 
     /// Whether any enabled plugin listens to events of `kind`.

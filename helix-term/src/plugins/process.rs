@@ -78,6 +78,9 @@ async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Its own process group, so programs it starts are killed with it.
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = command
         .spawn()
         .map_err(|err| format!("failed to run '{program}': {err}"))?;
@@ -96,12 +99,12 @@ async fn run(
         status = child.wait() => status.ok(),
         _ = tokio::time::sleep(timeout) => {
             note = Some(format!("[killed after {} ms]", timeout.as_millis()));
-            let _ = child.kill().await;
+            kill_group(&mut child).await;
             None
         }
         _ = kill => {
             note = Some("[killed]".to_string());
-            let _ = child.kill().await;
+            kill_group(&mut child).await;
             None
         }
     };
@@ -126,6 +129,18 @@ async fn run(
         stdout: stdout.0,
         stderr: stderr.0,
     })
+}
+
+/// Kill the program and everything it started (its process group).
+async fn kill_group(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // SAFETY: plain system call; the group was created at spawn.
+        unsafe {
+            libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill().await;
 }
 
 /// Output of one stream, read in the background.

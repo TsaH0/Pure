@@ -103,6 +103,19 @@ fn live_query(
 
 /// Show the picker `spec` for `plugin`'s request `id`.
 pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSpec) {
+    // One plugin picker at a time: the previous one is cancelled. (Pickers
+    // are found by type, so two would get each other's items and queries.)
+    if let Some(Overlay { content, .. }) = compositor.find::<Overlay<PluginPicker>>() {
+        let previous = content.editor_data();
+        super::deliver_later(
+            previous.plugin.clone(),
+            Callback::PickerDone {
+                id: previous.id,
+                result: PickerResult::Cancelled,
+            },
+        );
+        compositor.remove_type::<Overlay<PluginPicker>>();
+    }
     let len = spec.items.len() as u32;
     let items: Vec<Item> = spec
         .items
@@ -170,7 +183,8 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
         picker = picker.with_initial_cursor(initial);
     }
     if live {
-        // Sends the (empty) initial query right away.
+        // The plugin hears about the query once the user types; until then
+        // the picker shows the initial items.
         picker = picker.with_dynamic_query(live_query, Some(100));
     }
     compositor.push(Box::new(ui::overlay::overlaid(picker)));
