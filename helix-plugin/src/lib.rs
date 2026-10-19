@@ -27,20 +27,14 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-mod bindings {
-    wasmtime::component::bindgen!({
-        path: "wit/v0.1",
-        world: "helix-plugin",
-    });
-}
+mod api;
 
-use bindings::exports::helix::plugin::plugin::Guest;
-use bindings::helix::plugin::{host, types};
+use api::{v0_1, v0_2, Instance};
 pub use types::{CommandInfo, EventKind, Mode};
+use v0_1::helix::plugin::types;
 
-/// Version of the plugin API (the `helix:plugin` WIT package) this host
-/// implements. A plugin's manifest has to ask for it in its `api` field.
-pub const API_VERSION: &str = "0.1";
+/// The newest supported plugin API. API 0.1 remains supported unchanged.
+pub const API_VERSION: &str = "0.2";
 
 pub type DocumentId = u32;
 
@@ -103,9 +97,9 @@ impl Manifest {
                 manifest.name
             );
         }
-        if manifest.api != API_VERSION {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure provides {API_VERSION}",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1 and 0.2",
                 manifest.name,
                 manifest.api
             );
@@ -261,9 +255,7 @@ impl State {
     }
 }
 
-impl types::Host for State {}
-
-impl host::Host for State {
+impl State {
     fn current_document(&mut self) -> Option<DocumentId> {
         self.snapshot.current
     }
@@ -451,7 +443,7 @@ pub struct Plugin {
     manifest: Manifest,
     dir: PathBuf,
     store: Store<State>,
-    instance: bindings::HelixPlugin,
+    instance: Instance,
     commands: Vec<CommandInfo>,
     events: Vec<EventKind>,
     /// Why the plugin was disabled.
@@ -491,7 +483,7 @@ impl Plugin {
         snapshot: Snapshot,
         in_command: bool,
         limit: Duration,
-        f: impl FnOnce(&Guest, &mut Store<State>) -> wasmtime::Result<R> + Send,
+        f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R> + Send,
     ) -> anyhow::Result<(R, Vec<Action>)>
     where
         R: Send,
@@ -506,7 +498,7 @@ impl Plugin {
         let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
         self.store.set_epoch_deadline(ticks);
 
-        let guest = self.instance.helix_plugin_plugin();
+        let guest = &self.instance;
         let store = &mut self.store;
         let result = outside_async_runtime(move || f(guest, store));
         let state = self.store.data_mut();
@@ -574,7 +566,8 @@ impl PluginHost {
 
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        bindings::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         // Advance the epoch regularly so calls can be interrupted.
         let stop_ticker = Arc::new(AtomicBool::new(false));
@@ -712,10 +705,15 @@ impl PluginHost {
             (self.limits.init.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64,
         );
         let linker = &self.linker;
-        let instance = outside_async_runtime(|| {
-            bindings::HelixPlugin::instantiate(&mut store, &component, linker)
-        })
-        .with_context(|| format!("failed to start plugin '{name}'"))?;
+        let instance =
+            outside_async_runtime(|| match manifest.api.as_str() {
+                "0.1" => v0_1::HelixPlugin::instantiate(&mut store, &component, linker)
+                    .map(Instance::V0_1),
+                "0.2" => v0_2::HelixPlugin::instantiate(&mut store, &component, linker)
+                    .map(Instance::V0_2),
+                _ => unreachable!("manifest API was validated"),
+            })
+            .with_context(|| format!("failed to start plugin '{name}'"))?;
 
         let mut plugin = Plugin {
             manifest,
@@ -859,12 +857,8 @@ impl PluginHost {
             .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
             .map(|plugin| {
                 let result = plugin
-                    .call(snapshot.clone(), false, limit, |guest, store| match event {
-                        Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                        Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
-                        Event::ModeSwitch { old, new } => {
-                            guest.call_on_mode_switch(store, old, new)
-                        }
+                    .call(snapshot.clone(), false, limit, |guest, store| {
+                        guest.call_event(store, event)
                     })
                     .map(|((), actions)| actions);
                 (plugin.manifest.name.clone(), result)

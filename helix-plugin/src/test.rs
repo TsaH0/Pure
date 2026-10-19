@@ -730,3 +730,60 @@ async fn plugins_work_inside_a_single_threaded_runtime() {
     let err = run(&mut host, "panic", &[], Snapshot::default()).unwrap_err();
     assert!(err.to_string().contains("crashed"), "{err}");
 }
+
+#[test]
+fn both_api_versions_share_host_state() {
+    let (mut host, root) = testplugin("{}");
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        ALL,
+    );
+    let manifest_path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(manifest_path, manifest).unwrap();
+    let actions = host.load(&dir, "{\"answer\":42}").unwrap();
+    assert_eq!(statuses(&actions), ["0.2 init:{\"answer\":42}"]);
+    assert_eq!(host.plugins().len(), 2);
+    let actions = host
+        .run_command("testplugin2", "inspect", vec![], snapshot("héllo", 0, 1))
+        .unwrap();
+    assert_eq!(apply("héllo", &actions), "v2:héllo");
+    assert_eq!(statuses(&actions), ["héllo:Mode::Normal"]);
+    let results = host.dispatch(
+        Event::ModeSwitch {
+            old: Mode::Normal,
+            new: Mode::Insert,
+        },
+        &Snapshot::default(),
+    );
+    let actions = &results
+        .into_iter()
+        .find(|(name, _)| name == "testplugin2")
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(statuses(actions), ["Mode::Normal->Mode::Insert"]);
+    assert!(run(&mut host, "status", &["old"], Snapshot::default()).is_ok());
+}
+
+#[test]
+fn manifest_selects_the_component_world() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(root.path(), "wrong-world", &testplugin_wasm(), ALL);
+    let path = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(path, source).unwrap();
+    assert!(host()
+        .load(&dir, "{}")
+        .unwrap_err()
+        .to_string()
+        .contains("failed to start"));
+    let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
+    assert!(err.to_string().contains("supports 0.1 and 0.2"));
+}

@@ -111,7 +111,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     `callbacks`). The SDK and test plugin point at the new paths.
   - Done when: the 0.1 fixtures still build byte-for-byte compatible bindings
     and all `helix-plugin` tests pass.
-- [ ] **M0.2 Two worlds in the host.** Depends on: M0.1.
+- [x] **M0.2 Two worlds in the host.** Depends on: M0.1.
   - `bindgen!` once per version in `mod v0_1` / `mod v0_2`. Move the
     host-function bodies into plain methods on `State`, so both worlds'
     `Host` impls are thin wrappers (no duplicated logic).

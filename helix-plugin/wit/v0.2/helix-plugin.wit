@@ -160,8 +160,8 @@ interface callbacks {
   use types.{request-id};
   use process.{output};
   use ui.{picker-result};
-  on-process-done: func(id: request-id, result: result<output, string>);
-  on-picker-done: func(id: request-id, result: picker-result);
+  on-process-done: func(id: request-id, %result: result<output, string>);
+  on-picker-done: func(id: request-id, %result: picker-result);
 }
 
 world helix-plugin {

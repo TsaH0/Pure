@@ -10,5 +10,6 @@ build() {
     cp "$1/target/wasm32-wasip2/release/$2.wasm" "tests/fixtures/$3.wasm"
 }
 build tests/plugins/testplugin testplugin testplugin
+build tests/plugins/testplugin2 testplugin2 testplugin2
 (cd examples/text-tools && cargo build --release --target wasm32-wasip2)
 cp examples/text-tools/target/wasm32-wasip2/release/text_tools.wasm examples/text-tools/plugin.wasm
