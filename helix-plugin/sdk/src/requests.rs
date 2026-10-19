@@ -103,6 +103,12 @@ impl Item {
         }
     }
 
+    /// Show `text` as the item's preview.
+    pub fn with_text_preview(mut self, text: impl Into<String>) -> Self {
+        self.preview = Some(crate::Preview::Text(text.into()));
+        self
+    }
+
     /// Preview the file `path`, highlighting `lines` (0-based, inclusive).
     pub fn with_file_preview(mut self, path: impl Into<String>, lines: Option<(u32, u32)>) -> Self {
         self.preview = Some(crate::Preview::File((path.into(), lines)));

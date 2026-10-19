@@ -383,9 +383,8 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 Small, self-contained; each one is a good single task.
 
-- [ ] **Text previews in pickers** (`preview::text`): the picker previews
-  files and documents only. Option: a small `PathOrId`-like variant holding
-  text, rendered without syntax highlighting.
+- [x] **Text previews in pickers** (`preview::text`): `PathOrId::Text`,
+  cached as a document; SDK `Item::with_text_preview`.
 - [ ] **Streaming program output**: `on-process-output(id, chunk)` behind a
   `stream: bool` spawn option, so a picker can fill as `rg` runs. Needs
   the next API version once 0.2 is released.

@@ -20,8 +20,13 @@ pub struct Item {
     /// Index in the plugin's list (pushed items continue the count).
     index: u32,
     columns: Vec<String>,
-    /// A file to preview, with lines (0-based, inclusive) to highlight.
-    preview: Option<(PathBuf, Option<(usize, usize)>)>,
+    preview: Option<Preview>,
+}
+
+enum Preview {
+    /// A file, with lines (0-based, inclusive) to highlight.
+    File(PathBuf, Option<(usize, usize)>),
+    Text(String),
 }
 
 /// Whose picker it is.
@@ -35,14 +40,13 @@ pub struct Data {
 type PluginPicker = Picker<Item, Data>;
 
 fn item(index: u32, item: PickerItem) -> Item {
-    let preview = match item.preview {
-        Some(PickerPreview::File((path, lines))) => Some((
+    let preview = item.preview.map(|preview| match preview {
+        PickerPreview::File((path, lines)) => Preview::File(
             PathBuf::from(path),
             lines.map(|(from, to)| (from as usize, to as usize)),
-        )),
-        // Text previews need a document to show them in; not supported yet.
-        Some(PickerPreview::Text(_)) | None => None,
-    };
+        ),
+        PickerPreview::Text(text) => Preview::Text(text),
+    });
     Item {
         index,
         columns: item.columns,
@@ -145,10 +149,9 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
             );
         },
     )
-    .with_preview(|_editor, item: &Item| {
-        item.preview
-            .as_ref()
-            .map(|(path, lines)| (path.as_path().into(), *lines))
+    .with_preview(|_editor, item: &Item| match item.preview.as_ref()? {
+        Preview::File(path, lines) => Some((path.as_path().into(), *lines)),
+        Preview::Text(text) => Some((ui::picker::PathOrId::Text(text), None)),
     })
     .with_on_close(move |cx| {
         super::deliver(

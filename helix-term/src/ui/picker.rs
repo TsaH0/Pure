@@ -64,6 +64,8 @@ pub const MAX_FILE_SIZE_FOR_PREVIEW: u64 = 10 * 1024 * 1024;
 pub enum PathOrId<'a> {
     Id(DocumentId),
     Path(&'a Path),
+    /// Text that isn't a file (e.g. from a plugin), shown without a path.
+    Text(&'a str),
 }
 
 impl<'a> From<&'a Path> for PathOrId<'a> {
@@ -266,6 +268,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     pub truncate_start: bool,
     /// Caches paths to documents
     preview_cache: HashMap<Arc<Path>, CachedPreview>,
+    /// The last `PathOrId::Text` preview, by a hash of its text.
+    text_preview: Option<(u64, CachedPreview)>,
     read_buffer: Vec<u8>,
     /// Given an item in the picker, return the file path and line number to display.
     file_fn: Option<FileCallback<T>>,
@@ -395,6 +399,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             completion_height: 0,
             widths,
             preview_cache: HashMap::new(),
+            text_preview: None,
             read_buffer: Vec::with_capacity(1024),
             file_fn: None,
             preview_highlight_handler: PreviewHighlightHandler::<T, D>::default().spawn(),
@@ -706,6 +711,23 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             PathOrId::Id(id) => {
                 let doc = editor.documents.get(&id).unwrap();
                 Some((Preview::EditorDocument(doc), range))
+            }
+            PathOrId::Text(text) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut hasher);
+                let hash = hasher.finish();
+                if self.text_preview.as_ref().map(|(cached, _)| *cached) != Some(hash) {
+                    let doc = Document::from(
+                        helix_core::Rope::from(text),
+                        None,
+                        editor.config.clone(),
+                        editor.syn_loader.clone(),
+                    );
+                    self.text_preview = Some((hash, CachedPreview::Document(Box::new(doc))));
+                }
+                let (_, preview) = self.text_preview.as_ref()?;
+                Some((Preview::Cached(preview), range))
             }
         }
     }

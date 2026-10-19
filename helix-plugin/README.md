@@ -270,8 +270,8 @@ carry a file preview (path and lines to highlight). The callback gets a
 `Choice`: the chosen items and their indices, and the split (`None` when the
 picker was closed without choosing). `editor::push_items(id, items)` adds items to an
 open picker, e.g. as a program's output arrives; `Item::new(columns, data)`
-and `.with_file_preview(path, lines)` build richer items. Text previews are
-not shown yet. Only from commands and callbacks.
+and `.with_file_preview(path, lines)` / `.with_text_preview(text)` build
+richer items. Only from commands and callbacks.
 
 `editor::pick_live(picker, query, callback)` is a live picker: what the user
 types goes to `query(id, text)` (debounced) instead of filtering, and the

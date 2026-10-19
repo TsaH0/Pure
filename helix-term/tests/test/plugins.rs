@@ -681,3 +681,19 @@ async fn plugin_log_shows_what_a_plugin_logged() -> anyhow::Result<()> {
     assert_error(&app, "no plugin named 'nope'");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_pickers_preview_text() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/text-preview alpha beta<ret>",
+    )
+    .await;
+    deliver_events(&mut app).await;
+    // Moving renders the preview of each item (the test backend draws).
+    keys(&mut app, "<down><up><down><esc>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "a\n");
+    Ok(())
+}

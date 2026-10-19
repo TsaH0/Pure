@@ -31,6 +31,7 @@ impl Plugin for TestPlugin {
                 "read-file",
                 "write-data",
                 "log",
+                "text-preview",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -136,6 +137,13 @@ impl Plugin for TestPlugin {
             }
             "kill" => editor::kill(request_id(&args)?),
             "popup" => editor::popup(&args.join(" "))?,
+            "text-preview" => {
+                let items = args
+                    .iter()
+                    .map(|arg| Item::text(arg.as_str()).with_text_preview(format!("PREVIEW {arg}\nline 2")))
+                    .collect();
+                editor::pick(Picker::new("Text", items), |_| Ok(()))?;
+            }
             "log" => {
                 for line in &args {
                     editor::log(line);
