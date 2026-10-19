@@ -483,10 +483,8 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 ## Future TODOs (not yet milestones)
 
-- [ ] **Picker titles:** `plugins::picker::show` does not use `PickerSpec.title`;
-  the terminal shows only the column header and query. Honor the API's title
-  with an optional label in the existing picker widget, preserving bindings
-  and the layout of native pickers. Include a terminal check.
+- [x] **Picker titles:** `Picker::with_title` draws the plugin's title in
+  the top border; native pickers (no title) are unchanged.
 - [x] **Order process start with picker installation:** process starts and
   kills now share the call's ordered UI effects, so a streaming process cannot
   return items before its picker is installed. Starts validate the enabled
@@ -512,11 +510,10 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   installation and immediately before terminal handover. Stale requests are
   dropped with chooser cleanup. Tests cover reload and disable, with editing
   continuing after cancellation.
-- [ ] **Complete displaced terminal requests:** two `run-interactive` actions
-  in one call overwrite the compositor's single pending program. The first
-  chooser is dropped, but its process request/callback remains pending. Cancel
-  the displaced plugin request with a completion error (or serialize it),
-  preserving native commands. Test two requests and request-slot recovery.
+- [x] **Complete displaced terminal requests:** `Interactive::on_cancel`
+  (`OnCancel`, disarmed when the program runs) answers a plugin's request
+  with an error when it is replaced by another program, dropped as stale, or
+  the editor quits first. Test: `displaced_terminal_requests_are_answered`.
 - [ ] **Cancel blocked filesystem workers:** async timeouts stop the guest
   and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
   pool can survive until the FIFO wakes. Track upstream WASI/cap-std support

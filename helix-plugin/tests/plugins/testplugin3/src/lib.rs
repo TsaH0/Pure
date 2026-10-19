@@ -42,6 +42,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "spawn-disable",
                 "interactive-reload",
                 "interactive-disable",
+                "interactive-twice",
                 "pause",
                 "loop",
                 "output-events",
@@ -78,6 +79,19 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             },
             "pause" => {
                 std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(())
+            }
+            // Two terminal programs from one call: only one can have the
+            // terminal; the first is answered with an error.
+            "interactive-twice" => {
+                let options = helix::plugin::process::InteractiveOptions {
+                    cwd: None,
+                    chooser_file: true,
+                    wait_for_key: false,
+                };
+                let first = helix::plugin::process::run_interactive(&args, &options)?;
+                let second = helix::plugin::process::run_interactive(&args, &options)?;
+                host::log(&format!("twice:{first}:{second}"));
                 Ok(())
             }
             "interactive-reload" | "interactive-disable" => {

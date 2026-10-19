@@ -1291,6 +1291,13 @@ impl Application {
         lsp::ShowDocumentResult { success: true }
     }
 
+    /// Drop the program queued to take the terminal, as if it never ran.
+    /// Tests can't hand over a terminal.
+    #[cfg(feature = "integration")]
+    pub fn drop_queued_program(&mut self) -> bool {
+        self.compositor.interactive.take().is_some()
+    }
+
     async fn run_interactive(&mut self, interactive: crate::interactive::Interactive) {
         let crate::interactive::Interactive {
             mut command,
@@ -1300,7 +1307,9 @@ impl Application {
             banner,
             wait_for_key,
             before_run: _,
+            on_cancel,
         } = interactive;
+        on_cancel.disarm();
         use helix_view::graphics::CursorKind;
         self.terminal
             .backend_mut()

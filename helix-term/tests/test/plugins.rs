@@ -1352,3 +1352,42 @@ async fn sdk_03_example_streams_before_completion() -> anyhow::Result<()> {
     assert_eq!(text(&app), "xa\n");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn displaced_terminal_requests_are_answered() -> anyhow::Result<()> {
+    let settings = "[testplugin3]\nallow-process = [\"true\"]\n";
+    let (mut app, _dir) = app_with_v3_settings(WITH_PROCESS, settings);
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/interactive-twice true<ret>",
+    )
+    .await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    let ids: Vec<u32> = log
+        .last()
+        .and_then(|line| line.strip_prefix("twice:"))
+        .expect("ids logged")
+        .split(':')
+        .map(|id| id.parse().unwrap())
+        .collect();
+    let open = |id| {
+        helix_term::plugins::with_host(|host| {
+            host.has_request("testplugin3", id, helix_plugin::PendingKind::Process)
+        })
+        .unwrap()
+    };
+    // Only one program can be queued: the second replaced the first. The
+    // queued one is still open; drop it (as quitting would).
+    assert!(open(ids[1]), "the queued request stays open until it runs");
+    assert!(app.drop_queued_program());
+    let message = wait_for_status(&mut app, |message| message.starts_with("error:")).await;
+    assert!(
+        message.contains("cancelled before it could run"),
+        "{message}"
+    );
+    // Both were answered, so neither request stays open forever.
+    assert!(!open(ids[0]), "the displaced request must be completed");
+    assert!(!open(ids[1]), "the dropped request must be completed");
+    assert!(!app.drop_queued_program());
+    Ok(())
+}

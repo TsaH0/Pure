@@ -289,6 +289,7 @@ pub fn interactive(
         .args(&args[1..])
         .current_dir(cwd.unwrap_or_else(helix_stdx::env::current_working_dir));
     let owner = plugin.clone();
+    let cancelled = plugin.clone();
     let mut interactive = Interactive::new(command, move |_editor, _, status| {
         let result = status
             .map_err(|err| format!("failed to run '{}': {err}", args[0]))
@@ -310,6 +311,21 @@ pub fn interactive(
                 })
             });
         super::deliver_later(plugin, Callback::ProcessDone { id, result });
+    });
+    // Replaced by another program before it ran (or the editor quit): the
+    // plugin still gets its answer, so the request doesn't stay open.
+    interactive.on_cancel = crate::interactive::OnCancel::new(move || {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            super::deliver_later(
+                cancelled,
+                Callback::ProcessDone {
+                    id,
+                    result: Err("cancelled before it could run (another program took the \
+                                 terminal, or the editor quit)"
+                        .into()),
+                },
+            );
+        }
     });
     interactive.before_run = Some(Box::new(move || {
         super::with_host(|host| host.has_request(&owner, id, helix_plugin::PendingKind::Process))

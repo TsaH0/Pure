@@ -22,6 +22,9 @@ pub struct Interactive {
     pub on_exit: OnExit,
     /// Optional validity check for a deferred request, before terminal handover.
     pub before_run: Option<Box<dyn Fn() -> bool + Send>>,
+    /// Runs if the request is dropped without running: replaced by another
+    /// program, gone stale, or the editor quit first.
+    pub on_cancel: OnCancel,
     /// Run on the terminal's normal screen, below the shell's scrollback,
     /// instead of on the editor's alternate screen (like Vim's `:!`).
     pub normal_screen: bool,
@@ -43,6 +46,7 @@ impl Interactive {
             command,
             on_exit: Box::new(on_exit),
             before_run: None,
+            on_cancel: OnCancel::default(),
             normal_screen: false,
             clear_screen: false,
             banner: None,
@@ -52,6 +56,29 @@ impl Interactive {
 
     pub fn can_run(&self) -> bool {
         self.before_run.as_ref().is_none_or(|check| check())
+    }
+}
+
+/// A hook run when it is dropped, unless disarmed.
+#[derive(Default)]
+pub struct OnCancel(Option<Box<dyn FnOnce() + Send>>);
+
+impl OnCancel {
+    pub fn new(cancel: impl FnOnce() + Send + 'static) -> Self {
+        Self(Some(Box::new(cancel)))
+    }
+
+    /// The request runs after all: don't call the hook.
+    pub fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for OnCancel {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.0.take() {
+            cancel();
+        }
     }
 }
 
@@ -180,5 +207,28 @@ fn report_failure(editor: &mut Editor, program: &str, status: io::Result<ExitSta
             editor.set_error(format!("Failed to run '{program}': {err}"));
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod on_cancel_test {
+    use super::OnCancel;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn fires_when_dropped_unless_disarmed() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let hook = |count: &Arc<AtomicUsize>| {
+            let count = count.clone();
+            OnCancel::new(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            })
+        };
+        drop(hook(&count));
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        hook(&count).disarm();
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        drop(OnCancel::default());
     }
 }
