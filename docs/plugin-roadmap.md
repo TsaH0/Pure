@@ -375,14 +375,18 @@ Do them together, as one version.
   - SDK: generate 0.3 by default; keep `api-v0-1` and add `api-v0-2`.
     Re-check `register_plugin!`: exports that differ between versions go
     through version-specific macros (see `__export_callbacks!`).
-  - Keep a frozen 0.2 component fixture (like `text-tools-v0.1.wasm`) and
-    run the 0.2 tests against it.
+  - [x] Frozen 0.2 test-plugin and text-tools fixtures; existing 0.2 host
+    and in-editor tests run against them.
+  - [x] Host 0.3 world and direct-bindings guest load beside 0.1/0.2.
+    The SDK still defaults to 0.2 while the remaining 0.3 features are built.
   - Done when: 0.1, 0.2 and 0.3 plugins load side by side and every
     existing test passes.
 - [ ] **M10.2 `open-file` with a split and a position.**
   `open-file-at: func(path, action: open-action, line: option<u32>,
-  column: option<u32>)`. Then drop the `:vsplit` workaround in
-  `examples/finder`.
+  column: option<u32>)`.
+  - [x] Host/editor implementation, permission tests, all splits, Unicode
+    columns and coordinate clamping; checked in tmux.
+  - [ ] SDK/finder migration after the other 0.3 functionality works.
 - [ ] **M10.3 Popup ids and `on-popup-close`**; centered popups.
 - [ ] **M10.4 More events:** `post-command(name)`, `focus-gained` /
   `focus-lost`, `editor-idle` (from the idle timer). Add bits to
@@ -431,20 +435,20 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
 
 ## API 0.3 work in progress
 
-A started, uncompiled M10 draft is saved in `docs/drafts/`:
-`helix-plugin-v0.3.wit` (move it to `helix-plugin/wit/v0.3/`) and
-`api-0.3-host.diff` (host type changes for `helix-plugin/src/lib.rs`, not
-yet applied; `api.rs`, SDK and editor parts are still to do). The WIT is a
-copy of 0.2 plus:
-`open-file-at`, popups with ids + `close-popup` + `on-popup-close`,
-`spawn-options.%stream` + `on-process-output`, events `post-command`,
-`focus-gained`, `focus-lost`, `editor-idle`). Host design: `Event` becomes
-`Clone` (`PostCommand(String)`), `Action::Popup { markdown, centered,
-owner }`, `Action::ClosePopup`, `Action::OpenFileAt`, `Spawn { stream }`,
-`Callback::ProcessOutput` / `PopupClosed` (non-completing / completing),
-`PendingKind::Popup`. Detect popup closing by wrapping the popup contents
-in a component that delivers `PopupClosed` on `Drop`. Hooks: `PostCommand`
-event, `EditorView` focus events, `Application` `IdleTimer`.
+The draft WIT moved to `helix-plugin/wit/v0.3/helix-plugin.wit`, including
+optional `generation: u64` tags on picker updates and a generation in query
+callbacks. The host loads a third world through `api/api03.rs`, converting at
+the boundary to existing host types. `tests/plugins/testplugin3` is a real
+0.3 component built directly from WIT; 0.2 compatibility tests use frozen
+components. `open-file-at` works end to end, without editor-command workarounds.
+
+**Still open:** popup ids/closing callbacks and centering, streaming process
+output, post-command/focus/idle events, and live query generations. These
+paths currently return explicit "not enabled yet" errors in the 0.3 adapter
+(or are no-ops for void functions); finish them before treating 0.3 as complete.
+Keep the SDK default at 0.2 until those work, then implement SDK 0.3 with
+`api-v0-2`, update finder and the guide. The old host diff in `docs/drafts/`
+is a design reference, not a patch to apply blindly after the M11 changes.
 
 ## Later: APIs for file-manager style plugins
 

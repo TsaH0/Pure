@@ -803,3 +803,54 @@ async fn plugins_blocked_in_wasi_return_control_to_the_editor() -> anyhow::Resul
     assert_error(&app, "is disabled");
     Ok(())
 }
+
+fn app_with_v3() -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{ALL}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "").unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_opens_files_at_positions_in_the_requested_split() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    let file = helpers::temp_file_with_contents("first\nhéllo\nlast\n")?;
+    for (action, views) in [("replace", 1), ("hsplit", 2), ("vsplit", 3)] {
+        keys(
+            &mut app,
+            &format!(
+                ":plugin-run testplugin3/open-at '{}' {action} 2 3<ret>",
+                file.path().display()
+            ),
+        )
+        .await;
+        assert_eq!(text(&app), "first\nhéllo\nlast\n");
+        assert_eq!(cursor(&app), 8, "{action}: columns count characters");
+        assert_eq!(app.editor.tree.views().count(), views);
+    }
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/open-at '{}' replace 4294967295 4294967295<ret>",
+            file.path().display()
+        ),
+    )
+    .await;
+    assert!(cursor(&app) <= helix_view::doc!(app.editor).text().len_chars());
+    Ok(())
+}

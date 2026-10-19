@@ -1,0 +1,345 @@
+//! API 0.3 adapters. Older worlds retain their generated types unchanged.
+use super::{types, v0_3, CommandInfo, DocumentId, Event, EventKind, Mode, State};
+use crate::{Callback, OpenAction};
+use v0_3::helix::plugin::{process, ui};
+use wasmtime::{Result, Store};
+
+impl v0_3::helix::plugin::types::Host for State {}
+impl v0_3::helix::plugin::host::Host for State {
+    fn current_document(&mut self) -> Option<DocumentId> {
+        State::current_document(self)
+    }
+    fn documents(&mut self) -> Vec<DocumentId> {
+        State::documents(self)
+    }
+    fn current_mode(&mut self) -> v0_3::helix::plugin::types::Mode {
+        to_v3_mode(State::current_mode(self))
+    }
+    fn document_path(&mut self, doc: DocumentId) -> Result<Option<String>, String> {
+        State::document_path(self, doc)
+    }
+    fn document_language(&mut self, doc: DocumentId) -> Result<Option<String>, String> {
+        State::document_language(self, doc)
+    }
+    fn text(&mut self, doc: DocumentId) -> Result<String, String> {
+        State::text(self, doc)
+    }
+    fn text_range(&mut self, doc: DocumentId, from: u32, to: u32) -> Result<String, String> {
+        State::text_range(self, doc, from, to)
+    }
+    fn selections(
+        &mut self,
+        doc: DocumentId,
+    ) -> Result<Vec<v0_3::helix::plugin::types::Range>, String> {
+        State::selections(self, doc).map(|ranges| {
+            ranges
+                .into_iter()
+                .map(|r| v0_3::helix::plugin::types::Range {
+                    anchor: r.anchor,
+                    head: r.head,
+                })
+                .collect()
+        })
+    }
+    fn apply_edits(
+        &mut self,
+        doc: DocumentId,
+        edits: Vec<v0_3::helix::plugin::types::Edit>,
+    ) -> Result<(), String> {
+        State::apply_edits(
+            self,
+            doc,
+            edits
+                .into_iter()
+                .map(|e| types::Edit {
+                    from: e.from,
+                    to: e.to,
+                    text: e.text,
+                })
+                .collect(),
+        )
+    }
+    fn set_selections(
+        &mut self,
+        doc: DocumentId,
+        ranges: Vec<v0_3::helix::plugin::types::Range>,
+    ) -> Result<(), String> {
+        State::set_selections(
+            self,
+            doc,
+            ranges
+                .into_iter()
+                .map(|r| types::Range {
+                    anchor: r.anchor,
+                    head: r.head,
+                })
+                .collect(),
+        )
+    }
+    fn open_file(&mut self, path: String) -> Result<(), String> {
+        State::open_file(self, path)
+    }
+    fn open_file_at(
+        &mut self,
+        path: String,
+        action: v0_3::helix::plugin::types::OpenAction,
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Result<(), String> {
+        State::open_file_at(self, path, from_action(action), line, column)
+    }
+    fn run_command(&mut self, command: String) -> Result<(), String> {
+        State::run_command(self, command)
+    }
+    fn set_status(&mut self, message: String) {
+        State::set_status(self, message)
+    }
+    fn set_error(&mut self, message: String) {
+        State::set_error(self, message)
+    }
+    fn log(&mut self, message: String) {
+        State::log(self, message)
+    }
+    fn workspace_root(&mut self) -> Option<String> {
+        State::workspace_root(self)
+    }
+    fn cwd(&mut self) -> String {
+        State::cwd(self)
+    }
+    fn config_dir(&mut self) -> String {
+        State::config_dir(self)
+    }
+    fn data_dir(&mut self) -> String {
+        State::data_dir(self)
+    }
+    fn document_modified(&mut self, doc: DocumentId) -> Result<bool, String> {
+        State::document_modified(self, doc)
+    }
+}
+
+fn to_v3_mode(mode: Mode) -> v0_3::helix::plugin::types::Mode {
+    use v0_3::helix::plugin::types::Mode as M;
+    match mode {
+        Mode::Normal => M::Normal,
+        Mode::Insert => M::Insert,
+        Mode::Select => M::Select,
+    }
+}
+fn from_action(action: v0_3::helix::plugin::types::OpenAction) -> OpenAction {
+    use v0_3::helix::plugin::types::OpenAction as A;
+    match action {
+        A::Replace => OpenAction::Replace,
+        A::Hsplit => OpenAction::Hsplit,
+        A::Vsplit => OpenAction::Vsplit,
+    }
+}
+fn to_action(action: OpenAction) -> v0_3::helix::plugin::types::OpenAction {
+    use v0_3::helix::plugin::types::OpenAction as A;
+    match action {
+        OpenAction::Replace => A::Replace,
+        OpenAction::Hsplit => A::Hsplit,
+        OpenAction::Vsplit => A::Vsplit,
+    }
+}
+fn item(item: ui::Item) -> crate::PickerItem {
+    crate::PickerItem {
+        columns: item.columns,
+        data: item.data,
+        preview: item.preview.map(|preview| match preview {
+            ui::Preview::File(file) => crate::PickerPreview::File(file),
+            ui::Preview::Text(text) => crate::PickerPreview::Text(text),
+        }),
+    }
+}
+impl process::Host for State {
+    fn spawn(
+        &mut self,
+        argv: Vec<String>,
+        options: process::SpawnOptions,
+    ) -> std::result::Result<u32, String> {
+        if options.stream {
+            return Err("API 0.3 streaming output is not enabled yet".into());
+        }
+        State::spawn(self, argv, options.cwd, options.stdin, options.timeout_ms)
+    }
+    fn run_interactive(
+        &mut self,
+        argv: Vec<String>,
+        options: process::InteractiveOptions,
+    ) -> std::result::Result<u32, String> {
+        State::run_interactive(
+            self,
+            argv,
+            options.cwd,
+            options.chooser_file,
+            options.wait_for_key,
+        )
+    }
+    fn kill(&mut self, id: u32) {
+        State::kill(self, id)
+    }
+}
+impl ui::Host for State {
+    fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
+        if picker.live {
+            return Err("API 0.3 live query generations are not enabled yet".into());
+        }
+        State::show_picker(
+            self,
+            crate::PickerSpec {
+                title: picker.title,
+                columns: picker.columns,
+                items: picker.items.into_iter().map(item).collect(),
+                initial: picker.initial,
+                live: false,
+            },
+        )
+    }
+    fn push_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<ui::Item>,
+    ) -> std::result::Result<(), String> {
+        if generation.is_some() {
+            return Err("API 0.3 live query generations are not enabled yet".into());
+        }
+        State::push_items(self, id, items.into_iter().map(item).collect())
+    }
+    fn set_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<ui::Item>,
+    ) -> std::result::Result<(), String> {
+        if generation.is_some() {
+            return Err("API 0.3 live query generations are not enabled yet".into());
+        }
+        State::set_items(self, id, items.into_iter().map(item).collect())
+    }
+    fn show_popup(&mut self, _popup: ui::Popup) -> std::result::Result<u32, String> {
+        Err("API 0.3 popup lifecycle is not enabled yet".into())
+    }
+    fn close_popup(&mut self, _id: u32) {}
+    fn show_prompt(&mut self, prompt: ui::Prompt) -> std::result::Result<u32, String> {
+        State::show_prompt(
+            self,
+            crate::PromptSpec {
+                message: prompt.message,
+                initial: prompt.initial,
+                completions: prompt.completions,
+            },
+        )
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) async fn init(
+    instance: &v0_3::HelixPlugin,
+    store: &mut Store<State>,
+    config: &str,
+) -> Result<std::result::Result<(Vec<CommandInfo>, Vec<EventKind>), String>> {
+    Ok(instance
+        .helix_plugin_plugin()
+        .call_init(store, config)
+        .await?
+        .and_then(|registration| {
+            use v0_3::helix::plugin::types::EventKind as E;
+            let commands = registration
+                .commands
+                .into_iter()
+                .map(|command| CommandInfo {
+                    name: command.name,
+                    doc: command.doc,
+                })
+                .collect();
+            let events = registration
+                .events
+                .into_iter()
+                .map(|event| {
+                    Ok(match event {
+                        E::DocumentOpen => EventKind::DocumentOpen,
+                        E::DocumentChange => EventKind::DocumentChange,
+                        E::ModeSwitch => EventKind::ModeSwitch,
+                        E::DocumentSave => EventKind::DocumentSave,
+                        E::DocumentClose => EventKind::DocumentClose,
+                        E::SelectionChange => EventKind::SelectionChange,
+                        _ => return Err("API 0.3 extended events are not enabled yet".to_owned()),
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, String>>()?;
+            Ok((commands, events))
+        }))
+}
+
+pub(super) async fn callback(
+    instance: &v0_3::HelixPlugin,
+    store: &mut Store<State>,
+    callback: &Callback,
+) -> Result<()> {
+    let callbacks = instance.helix_plugin_callbacks();
+    match callback {
+        Callback::ProcessDone { id, result } => {
+            let result = result.as_ref().map(|output| process::Output {
+                exit_code: output.exit_code,
+                stdout: output.stdout.clone(),
+                stderr: output.stderr.clone(),
+            });
+            callbacks
+                .call_on_process_done(store, *id, result.as_ref().map_err(|error| error.as_str()))
+                .await
+        }
+        Callback::PickerDone { id, result } => {
+            let result = match result {
+                crate::PickerResult::Accepted((indices, action)) => {
+                    ui::PickerResult::Accepted((indices.clone(), to_action(*action)))
+                }
+                crate::PickerResult::Cancelled => ui::PickerResult::Cancelled,
+            };
+            callbacks.call_on_picker_done(store, *id, &result).await
+        }
+        Callback::PickerQuery { id, query } => {
+            callbacks.call_on_picker_query(store, *id, 0, query).await
+        }
+        Callback::PromptDone { id, result } => {
+            callbacks
+                .call_on_prompt_done(store, *id, result.as_deref())
+                .await
+        }
+    }
+}
+
+pub(super) async fn event(
+    instance: &v0_3::HelixPlugin,
+    store: &mut Store<State>,
+    event: Event,
+) -> Result<()> {
+    let guest = instance.helix_plugin_plugin();
+    match event {
+        Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
+        Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
+        Event::ModeSwitch { old, new } => {
+            guest
+                .call_on_mode_switch(store, to_v3_mode(old), to_v3_mode(new))
+                .await
+        }
+        Event::DocumentSave(doc) => {
+            instance
+                .helix_plugin_events()
+                .call_on_document_save(store, doc)
+                .await
+        }
+        Event::DocumentClose(doc) => {
+            instance
+                .helix_plugin_events()
+                .call_on_document_close(store, doc)
+                .await
+        }
+        Event::SelectionChange(doc) => {
+            instance
+                .helix_plugin_events()
+                .call_on_selection_change(store, doc)
+                .await
+        }
+    }
+}

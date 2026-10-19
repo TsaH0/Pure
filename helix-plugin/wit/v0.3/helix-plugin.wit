@@ -189,9 +189,9 @@ interface ui {
     cancelled,
   }
   show-picker: func(picker: picker) -> result<request-id, string>;
-  push-items: func(id: request-id, items: list<item>) -> result<_, string>;
+  push-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
   /// Replace the items of an open picker (for live pickers).
-  set-items: func(id: request-id, items: list<item>) -> result<_, string>;
+  set-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
 
   record popup {
     markdown: string,
@@ -223,7 +223,7 @@ interface callbacks {
   on-process-done: func(id: request-id, %result: result<output, string>);
   on-picker-done: func(id: request-id, %result: picker-result);
   /// What the user typed in a live picker.
-  on-picker-query: func(id: request-id, query: string);
+  on-picker-query: func(id: request-id, generation: u64, query: string);
   /// Output of a program started with `stream`.
   on-process-output: func(id: request-id, chunk: string);
   on-popup-close: func(id: request-id);

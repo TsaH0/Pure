@@ -15,6 +15,7 @@ build() {
 }
 build tests/plugins/testplugin testplugin testplugin
 build tests/plugins/testplugin2 testplugin2 testplugin2
+build tests/plugins/testplugin3 testplugin3 testplugin3
 # Every example, into its own directory.
 for example in examples/*/; do
     name=$(basename "$example")

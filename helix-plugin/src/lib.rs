@@ -31,12 +31,12 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 
-use api::{v0_1, v0_2, Instance};
+use api::{v0_1, v0_2, v0_3, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.2";
+pub const API_VERSION: &str = "0.3";
 
 pub type DocumentId = u32;
 
@@ -191,9 +191,9 @@ impl Manifest {
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure supports 0.1 and 0.2",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
                 manifest.name,
                 manifest.api
             );
@@ -260,6 +260,13 @@ pub enum Action {
         selection: Selection,
     },
     OpenFile(PathBuf),
+    /// Open in a selected split with a 1-based position (API 0.3).
+    OpenFileAt {
+        path: PathBuf,
+        action: OpenAction,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
     RunCommand(String),
     Status(String),
     Error(String),
@@ -624,6 +631,26 @@ impl State {
             return Err("empty path".into());
         }
         self.actions.push(Action::OpenFile(PathBuf::from(path)));
+        Ok(())
+    }
+
+    fn open_file_at(
+        &mut self,
+        path: String,
+        action: OpenAction,
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Result<(), String> {
+        self.need(Permission::OpenFiles)?;
+        if path.is_empty() {
+            return Err("empty path".into());
+        }
+        self.actions.push(Action::OpenFileAt {
+            path: path.into(),
+            action,
+            line,
+            column,
+        });
         Ok(())
     }
 
@@ -1107,6 +1134,7 @@ impl PluginHost {
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
@@ -1360,6 +1388,9 @@ impl PluginHost {
                     "0.2" => v0_2::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
                         .map(Instance::V0_2),
+                    "0.3" => v0_3::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_3),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -1467,7 +1498,7 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if plugin.manifest.api != "0.2" || plugin.disabled.is_some() {
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3") || plugin.disabled.is_some() {
             bail!("requests require an enabled API 0.2 plugin");
         }
         plugin

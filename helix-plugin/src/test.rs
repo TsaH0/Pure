@@ -804,7 +804,7 @@ fn manifest_selects_the_component_world() {
         .to_string()
         .contains("failed to start"));
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
-    assert!(err.to_string().contains("supports 0.1 and 0.2"));
+    assert!(err.to_string().contains("supports 0.1, 0.2 and 0.3"));
 }
 
 fn testplugin2() -> (PluginHost, tempfile::TempDir) {
@@ -2130,4 +2130,80 @@ fn failed_cache_rename_removes_the_unfinished_write() {
         .map(|entry| entry.unwrap().path())
         .collect();
     assert_eq!(remaining, [target]);
+}
+
+fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
+    let dir = plugin_dir(
+        root,
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        permissions,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.3\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+}
+
+#[test]
+fn three_api_worlds_run_side_by_side_with_frozen_02_components() {
+    let (mut host, root) = testplugin2();
+    let legacy = plugin_dir(root.path(), "testplugin", &testplugin_wasm(), ALL);
+    host.load(&legacy, "{}").unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command("testplugin3", "inspect", vec![], snapshot("héllo", 0, 0))
+        .unwrap();
+    assert_eq!(statuses(&actions), ["0.3:héllo"]);
+    let mut text = Rope::from("héllo");
+    for action in actions {
+        if let Action::Edit { transaction, .. } = action {
+            assert!(transaction.apply(&mut text));
+        }
+    }
+    assert_eq!(text.to_string(), "v3:héllo");
+    let actions = host
+        .run_command("testplugin2", "inspect", vec![], snapshot("héllo", 0, 0))
+        .unwrap();
+    assert_eq!(statuses(&actions), ["héllo:Mode::Normal"]);
+    let actions = host
+        .run_command("testplugin", "read", vec![], snapshot("héllo", 0, 0))
+        .unwrap();
+    assert_eq!(statuses(&actions), ["read 5 chars"]);
+}
+
+#[test]
+fn open_file_at_records_the_position_and_enforces_permission() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "open-at",
+            args(&["/tmp/with spaces", "vsplit", "2", "3"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::OpenFileAt { path, action: OpenAction::Vsplit, line: Some(2), column: Some(3) }] if path == Path::new("/tmp/with spaces"))
+    );
+    host.clear();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    let error = host
+        .run_command(
+            "testplugin3",
+            "open-at",
+            args(&["/tmp/file"]),
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("permission denied: add \"open-files\""),
+        "{error:#}"
+    );
 }

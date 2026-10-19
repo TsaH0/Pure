@@ -571,6 +571,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     editor.set_error(format!("Failed to open {}: {err}", path.display()));
                 }
             }
+            Action::OpenFileAt {
+                path,
+                action,
+                line,
+                column,
+            } => {
+                if let Err(error) = open_file_at(editor, &path, action, line, column) {
+                    editor.set_error(format!("Failed to open {}: {error}", path.display()));
+                }
+            }
             Action::RunCommand(command) => match jobs.as_deref_mut() {
                 Some(jobs) => run_editor_command(editor, jobs, &command),
                 None => editor.set_error("Plugins can only run commands from their commands"),
@@ -656,6 +666,35 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
         });
     }
     APPLYING.fetch_sub(1, Ordering::Relaxed);
+}
+
+fn open_file_at(
+    editor: &mut Editor,
+    path: &Path,
+    action: helix_plugin::OpenAction,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> anyhow::Result<()> {
+    let action = match action {
+        helix_plugin::OpenAction::Replace => helix_view::editor::Action::Replace,
+        helix_plugin::OpenAction::Hsplit => helix_view::editor::Action::HorizontalSplit,
+        helix_plugin::OpenAction::Vsplit => helix_view::editor::Action::VerticalSplit,
+    };
+    let id = editor.open(&helix_stdx::path::canonicalize(path), action)?;
+    let scrolloff = editor.config().scrolloff;
+    let view = editor.tree.get_mut(editor.tree.focus);
+    let doc = editor.documents.get_mut(&id).unwrap();
+    let row = (line.unwrap_or(1).saturating_sub(1) as usize).min(doc.text().len_lines() - 1);
+    let end = helix_core::line_ending::line_end_char_index(&doc.text().slice(..), row);
+    let pos = doc
+        .text()
+        .line_to_char(row)
+        .saturating_add(column.unwrap_or(1).saturating_sub(1) as usize)
+        .min(end);
+    let selection = helix_core::Selection::point(pos).ensure_invariants(doc.text().slice(..));
+    doc.set_selection(view.id, selection);
+    view.ensure_cursor_in_view(doc, scrolloff);
+    Ok(())
 }
 
 /// Run `f` once the current event is handled (with the compositor, which

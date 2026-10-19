@@ -154,6 +154,26 @@ test's world. Validation: all 64 host tests and 35 in-editor plugin tests
 passed against the frozen components; formatting and workspace Clippy passed
 without warnings. API 0.3 host/editor/SDK functionality remains open.
 
+## M10 Host world and positioned opens (in progress)
+
+Added the 0.3 WIT world and boundary adapters while retaining the existing
+host types and frozen older WIT. All three component worlds load side by
+side. A direct-bindings 0.3 test guest is built by `build-plugins.sh`, so this
+coverage does not depend on changing the SDK default prematurely.
+
+`open-file-at` records a native action, checks `open-files`, opens the requested
+split and sets a 1-based character position, clamping coordinates to the
+document. It needs no `run-commands` permission. Tests cover host actions,
+permission denial, all splits and Unicode columns; tmux confirmed a path with
+spaces opening in a split at line 2, column 3 while preserving the first view.
+Validation: 66 host tests, 32 editor library tests and 36 in-editor plugin tests
+passed; formatting, warning-free workspace Clippy and a normal build passed.
+
+Remaining 0.3 abilities return explicit pending-feature errors in the adapter
+until implemented: popups, streaming, extra events and live query generations.
+The SDK and examples remain on 0.2. M10.1/M10.2 stay open until the SDK/finder
+migration; then finish guide and full-suite validation. No older WIT changed.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds

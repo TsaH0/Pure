@@ -9,6 +9,11 @@ pub(crate) mod v0_2 {
     wasmtime::component::bindgen!({ path: "wit/v0.2", world: "helix-plugin", exports: { default: async } });
 }
 
+pub(crate) mod v0_3 {
+    wasmtime::component::bindgen!({ path: "wit/v0.3", world: "helix-plugin", exports: { default: async } });
+}
+mod api03;
+
 impl types::Host for State {}
 impl v0_2::helix::plugin::types::Host for State {}
 impl v0_1::helix::plugin::host::Host for State {
@@ -218,6 +223,7 @@ fn to_v2_mode(mode: Mode) -> v0_2::helix::plugin::types::Mode {
 pub(crate) enum Instance {
     V0_1(v0_1::HelixPlugin),
     V0_2(v0_2::HelixPlugin),
+    V0_3(v0_3::HelixPlugin),
 }
 impl Instance {
     /// `init`: the plugin's commands and the events it subscribes to.
@@ -228,6 +234,7 @@ impl Instance {
         config: &str,
     ) -> Result<std::result::Result<(Vec<CommandInfo>, Vec<EventKind>), String>> {
         match self {
+            Self::V0_3(instance) => api03::init(instance, store, config).await,
             Self::V0_1(instance) => instance
                 .helix_plugin_plugin()
                 .call_init(store, config)
@@ -285,6 +292,12 @@ impl Instance {
         args: &[String],
     ) -> Result<std::result::Result<(), String>> {
         match self {
+            Self::V0_3(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
             Self::V0_1(instance) => {
                 instance
                     .helix_plugin_plugin()
@@ -304,6 +317,9 @@ impl Instance {
         store: &mut Store<State>,
         callback: &super::Callback,
     ) -> Result<()> {
+        if let Self::V0_3(instance) = self {
+            return api03::callback(instance, store, callback).await;
+        }
         let Self::V0_2(instance) = self else {
             anyhow::bail!("callbacks require API 0.2")
         };
@@ -330,6 +346,7 @@ impl Instance {
 
     pub async fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
         match self {
+            Self::V0_3(instance) => api03::event(instance, store, event).await,
             Self::V0_1(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {
