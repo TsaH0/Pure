@@ -150,8 +150,9 @@ See [`examples/text-tools`](examples/text-tools) for a complete plugin and
 - `cargo test -p helix-plugin` tests the host with real plugins.
 - `cargo test -p helix-term --features integration --test integration -- plugins`
   tests plugins in a running editor.
-- `./build-plugins.sh` rebuilds the test plugin (`tests/fixtures`) and the
-  example after changing them or the WIT file.
+- `./build-plugins.sh` rebuilds the 0.1 and 0.2 test plugins (`tests/fixtures`)
+  and the example after changing guest code or the SDK. The committed
+  `text-tools-v0.1.wasm` is a frozen compatibility fixture.
 
 
 ## API versions and SDK callbacks

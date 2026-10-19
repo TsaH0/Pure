@@ -141,7 +141,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     source-compatible.
   - Done when: `text-tools` builds against SDK 0.2 unchanged except for
     `api = "0.2"`, and the SDK has doc comments for every public item.
-- [ ] **M0.5 0.2 test plugin.** Depends on: M0.2, M0.4.
+- [x] **M0.5 0.2 test plugin.** Depends on: M0.2, M0.4.
   - `tests/plugins/testplugin2` with commands that exercise each new host
     function (added as later tasks land). Add it to `build-plugins.sh`;
     commit `tests/fixtures/testplugin2.wasm`.

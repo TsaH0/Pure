@@ -833,9 +833,7 @@ fn process_done(id: u32, stdout: &str) -> Callback {
 #[test]
 fn callbacks_are_delivered_once_and_check_their_kind() {
     let (mut host, _root) = testplugin2();
-    let id = host
-        .register_request("testplugin2", PendingKind::Process)
-        .unwrap();
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
     let wrong_kind = Callback::PickerDone {
         id,
         result: PickerResult::Cancelled,
@@ -870,9 +868,7 @@ fn callbacks_are_delivered_once_and_check_their_kind() {
         .callback("missing", process_done(id, "late"), &Snapshot::default())
         .unwrap()
         .is_empty());
-    let picker = host
-        .register_request("testplugin2", PendingKind::Picker)
-        .unwrap();
+    let picker = arm_request(&mut host, PendingKind::Picker).unwrap();
     let actions = host
         .callback(
             "testplugin2",
@@ -889,14 +885,10 @@ fn callbacks_are_delivered_once_and_check_their_kind() {
 #[test]
 fn request_ids_are_not_reused_after_clear_or_host_recreation() {
     let (mut host, root) = testplugin2();
-    let old = host
-        .register_request("testplugin2", PendingKind::Process)
-        .unwrap();
+    let old = arm_request(&mut host, PendingKind::Process).unwrap();
     host.clear();
     host.load(&root.path().join("testplugin2"), "{}").unwrap();
-    let new = host
-        .register_request("testplugin2", PendingKind::Process)
-        .unwrap();
+    let new = arm_request(&mut host, PendingKind::Process).unwrap();
     assert_ne!(old, new);
     assert!(host
         .callback(
@@ -908,9 +900,7 @@ fn request_ids_are_not_reused_after_clear_or_host_recreation() {
         .is_empty());
     drop(host);
     let (mut host, _root) = testplugin2();
-    let recreated = host
-        .register_request("testplugin2", PendingKind::Process)
-        .unwrap();
+    let recreated = arm_request(&mut host, PendingKind::Process).unwrap();
     assert_ne!(new, recreated);
     assert!(host
         .callback(
@@ -979,4 +969,103 @@ fn legacy_plugins_cannot_reserve_callbacks() {
         )
         .unwrap()
         .is_empty());
+}
+
+fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> {
+    let id = host.register_request("testplugin2", kind)?;
+    let command = match kind {
+        PendingKind::Process => "arm-process",
+        PendingKind::Picker => "arm-picker",
+        PendingKind::Prompt => unreachable!(),
+    };
+    host.run_command(
+        "testplugin2",
+        command,
+        vec![id.to_string()],
+        Snapshot::default(),
+    )?;
+    Ok(id)
+}
+
+#[test]
+fn sdk_callbacks_use_fresh_snapshots_and_can_run_commands() {
+    let (mut host, _root) = testplugin2();
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "read"),
+            &snapshot("fresh snapshot", 0, 1),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["fresh snapshot"]);
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "command"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::RunCommand(command)] if command == "goto_line_end"));
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let actions = host
+        .callback(
+            "testplugin2",
+            process_done(id, "fail"),
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Error(message)] if message == "plugin callback: callback failed on purpose")
+    );
+}
+
+#[test]
+fn callback_deadlines_disable_the_plugin_and_clear_pending_requests() {
+    let (mut host, _root) = testplugin2();
+    host.limits.command = Duration::from_millis(100);
+    let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    let other = arm_request(&mut host, PendingKind::Picker).unwrap();
+    let err = host
+        .callback(
+            "testplugin2",
+            process_done(id, "spin"),
+            &Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("took longer than"));
+    assert!(host.plugins[0].store.data().pending.is_empty());
+    assert!(host.plugin("testplugin2").unwrap().disabled().is_some());
+    assert!(host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id: other,
+                result: PickerResult::Cancelled
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn sdk_ui_requests_are_refused_from_wasm_event_handlers() {
+    let (mut host, root) = testplugin2();
+    host.clear();
+    host.load(&root.path().join("testplugin2"), "{\"event-ui\":true}")
+        .unwrap();
+    let results = host.dispatch(Event::DocumentOpen(1), &snapshot("text", 0, 1));
+    let actions = results
+        .into_iter()
+        .find(|(name, _)| name == "testplugin2")
+        .unwrap()
+        .1
+        .unwrap();
+    let messages = statuses(&actions);
+    assert_eq!(messages.len(), 3);
+    assert!(messages[0].starts_with("run-interactive is only available"));
+    assert!(messages[1].starts_with("show-picker is only available"));
+    assert!(messages[2].starts_with("run-command is only available"));
 }

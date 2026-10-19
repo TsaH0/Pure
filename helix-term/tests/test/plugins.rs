@@ -372,3 +372,29 @@ async fn no_plugins_directory() -> anyhow::Result<()> {
     assert_eq!(text(&app), "xhello");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_02_sdk_plugin_edits_alongside_legacy_plugins() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_plugins("#[hé|]#llo\n", ALL, "");
+    let plugin = dir.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin2\"\nversion = \"1\"\napi = \"0.2\"\npermissions = [{ALL}]\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    let names = helix_term::plugins::command_names();
+    assert!(names.contains(&"testplugin/status".to_owned()));
+    assert!(names.contains(&"testplugin2/inspect".to_owned()));
+    assert!(names.contains(&"text-tools/upper".to_owned()));
+    keys(&mut app, ":plugin-run testplugin2/inspect<ret>").await;
+    assert_eq!(text(&app), "v2:héllo\n");
+    assert_eq!(status(&app).0, "héllo\n:Mode::Normal");
+    keys(&mut app, "u").await;
+    assert_eq!(text(&app), "héllo\n");
+    Ok(())
+}

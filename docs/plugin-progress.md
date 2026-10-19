@@ -2,9 +2,9 @@
 
 ## Status
 
-- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2).
-- In progress: M0.5 (0.2 test plugin), on `plugin-api-0.2`.
-- Next: M2.1, then M2.1 and the remaining authorized milestones in the requested order.
+- Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2), M0.5 (0.2 test plugin).
+- M0 implementation complete on `plugin-api-0.2`; final full-suite validation and PR creation pending.
+- Next: M2.1, then the remaining authorized milestones in the requested order.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
 ## Open questions for the owner
@@ -52,3 +52,13 @@
 - text-tools source is unchanged; its manifest now selects 0.2. All rebuilt artifacts and updated guest lockfiles are included. Fixture builds now use `--locked`.
 - Both SDK unit tests, its generated export doctest, SDK Clippy with `-D warnings`, SDK legacy-feature build/doctest, 39 host tests, 21 editor library tests, all 18 plugin integration tests, formatting and workspace Clippy pass. The pre-existing illustrative SDK snippet remains ignored as before.
 - Process execution and picker display remain explicit unsupported errors until M1/M2; README and design status distinguish bindings from implemented capabilities. The transient M0.3 integration artifact mismatch is resolved by the final 18/18 pass.
+
+
+## M0.5 0.2 test plugin (done, 2026-10-19, PR pending)
+
+- Migrated `tests/plugins/testplugin2` to SDK 0.2 and automatic callback exports. Commands cover shared buffer functions and the process, interactive, picker, push-items and kill imports, ready to expand as the corresponding abilities land.
+- Added real-Wasm tests for callback snapshots, queued editor commands, SDK error reporting, callback time limits and pending cleanup, plus UI refusal from event handlers. Added an editor integration test for 0.1 and 0.2 plugins coexisting, Unicode edits and undo.
+- Formatting, workspace Clippy (no warnings), all 42 host tests, all 21 editor library tests and all 19 plugin integration tests pass. Rebuilt and included the wasm fixture. The new integration test explicitly includes its expected trailing newline in the input; no assertions were weakened.
+- The old serial baseline completed 215 tests: 209 passed, one known HTML/JavaScript injection failure, and five old-host/new-example mismatches because it read the evolving fixture files. Those fixture mismatches are resolved in the current targeted suite. Added HTML/JavaScript grammars to remove the known missing-parser prerequisite; parser/query health checks pass.
+- A fresh full current suite is running with four test threads and a 16 MiB Rust thread-stack diagnostic after the untouched baseline's SIGABRT. A prior exploratory run was interrupted to recompile the corrected test input; it is not counted as validation.
+- PR creation is externally blocked: the HTTPS proxy rejects CONNECT to `api.github.com` with 403. Added that domain to the saved environment draft; review/save it in environment settings to apply access. No credential values were requested or stored.
