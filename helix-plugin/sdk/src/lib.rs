@@ -57,7 +57,9 @@ pub use bindings::helix::plugin::types::{
 pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
     #[cfg(not(feature = "api-v0-1"))]
-    pub use crate::requests::{kill, pick, push_items, run_interactive, spawn};
+    pub use crate::requests::{
+        kill, pick, pick_live, popup, prompt, push_items, run_interactive, set_items, spawn,
+    };
 }
 
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the
@@ -76,6 +78,14 @@ pub trait Plugin {
     fn on_document_change(_doc: DocumentId) {}
     /// Called after the editor changes mode, if subscribed.
     fn on_mode_switch(_old: Mode, _new: Mode) {}
+    /// Called after a document was saved, if subscribed (API 0.2).
+    fn on_document_save(_doc: DocumentId) {}
+    /// Called after a document was closed, if subscribed (API 0.2). Only its
+    /// id is known.
+    fn on_document_close(_doc: DocumentId) {}
+    /// Called after the selections changed (debounced), if subscribed
+    /// (API 0.2).
+    fn on_selection_change(_doc: DocumentId) {}
 }
 
 /// Export a type implementing [`Plugin`] as the plugin.
@@ -102,7 +112,7 @@ macro_rules! register_plugin {
             }
         }
 
-        $crate::__export_callbacks!(__HelixPluginExport);
+        $crate::__export_callbacks!(__HelixPluginExport, $plugin);
         $crate::bindings::__export_helix_plugin!(__HelixPluginExport with_types_in $crate::bindings);
     };
 }
@@ -152,7 +162,7 @@ pub mod requests;
 pub use bindings::helix::plugin::{
     process::Output,
     types::{OpenAction, RequestId},
-    ui::{Item, Picker, PickerResult, Preview},
+    ui::{Item, Picker, PickerResult, Preview, Prompt},
 };
 #[cfg(not(feature = "api-v0-1"))]
 pub use requests::{Choice, InteractiveOptions, SpawnOptions};
@@ -161,20 +171,37 @@ pub use requests::{Choice, InteractiveOptions, SpawnOptions};
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __export_callbacks {
-    ($export:ty) => {};
+    ($export:ty, $plugin:ty) => {};
 }
 
 #[cfg(not(feature = "api-v0-1"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __export_callbacks {
-    ($export:ty) => {
+    ($export:ty, $plugin:ty) => {
         impl $crate::bindings::exports::helix::plugin::callbacks::Guest for $export {
             fn on_process_done(id: $crate::RequestId, result: Result<$crate::Output, String>) {
                 $crate::requests::process_done(id, result)
             }
             fn on_picker_done(id: $crate::RequestId, result: $crate::PickerResult) {
                 $crate::requests::picker_done(id, result)
+            }
+            fn on_picker_query(id: $crate::RequestId, query: String) {
+                $crate::requests::picker_query(id, query)
+            }
+            fn on_prompt_done(id: $crate::RequestId, answer: Option<String>) {
+                $crate::requests::prompt_done(id, answer)
+            }
+        }
+        impl $crate::bindings::exports::helix::plugin::events::Guest for $export {
+            fn on_document_save(doc: $crate::DocumentId) {
+                <$plugin as $crate::Plugin>::on_document_save(doc)
+            }
+            fn on_document_close(doc: $crate::DocumentId) {
+                <$plugin as $crate::Plugin>::on_document_close(doc)
+            }
+            fn on_selection_change(doc: $crate::DocumentId) {
+                <$plugin as $crate::Plugin>::on_selection_change(doc)
             }
         }
     };

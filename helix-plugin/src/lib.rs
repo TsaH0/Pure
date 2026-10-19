@@ -25,12 +25,12 @@ use helix_core::{Range as CoreRange, Rope, Selection, Transaction};
 use serde::Deserialize;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 
 use api::{v0_1, v0_2, Instance};
-pub use types::{CommandInfo, EventKind, Mode};
+pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
@@ -57,6 +57,9 @@ pub enum Permission {
     /// Run programs (`spawn`, `run-interactive`). Programs run outside the
     /// sandbox, so the user must also grant it, see [`ProcessGrant`].
     Process,
+    /// Read (or write) files in the workspace through WASI. The user must
+    /// also grant it, see [`FileGrant`].
+    Filesystem,
 }
 
 impl Permission {
@@ -67,6 +70,7 @@ impl Permission {
             Permission::OpenFiles => "open-files",
             Permission::RunCommands => "run-commands",
             Permission::Process => "process",
+            Permission::Filesystem => "filesystem",
         }
     }
 }
@@ -93,6 +97,56 @@ impl std::fmt::Display for ProcessGrant {
             Self::Only(programs) => write!(f, "only {}", programs.join(", ")),
         }
     }
+}
+
+/// Workspace file access the user grants a plugin (`allow-files` in
+/// `plugins.toml`), on top of the `filesystem` permission.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FileGrant {
+    #[default]
+    None,
+    Read,
+    Write,
+}
+
+impl std::fmt::Display for FileGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "not granted",
+            Self::Read => "read",
+            Self::Write => "read and write",
+        })
+    }
+}
+
+/// What the user configured for a plugin in `plugins.toml`.
+#[derive(Debug, Clone, Default)]
+pub struct PluginSettings {
+    /// Passed to `init`, as JSON.
+    pub config: String,
+    pub process: ProcessGrant,
+    pub files: FileGrant,
+}
+
+impl PluginSettings {
+    pub fn new(config: impl Into<String>) -> Self {
+        Self {
+            config: config.into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Events a plugin can subscribe to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventKind {
+    DocumentOpen,
+    DocumentChange,
+    ModeSwitch,
+    /// API 0.2 and later.
+    DocumentSave,
+    DocumentClose,
+    SelectionChange,
 }
 
 /// Most programs a plugin may run at once.
@@ -162,6 +216,8 @@ pub struct DocumentSnapshot {
     /// Selection in the focused view on this document (or the first view
     /// showing it). `None` if no view shows the document.
     pub selection: Option<Selection>,
+    /// Whether it has unsaved changes.
+    pub modified: bool,
 }
 
 /// The editor state a plugin call can read.
@@ -170,6 +226,9 @@ pub struct Snapshot {
     pub documents: BTreeMap<DocumentId, DocumentSnapshot>,
     pub current: Option<DocumentId>,
     pub mode: Mode,
+    pub workspace: Option<PathBuf>,
+    pub cwd: PathBuf,
+    pub config_dir: PathBuf,
 }
 
 impl Default for Snapshot {
@@ -178,6 +237,9 @@ impl Default for Snapshot {
             documents: BTreeMap::new(),
             current: None,
             mode: Mode::Normal,
+            workspace: None,
+            cwd: PathBuf::new(),
+            config_dir: PathBuf::new(),
         }
     }
 }
@@ -236,6 +298,20 @@ pub enum Action {
         id: u32,
         items: Vec<PickerItem>,
     },
+    /// Replace the items of an open picker.
+    SetItems {
+        plugin: String,
+        id: u32,
+        items: Vec<PickerItem>,
+    },
+    /// Show markdown in a popup.
+    Popup(String),
+    /// Ask for a line of text and deliver [`Callback::PromptDone`].
+    ShowPrompt {
+        plugin: String,
+        id: u32,
+        prompt: PromptSpec,
+    },
 }
 
 /// Result of a background program or interactive chooser.
@@ -246,7 +322,7 @@ pub use v0_2::helix::plugin::types::OpenAction;
 pub use v0_2::helix::plugin::ui::PickerResult;
 /// A picker as a plugin describes it.
 pub use v0_2::helix::plugin::ui::{
-    Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview,
+    Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview, Prompt as PromptSpec,
 };
 
 /// The completion expected for an outstanding request.
@@ -254,7 +330,6 @@ pub use v0_2::helix::plugin::ui::{
 pub enum PendingKind {
     Process,
     Picker,
-    /// Reserved for a future API version with prompt exports.
     Prompt,
 }
 
@@ -269,10 +344,15 @@ pub enum Callback {
         id: u32,
         result: PickerResult,
     },
-    /// Reserved: API 0.2 has no prompt callback export.
     PromptDone {
         id: u32,
         result: Option<String>,
+    },
+    /// What the user typed in a live picker. Unlike the others, it doesn't
+    /// complete the request.
+    PickerQuery {
+        id: u32,
+        query: String,
     },
 }
 
@@ -280,9 +360,15 @@ impl Callback {
     fn request(&self) -> (u32, PendingKind) {
         match self {
             Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
-            Self::PickerDone { id, .. } => (*id, PendingKind::Picker),
+            Self::PickerDone { id, .. } | Self::PickerQuery { id, .. } => {
+                (*id, PendingKind::Picker)
+            }
             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
         }
+    }
+
+    fn completes(&self) -> bool {
+        !matches!(self, Self::PickerQuery { .. })
     }
 }
 
@@ -310,6 +396,9 @@ pub enum Event {
     DocumentOpen(DocumentId),
     DocumentChange(DocumentId),
     ModeSwitch { old: Mode, new: Mode },
+    DocumentSave(DocumentId),
+    DocumentClose(DocumentId),
+    SelectionChange(DocumentId),
 }
 
 impl Event {
@@ -318,6 +407,9 @@ impl Event {
             Event::DocumentOpen(_) => EventKind::DocumentOpen,
             Event::DocumentChange(_) => EventKind::DocumentChange,
             Event::ModeSwitch { .. } => EventKind::ModeSwitch,
+            Event::DocumentSave(_) => EventKind::DocumentSave,
+            Event::DocumentClose(_) => EventKind::DocumentClose,
+            Event::SelectionChange(_) => EventKind::SelectionChange,
         }
     }
 }
@@ -359,6 +451,9 @@ struct State {
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
     process: ProcessGrant,
+    files: FileGrant,
+    /// The plugin's own directory (`data-dir`), preopened read-write.
+    data_dir: Option<PathBuf>,
 }
 
 impl WasiView for State {
@@ -372,9 +467,6 @@ impl WasiView for State {
 
 impl State {
     fn request(&mut self, kind: PendingKind) -> Result<u32, String> {
-        if kind == PendingKind::Prompt {
-            return Err("API 0.2 does not export prompt callbacks".into());
-        }
         let id = self
             .next_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -677,6 +769,67 @@ impl State {
         });
         Ok(())
     }
+
+    fn set_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+        if self.pending.get(&id) != Some(&PendingKind::Picker) {
+            return Err(format!("no open picker with id {id}"));
+        }
+        if items.len() > MAX_PICKER_ITEMS {
+            return Err(format!(
+                "a picker can have at most {MAX_PICKER_ITEMS} items"
+            ));
+        }
+        self.actions.push(Action::SetItems {
+            plugin: self.plugin.clone(),
+            id,
+            items,
+        });
+        Ok(())
+    }
+
+    fn show_popup(&mut self, markdown: String) -> Result<(), String> {
+        self.need_ui("show-popup")?;
+        self.actions.push(Action::Popup(markdown));
+        Ok(())
+    }
+
+    fn show_prompt(&mut self, prompt: PromptSpec) -> Result<u32, String> {
+        self.need_ui("show-prompt")?;
+        let id = self.request(PendingKind::Prompt)?;
+        self.actions.push(Action::ShowPrompt {
+            plugin: self.plugin.clone(),
+            id,
+            prompt,
+        });
+        Ok(id)
+    }
+
+    fn workspace_root(&mut self) -> Option<String> {
+        self.snapshot
+            .workspace
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn cwd(&mut self) -> String {
+        self.snapshot.cwd.to_string_lossy().into_owned()
+    }
+
+    fn config_dir(&mut self) -> String {
+        self.snapshot.config_dir.to_string_lossy().into_owned()
+    }
+
+    fn data_dir(&mut self) -> String {
+        self.data_dir
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn document_modified(&mut self, doc: DocumentId) -> Result<bool, String> {
+        self.need(Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.modified)
+    }
 }
 
 /// Build a transaction from a plugin's edits, validating them against `text`.
@@ -828,6 +981,7 @@ pub struct PluginInfo {
     pub commands: Vec<CommandInfo>,
     pub disabled: Option<String>,
     pub process: ProcessGrant,
+    pub files: FileGrant,
 }
 
 /// Loads and runs plugins.
@@ -837,6 +991,10 @@ pub struct PluginHost {
     plugins: Vec<Plugin>,
     limits: Limits,
     cache_dir: Option<PathBuf>,
+    /// Shared with plugins granted `allow-files`.
+    workspace: Option<PathBuf>,
+    /// Plugins get `<data_root>/<name>` as their own directory.
+    data_root: Option<PathBuf>,
     stop_ticker: Arc<AtomicBool>,
 }
 
@@ -885,6 +1043,8 @@ impl PluginHost {
             plugins: Vec::new(),
             limits,
             cache_dir,
+            workspace: None,
+            data_root: None,
             stop_ticker,
         })
     }
@@ -909,6 +1069,7 @@ impl PluginHost {
                 commands: plugin.commands.clone(),
                 disabled: plugin.disabled.clone(),
                 process: plugin.store.data().process.clone(),
+                files: plugin.store.data().files,
             })
             .collect()
     }
@@ -918,14 +1079,22 @@ impl PluginHost {
         self.plugins.clear();
     }
 
+    /// The workspace plugins granted `allow-files` can access, and where
+    /// plugins keep their own files. Set before loading: plugins see the
+    /// directories as they were when they were loaded.
+    pub fn set_dirs(&mut self, workspace: Option<PathBuf>, data_root: Option<PathBuf>) {
+        self.workspace = workspace;
+        self.data_root = data_root;
+    }
+
     /// Load every plugin in the subdirectories of `dir`. `settings` gives the
-    /// JSON settings for a plugin, or `None` if it is disabled. Returns the
+    /// settings for a plugin, or `None` if it is disabled. Returns the
     /// actions of the plugins' `init` calls and the errors of plugins that
     /// failed to load.
     pub fn load_all(
         &mut self,
         dir: &Path,
-        mut settings: impl FnMut(&str) -> Option<String>,
+        mut settings: impl FnMut(&str) -> Option<PluginSettings>,
     ) -> (Vec<Action>, Vec<anyhow::Error>) {
         let mut actions = Vec::new();
         let mut errors = Vec::new();
@@ -946,10 +1115,10 @@ impl PluginHost {
                     continue;
                 }
             };
-            let Some(config) = settings(&manifest.name) else {
+            let Some(settings) = settings(&manifest.name) else {
                 continue;
             };
-            match self.load_with_manifest(&dir, manifest, &config) {
+            match self.load_with_manifest(&dir, manifest, settings) {
                 Ok(init_actions) => actions.extend(init_actions),
                 Err(err) => errors.push(err),
             }
@@ -959,15 +1128,66 @@ impl PluginHost {
 
     /// Load the plugin in `dir` and call its `init` with `config` (JSON).
     pub fn load(&mut self, dir: &Path, config: &str) -> anyhow::Result<Vec<Action>> {
+        self.load_with(dir, PluginSettings::new(config))
+    }
+
+    /// Load the plugin in `dir` with the user's `settings`.
+    pub fn load_with(
+        &mut self,
+        dir: &Path,
+        settings: PluginSettings,
+    ) -> anyhow::Result<Vec<Action>> {
         let manifest = read_manifest(dir)?;
-        self.load_with_manifest(dir, manifest, config)
+        self.load_with_manifest(dir, manifest, settings)
+    }
+
+    /// WASI for a plugin: its own directory, and the workspace if granted.
+    /// No arguments, environment, network or stdio.
+    fn wasi(
+        &self,
+        name: &str,
+        manifest: &Manifest,
+        files: FileGrant,
+    ) -> anyhow::Result<(WasiCtx, Option<PathBuf>)> {
+        let mut wasi = WasiCtx::builder();
+        let data_dir = match &self.data_root {
+            Some(root) => {
+                let dir = root.join(name);
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("failed to create {}", dir.display()))?;
+                wasi.preopened_dir(
+                    &dir,
+                    dir.to_string_lossy(),
+                    DirPerms::all(),
+                    FilePerms::all(),
+                )?;
+                Some(dir)
+            }
+            None => None,
+        };
+        if let (true, Some(workspace)) = (
+            manifest.permissions.contains(&Permission::Filesystem) && files != FileGrant::None,
+            &self.workspace,
+        ) {
+            let (dir_perms, file_perms) = match files {
+                FileGrant::Write => (DirPerms::all(), FilePerms::all()),
+                _ => (DirPerms::READ, FilePerms::READ),
+            };
+            wasi.preopened_dir(
+                workspace,
+                workspace.to_string_lossy(),
+                dir_perms,
+                file_perms,
+            )?;
+        }
+        Ok((wasi.build(), data_dir))
     }
 
     fn load_with_manifest(
         &mut self,
         dir: &Path,
         manifest: Manifest,
-        config: &str,
+        settings: PluginSettings,
     ) -> anyhow::Result<Vec<Action>> {
         let name = manifest.name.clone();
         if self.plugin(&name).is_some() {
@@ -978,9 +1198,9 @@ impl PluginHost {
             .compile(&name, &wasm)
             .with_context(|| format!("failed to load plugin '{name}' from {}", wasm.display()))?;
 
+        let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files)?;
         let state = State {
-            // No arguments, environment, preopened directories, network or stdio.
-            wasi: WasiCtx::builder().build(),
+            wasi,
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new()
                 .memory_size(self.limits.memory)
@@ -995,7 +1215,9 @@ impl PluginHost {
             context: CallContext::Init,
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
-            process: ProcessGrant::None,
+            process: settings.process,
+            files: settings.files,
+            data_dir,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -1026,11 +1248,11 @@ impl PluginHost {
             Snapshot::default(),
             CallContext::Init,
             self.limits.init,
-            |guest, store| guest.call_init(store, config),
+            |guest, store| guest.call_init(store, &settings.config),
         )?;
-        let registration =
+        let (commands, events) =
             registration.map_err(|err| anyhow!("plugin '{name}' failed to start: {err}"))?;
-        for command in &registration.commands {
+        for command in &commands {
             if !is_valid_name(&command.name) {
                 bail!(
                     "plugin '{name}' registered an invalid command name '{}'",
@@ -1038,8 +1260,8 @@ impl PluginHost {
                 );
             }
         }
-        plugin.commands = registration.commands;
-        plugin.events = registration.events;
+        plugin.commands = commands;
+        plugin.events = events;
         plugin.events.dedup();
         self.plugins.push(plugin);
         Ok(actions)
@@ -1193,7 +1415,9 @@ impl PluginHost {
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
         }
-        plugin.store.data_mut().pending.remove(&id);
+        if callback.completes() {
+            plugin.store.data_mut().pending.remove(&id);
+        }
         plugin
             .call(
                 snapshot.clone(),

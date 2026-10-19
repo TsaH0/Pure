@@ -69,12 +69,16 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             path: Some(PathBuf::from("/tmp/file.rs")),
             language: Some("rust".into()),
             selection: Some(Selection::single(anchor, head)),
+            modified: true,
         },
     );
     Snapshot {
         documents,
         current: Some(1),
         mode: Mode::Normal,
+        workspace: Some(PathBuf::from("/work")),
+        cwd: PathBuf::from("/work/src"),
+        config_dir: PathBuf::from("/config"),
     }
 }
 
@@ -233,7 +237,7 @@ fn load_all_skips_disabled_and_reports_broken_plugins() {
 
     let mut host = host();
     let (_actions, errors) = host.load_all(root.path(), |name| {
-        (name != "off").then(|| "{}".to_string())
+        (name != "off").then(|| PluginSettings::new("{}"))
     });
     let mut names: Vec<_> = host
         .plugins()
@@ -250,7 +254,7 @@ fn load_all_skips_disabled_and_reports_broken_plugins() {
 fn load_all_with_missing_directory() {
     let mut host = host();
     let (actions, errors) = host.load_all(Path::new("/nonexistent/helix/plugins"), |_| {
-        Some("{}".into())
+        Some(PluginSettings::new("{}"))
     });
     assert!(actions.is_empty() && errors.is_empty() && host.plugins().is_empty());
 }
@@ -945,6 +949,7 @@ fn ui_is_restricted_to_commands_and_callbacks() {
                 columns: vec!["name".into()],
                 items: vec![],
                 initial: None,
+                live: false,
             },
         );
         if context.allows_ui() {
@@ -1315,4 +1320,231 @@ fn pickers_and_push_items() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("no open picker"), "{err}");
+}
+
+#[test]
+fn prompts_and_popups() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "popup",
+            args(&["**hi**", "there"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Popup(md)] if md == "**hi** there"),
+        "{actions:?}"
+    );
+
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "prompt",
+            args(&["one", "two"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPrompt { id, prompt, .. }] => {
+            assert_eq!(prompt.message, "answer:");
+            assert_eq!(prompt.initial, "init");
+            assert_eq!(prompt.completions, args(&["one", "two"]));
+            *id
+        }
+        other => panic!("expected a prompt, got {other:?}"),
+    };
+    let answer = |result: Option<&str>| Callback::PromptDone {
+        id,
+        result: result.map(str::to_owned),
+    };
+    let actions = host
+        .callback("testplugin2", answer(Some("two")), &Snapshot::default())
+        .unwrap();
+    assert_eq!(statuses(&actions), ["answer:Some(\"two\")"]);
+    // Answered once.
+    assert!(host
+        .callback("testplugin2", answer(None), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn live_pickers_answer_every_query() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command("testplugin2", "live", vec![], Snapshot::default())
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPicker { id, picker, .. }] => {
+            assert!(picker.live);
+            *id
+        }
+        other => panic!("expected a picker, got {other:?}"),
+    };
+    for query in ["a", "ab"] {
+        let actions = host
+            .callback(
+                "testplugin2",
+                Callback::PickerQuery {
+                    id,
+                    query: query.into(),
+                },
+                &Snapshot::default(),
+            )
+            .unwrap();
+        match &actions[..] {
+            [Action::SetItems { items, .. }] => {
+                let data: Vec<_> = items.iter().map(|item| item.data.as_str()).collect();
+                assert_eq!(
+                    data,
+                    [
+                        format!("{query}-1"),
+                        format!("{query}-2"),
+                        format!("{query}-3")
+                    ]
+                );
+            }
+            other => panic!("expected new items, got {other:?}"),
+        }
+    }
+    // The choice refers to the latest items.
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id,
+                result: PickerResult::Accepted((vec![2], OpenAction::Replace)),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["live:[\"ab-3\"]"]);
+}
+
+#[test]
+fn directories_and_modified_documents() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command("testplugin2", "dirs", vec![], snapshot("x", 0, 0))
+        .unwrap();
+    // No data root was set: no directory of its own.
+    assert_eq!(
+        statuses(&actions),
+        ["workspace:Some(\"/work\");cwd:/work/src;config:/config;data:;modified:true"]
+    );
+}
+
+/// testplugin2 with `filesystem`, the user's `files` grant, a workspace with
+/// `file.txt` and a data root.
+fn testplugin2_files(files: FileGrant) -> (PluginHost, tempfile::TempDir, PathBuf, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    let data = root.path().join("data");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("file.txt"), "content").unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin2",
+        &fixture("tests/fixtures/testplugin2.wasm"),
+        &["read-buffers", "filesystem"],
+    );
+    let manifest = dir.join("plugin.toml");
+    let source = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.2\"");
+    std::fs::write(manifest, source).unwrap();
+    let mut host = host();
+    host.set_dirs(Some(workspace.clone()), Some(data.clone()));
+    host.load_with(
+        &dir,
+        PluginSettings {
+            config: "{}".into(),
+            files,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    (host, root, workspace, data)
+}
+
+#[test]
+fn workspace_files_need_the_users_grant() {
+    let read = |host: &mut PluginHost, path: &Path| {
+        let actions = host
+            .run_command(
+                "testplugin2",
+                "read-file",
+                vec![path.to_string_lossy().into_owned()],
+                Snapshot::default(),
+            )
+            .unwrap();
+        statuses(&actions).remove(0)
+    };
+
+    let (mut host, _root, workspace, _data) = testplugin2_files(FileGrant::None);
+    assert!(read(&mut host, &workspace.join("file.txt")).starts_with("read-error:"));
+    assert_eq!(host.info()[0].files, FileGrant::None);
+
+    let (mut host, _root, workspace, _data) = testplugin2_files(FileGrant::Read);
+    assert_eq!(read(&mut host, &workspace.join("file.txt")), "read:content");
+    // Only the workspace.
+    assert!(read(&mut host, Path::new("/etc/hostname")).starts_with("read-error:"));
+    // Read only: writing fails.
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "write-data",
+            vec![workspace.join("new.txt").to_string_lossy().into_owned()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let status = statuses(&actions).remove(0);
+    assert!(status.starts_with("own:mine;other:Some(Err("), "{status}");
+    assert!(!workspace.join("new.txt").exists());
+
+    let (mut host, _root, workspace, data) = testplugin2_files(FileGrant::Write);
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "write-data",
+            vec![workspace.join("new.txt").to_string_lossy().into_owned()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["own:mine;other:Some(Ok(()))"]);
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("new.txt")).unwrap(),
+        "theirs"
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("testplugin2/note.txt")).unwrap(),
+        "mine"
+    );
+}
+
+#[test]
+fn plugins_own_directory_needs_no_grant() {
+    let (mut host, _root, _workspace, data) = testplugin2_files(FileGrant::None);
+    let actions = host
+        .run_command("testplugin2", "write-data", vec![], Snapshot::default())
+        .unwrap();
+    assert_eq!(statuses(&actions), ["own:mine;other:None"]);
+    assert!(data.join("testplugin2/note.txt").is_file());
+}
+
+#[test]
+fn new_events_reach_0_2_plugins() {
+    let (mut host, _root) = testplugin2();
+    for (event, expected) in [
+        (Event::DocumentSave(7), "save:7"),
+        (Event::DocumentClose(8), "close:8"),
+        (Event::SelectionChange(9), "selection:9"),
+    ] {
+        assert!(host.wants(event.kind()));
+        let results = host.dispatch(event, &Snapshot::default());
+        let actions = results[0].1.as_ref().unwrap();
+        assert_eq!(statuses(actions), [expected]);
+    }
 }

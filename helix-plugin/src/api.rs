@@ -1,5 +1,5 @@
 //! Versioned component bindings and thin adapters over the shared host state.
-use super::{types, DocumentId, Event, State};
+use super::{types, CommandInfo, DocumentId, Event, EventKind, State};
 use wasmtime::{Result, Store};
 
 pub(crate) mod v0_1 {
@@ -144,6 +144,21 @@ impl v0_2::helix::plugin::host::Host for State {
     fn log(&mut self, message: String) {
         State::log(self, message)
     }
+    fn workspace_root(&mut self) -> Option<String> {
+        State::workspace_root(self)
+    }
+    fn cwd(&mut self) -> String {
+        State::cwd(self)
+    }
+    fn config_dir(&mut self) -> String {
+        State::config_dir(self)
+    }
+    fn data_dir(&mut self) -> String {
+        State::data_dir(self)
+    }
+    fn document_modified(&mut self, doc: DocumentId) -> Result<bool, String> {
+        State::document_modified(self, doc)
+    }
 }
 
 use super::Mode;
@@ -181,6 +196,15 @@ impl ui::Host for State {
     fn push_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
         State::push_items(self, id, items)
     }
+    fn set_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
+        State::set_items(self, id, items)
+    }
+    fn show_popup(&mut self, markdown: String) -> std::result::Result<(), String> {
+        State::show_popup(self, markdown)
+    }
+    fn show_prompt(&mut self, prompt: ui::Prompt) -> std::result::Result<u32, String> {
+        State::show_prompt(self, prompt)
+    }
 }
 
 fn to_v2_mode(mode: Mode) -> v0_2::helix::plugin::types::Mode {
@@ -196,42 +220,61 @@ pub(crate) enum Instance {
     V0_2(v0_2::HelixPlugin),
 }
 impl Instance {
+    /// `init`: the plugin's commands and the events it subscribes to.
+    #[allow(clippy::type_complexity)]
     pub fn call_init(
         &self,
         store: &mut Store<State>,
         config: &str,
-    ) -> Result<std::result::Result<types::Registration, String>> {
+    ) -> Result<std::result::Result<(Vec<CommandInfo>, Vec<EventKind>), String>> {
         match self {
-            Self::V0_1(instance) => instance.helix_plugin_plugin().call_init(store, config),
+            Self::V0_1(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_init(store, config)
+                    .map(|r| {
+                        r.map(|r| {
+                            let events = r
+                                .events
+                                .into_iter()
+                                .map(|e| match e {
+                                    types::EventKind::DocumentOpen => EventKind::DocumentOpen,
+                                    types::EventKind::DocumentChange => EventKind::DocumentChange,
+                                    types::EventKind::ModeSwitch => EventKind::ModeSwitch,
+                                })
+                                .collect();
+                            (r.commands, events)
+                        })
+                    })
+            }
             Self::V0_2(instance) => {
                 instance
                     .helix_plugin_plugin()
                     .call_init(store, config)
                     .map(|r| {
-                        r.map(|r| types::Registration {
-                            commands: r
+                        r.map(|r| {
+                            use v0_2::helix::plugin::types::EventKind as E;
+                            let commands = r
                                 .commands
                                 .into_iter()
-                                .map(|c| types::CommandInfo {
+                                .map(|c| CommandInfo {
                                     name: c.name,
                                     doc: c.doc,
                                 })
-                                .collect(),
-                            events: r
+                                .collect();
+                            let events = r
                                 .events
                                 .into_iter()
                                 .map(|e| match e {
-                                    v0_2::helix::plugin::types::EventKind::DocumentOpen => {
-                                        types::EventKind::DocumentOpen
-                                    }
-                                    v0_2::helix::plugin::types::EventKind::DocumentChange => {
-                                        types::EventKind::DocumentChange
-                                    }
-                                    v0_2::helix::plugin::types::EventKind::ModeSwitch => {
-                                        types::EventKind::ModeSwitch
-                                    }
+                                    E::DocumentOpen => EventKind::DocumentOpen,
+                                    E::DocumentChange => EventKind::DocumentChange,
+                                    E::ModeSwitch => EventKind::ModeSwitch,
+                                    E::DocumentSave => EventKind::DocumentSave,
+                                    E::DocumentClose => EventKind::DocumentClose,
+                                    E::SelectionChange => EventKind::SelectionChange,
                                 })
-                                .collect(),
+                                .collect();
+                            (commands, events)
                         })
                     })
             }
@@ -270,8 +313,11 @@ impl Instance {
             super::Callback::PickerDone { id, result } => {
                 callbacks.call_on_picker_done(store, *id, result)
             }
-            super::Callback::PromptDone { .. } => {
-                anyhow::bail!("API 0.2 does not export prompt callbacks")
+            super::Callback::PromptDone { id, result } => {
+                callbacks.call_on_prompt_done(store, *id, result.as_deref())
+            }
+            super::Callback::PickerQuery { id, query } => {
+                callbacks.call_on_picker_query(store, *id, query)
             }
         }
     }
@@ -284,6 +330,10 @@ impl Instance {
                     Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
                     Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
                     Event::ModeSwitch { old, new } => guest.call_on_mode_switch(store, old, new),
+                    // 0.1 plugins can't subscribe to these.
+                    Event::DocumentSave(_)
+                    | Event::DocumentClose(_)
+                    | Event::SelectionChange(_) => Ok(()),
                 }
             }
             Self::V0_2(instance) => {
@@ -294,6 +344,15 @@ impl Instance {
                     Event::ModeSwitch { old, new } => {
                         guest.call_on_mode_switch(store, to_v2_mode(old), to_v2_mode(new))
                     }
+                    Event::DocumentSave(doc) => instance
+                        .helix_plugin_events()
+                        .call_on_document_save(store, doc),
+                    Event::DocumentClose(doc) => instance
+                        .helix_plugin_events()
+                        .call_on_document_close(store, doc),
+                    Event::SelectionChange(doc) => instance
+                        .helix_plugin_events()
+                        .call_on_selection_change(store, doc),
                 }
             }
         }

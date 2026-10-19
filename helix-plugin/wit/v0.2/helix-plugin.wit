@@ -37,6 +37,12 @@ interface types {
     document-open,
     document-change,
     mode-switch,
+    /// After a document was written to disk (`events.on-document-save`).
+    document-save,
+    /// After a document was closed (`events.on-document-close`).
+    document-close,
+    /// After the selections changed, debounced (`events.on-selection-change`).
+    selection-change,
   }
 
   record command-info {
@@ -91,6 +97,19 @@ interface host {
   set-error: func(message: string);
   /// Write to Helix's log file.
   log: func(message: string);
+
+  /// The workspace the editor runs in (the directory with `.git`, `.helix`,
+  /// ... above the working directory), if any.
+  workspace-root: func() -> option<string>;
+  /// The editor's working directory.
+  cwd: func() -> string;
+  /// The editor's configuration directory (`~/.config/helix`).
+  config-dir: func() -> string;
+  /// A directory only this plugin uses, for its own files; readable and
+  /// writable through WASI (std::fs) as this path.
+  data-dir: func() -> string;
+  /// Needs `read-buffers`: whether `doc` has unsaved changes.
+  document-modified: func(doc: document-id) -> result<bool, string>;
 }
 
 /// Functions a plugin provides.
@@ -147,6 +166,10 @@ interface ui {
     columns: list<string>,
     items: list<item>,
     initial: option<u32>,
+    /// Live picker: the editor reports what the user types with
+    /// `callbacks.on-picker-query` (debounced) instead of filtering the
+    /// items itself; the plugin answers with `set-items`.
+    live: bool,
   }
   variant picker-result {
     accepted(tuple<list<u32>, open-action>),
@@ -154,6 +177,23 @@ interface ui {
   }
   show-picker: func(picker: picker) -> result<request-id, string>;
   push-items: func(id: request-id, items: list<item>) -> result<_, string>;
+  /// Replace the items of an open picker (for live pickers).
+  set-items: func(id: request-id, items: list<item>) -> result<_, string>;
+
+  /// Show markdown in a popup at the cursor, until the next key press.
+  show-popup: func(markdown: string) -> result<_, string>;
+
+  record prompt {
+    /// Shown before the input, e.g. "rename to:".
+    message: string,
+    /// The input to start with.
+    initial: string,
+    /// Offered as completions while typing (fuzzy matched).
+    completions: list<string>,
+  }
+  /// Ask for a line of text. The answer arrives in
+  /// `callbacks.on-prompt-done` (`none` if the user pressed Esc).
+  show-prompt: func(prompt: prompt) -> result<request-id, string>;
 }
 
 interface callbacks {
@@ -162,6 +202,18 @@ interface callbacks {
   use ui.{picker-result};
   on-process-done: func(id: request-id, %result: result<output, string>);
   on-picker-done: func(id: request-id, %result: picker-result);
+  /// What the user typed in a live picker.
+  on-picker-query: func(id: request-id, query: string);
+  on-prompt-done: func(id: request-id, answer: option<string>);
+}
+
+/// Event handlers added in 0.2 (subscribe in `init`'s registration).
+interface events {
+  use types.{document-id};
+  on-document-save: func(doc: document-id);
+  /// The document is already closed: only its id is known.
+  on-document-close: func(doc: document-id);
+  on-selection-change: func(doc: document-id);
 }
 
 world helix-plugin {
@@ -170,4 +222,5 @@ world helix-plugin {
   import ui;
   export plugin;
   export callbacks;
+  export events;
 }

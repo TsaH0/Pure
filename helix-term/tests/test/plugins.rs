@@ -606,3 +606,62 @@ async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> 
         .is_some_and(|(s, _)| s.starts_with("choice:")));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_prompts_return_the_answer() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/prompt one two<ret>").await;
+    deliver_events(&mut app).await;
+    // The prompt starts with "init".
+    keys(&mut app, "x<ret>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("answer:")).await;
+    assert_eq!(message, "answer:Some(\"initx\")");
+
+    keys(&mut app, ":plugin-run testplugin2/prompt<ret>").await;
+    deliver_events(&mut app).await;
+    app.editor.set_status("");
+    keys(&mut app, "<esc>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("answer:")).await;
+    assert_eq!(message, "answer:None");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_pickers_show_the_plugins_items_for_the_query() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/live<ret>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "ab").await;
+    // Debounced query, then the plugin's answer.
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        deliver_events(&mut app).await;
+    }
+    keys(&mut app, "<down><ret>").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("live:")).await;
+    assert_eq!(message, "live:[\"ab-2\"]");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_saves_closes_and_selection_changes() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    let doc = helix_view::doc!(app.editor).id().to_string();
+
+    keys(&mut app, "l").await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("selection:")).await;
+    assert_eq!(message, format!("selection:{doc}"));
+
+    let file = tempfile::NamedTempFile::new()?;
+    app.editor.set_status("");
+    keys(&mut app, &format!(":w! {}<ret>", file.path().display())).await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("save:")).await;
+    assert_eq!(message, format!("save:{doc}"));
+
+    keys(&mut app, ":new<ret>").await;
+    app.editor.set_status("");
+    keys(&mut app, ":buffer-close! <ret>").await;
+    let closed = wait_for_status(&mut app, |s| s.starts_with("close:")).await;
+    assert!(closed.starts_with("close:"));
+    Ok(())
+}

@@ -24,6 +24,12 @@ impl Plugin for TestPlugin {
                 "picker",
                 "push-items",
                 "kill",
+                "popup",
+                "prompt",
+                "live",
+                "dirs",
+                "read-file",
+                "write-data",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -31,7 +37,13 @@ impl Plugin for TestPlugin {
                 doc: format!("Test {name}"),
             })
             .collect(),
-            events: vec![EventKind::DocumentOpen, EventKind::ModeSwitch],
+            events: vec![
+                EventKind::DocumentOpen,
+                EventKind::ModeSwitch,
+                EventKind::DocumentSave,
+                EventKind::DocumentClose,
+                EventKind::SelectionChange,
+            ],
         })
     }
 
@@ -122,6 +134,55 @@ impl Plugin for TestPlugin {
                 editor::push_items(request_id(&args)?, vec![Item::text("new item")])?;
             }
             "kill" => editor::kill(request_id(&args)?),
+            "popup" => editor::popup(&args.join(" "))?,
+            "prompt" => {
+                editor::prompt("answer:", "init", args, |answer| {
+                    editor::set_status(&format!("answer:{answer:?}"));
+                    Ok(())
+                })?;
+            }
+            // A live picker listing `<query>-1` .. `<query>-3`.
+            "live" => {
+                editor::pick_live(
+                    Picker::new("Live", vec![]),
+                    |query| Ok((1..=3).map(|n| Item::text(format!("{query}-{n}"))).collect()),
+                    |choice| {
+                        let data: Vec<_> = choice.items.iter().map(|i| i.data.as_str()).collect();
+                        editor::set_status(&format!("live:{data:?}"));
+                        Ok(())
+                    },
+                )?;
+            }
+            "dirs" => {
+                let doc = editor::current_document().ok_or("no document")?;
+                editor::set_status(&format!(
+                    "workspace:{:?};cwd:{};config:{};data:{};modified:{}",
+                    editor::workspace_root(),
+                    editor::cwd(),
+                    editor::config_dir(),
+                    editor::data_dir(),
+                    editor::document_modified(doc)?,
+                ));
+            }
+            "read-file" => {
+                let path = args.first().ok_or("missing path")?;
+                match std::fs::read_to_string(path) {
+                    Ok(text) => editor::set_status(&format!("read:{text}")),
+                    Err(err) => editor::set_status(&format!("read-error:{err}")),
+                }
+            }
+            // Write a file in the plugin's own directory and in `args[0]`.
+            "write-data" => {
+                let own = format!("{}/note.txt", editor::data_dir());
+                std::fs::write(&own, "mine").map_err(|err| err.to_string())?;
+                let other = args
+                    .first()
+                    .map(|path| std::fs::write(path, "theirs").map_err(|err| err.to_string()));
+                editor::set_status(&format!(
+                    "own:{};other:{other:?}",
+                    std::fs::read_to_string(&own).map_err(|err| err.to_string())?
+                ));
+            }
             _ => return Err(format!("unknown command {name}")),
         }
         Ok(())
@@ -141,6 +202,15 @@ impl Plugin for TestPlugin {
     }
     fn on_mode_switch(old: Mode, new: Mode) {
         editor::set_status(&format!("{old:?}->{new:?}"));
+    }
+    fn on_document_save(doc: DocumentId) {
+        editor::set_status(&format!("save:{doc}"));
+    }
+    fn on_document_close(doc: DocumentId) {
+        editor::set_status(&format!("close:{doc}"));
+    }
+    fn on_selection_change(doc: DocumentId) {
+        editor::set_status(&format!("selection:{doc}"));
     }
 }
 

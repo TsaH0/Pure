@@ -403,6 +403,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     }
 
     /// Run once when the picker closes without accepting an item.
+    /// Drop all items (cancelling streams into the old injector) and return
+    /// an injector for new ones.
+    pub fn restart(&mut self) -> Injector<T, D> {
+        self.version.fetch_add(1, atomic::Ordering::Relaxed);
+        self.matcher.restart(false);
+        self.injector()
+    }
+
+    pub fn editor_data(&self) -> &D {
+        &self.editor_data
+    }
+
     /// Don't keep the picker for `space '` (`last_picker`) once it closes,
     /// e.g. when choosing from it twice makes no sense.
     pub fn not_reopenable(mut self) -> Self {

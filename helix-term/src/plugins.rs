@@ -12,10 +12,15 @@
 //!                      # passed to the plugin
 //! allow-process = true # let it run programs (it also needs the `process`
 //!                      # permission); or a list: ["rg", "git"]
+//! allow-files = "read" # let it read ("write": and write) the workspace
+//!                      # (it also needs the `filesystem` permission)
 //! ```
+//!
+//! Every plugin can use its own directory, `<data dir>/plugins/<name>/`.
 
 mod picker;
 mod process;
+mod prompt;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,10 +30,13 @@ use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
 use helix_plugin::{
-    Action, Callback, DocumentSnapshot, Event, EventKind, PluginHost, ProcessGrant, Snapshot,
+    Action, Callback, DocumentSnapshot, Event, EventKind, FileGrant, PluginHost, PluginSettings,
+    ProcessGrant, Snapshot,
 };
 use helix_view::document::Mode;
-use helix_view::events::{DocumentDidChange, DocumentDidOpen};
+use helix_view::events::{
+    DocumentDidChange, DocumentDidClose, DocumentDidOpen, SelectionDidChange,
+};
 use helix_view::{DocumentId, Editor, ViewId};
 use parking_lot::Mutex;
 
@@ -96,14 +104,20 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
             return;
         }
     };
-    let (actions, mut errors) = host.load_all(dir, |name| plugin_settings(settings, name));
-    let names: Vec<String> = host.plugins().iter().map(|p| p.name().to_owned()).collect();
-    for name in names {
-        match process_grant(settings, &name) {
-            Ok(grant) => host.set_process_grant(&name, grant),
-            Err(err) => errors.push(err),
-        }
-    }
+    host.set_dirs(
+        Some(helix_loader::find_workspace().0),
+        Some(helix_loader::data_dir().join("plugins")),
+    );
+    let mut setting_errors = Vec::new();
+    let (actions, mut errors) = host.load_all(dir, |name| {
+        plugin_settings(settings, name).map(|settings| {
+            settings.unwrap_or_else(|err| {
+                setting_errors.push(err);
+                PluginSettings::default()
+            })
+        })
+    });
+    errors.extend(setting_errors);
     *HOST.lock() = Some(host);
 
     apply(editor, None, actions);
@@ -126,8 +140,8 @@ pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> an
     Ok(())
 }
 
-/// The JSON settings for plugin `name`, or `None` if it is disabled.
-fn plugin_settings(settings: &toml::Table, name: &str) -> Option<String> {
+/// The settings for plugin `name`, or `None` if it is disabled.
+fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<PluginSettings>> {
     let mut table = match settings.get(name) {
         Some(toml::Value::Table(table)) => table.clone(),
         _ => toml::Table::new(),
@@ -138,7 +152,28 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<String> {
         }
     }
     table.remove("allow-process");
-    Some(serde_json::to_string(&table).unwrap_or_else(|_| "{}".into()))
+    table.remove("allow-files");
+    let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
+    Some((|| {
+        Ok(PluginSettings {
+            config,
+            process: process_grant(settings, name)?,
+            files: file_grant(settings, name)?,
+        })
+    })())
+}
+
+/// `allow-files` for plugin `name`: `"read"`, `"write"` or `false`.
+fn file_grant(settings: &toml::Table, name: &str) -> anyhow::Result<FileGrant> {
+    match settings
+        .get(name)
+        .and_then(|table| table.get("allow-files"))
+    {
+        None | Some(toml::Value::Boolean(false)) => Ok(FileGrant::None),
+        Some(toml::Value::String(grant)) if grant == "read" => Ok(FileGrant::Read),
+        Some(toml::Value::String(grant)) if grant == "write" => Ok(FileGrant::Write),
+        Some(_) => anyhow::bail!("[{name}] allow-files: expected \"read\", \"write\" or false"),
+    }
 }
 
 /// `allow-process` for plugin `name`: `true`, `false` or a list of programs.
@@ -243,6 +278,7 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     path: doc.path().map(Path::to_path_buf),
                     language: doc.language_name().map(str::to_owned),
                     selection,
+                    modified: doc.is_modified(),
                 },
             )
         })
@@ -251,6 +287,9 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         documents,
         current: Some(plugin_doc_id(editor.tree.get(editor.tree.focus).doc)),
         mode: plugin_mode(editor.mode()),
+        workspace: Some(helix_loader::find_workspace().0),
+        cwd: helix_stdx::env::current_working_dir(),
+        config_dir: helix_loader::config_dir(),
     }
 }
 
@@ -336,6 +375,17 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 later(move |_, compositor| picker::show(compositor, plugin, id, picker))
             }
             Action::PushItems { plugin, id, items } => picker::push_items(&plugin, id, items),
+            Action::SetItems { plugin, id, items } => {
+                later(move |_, compositor| picker::set_items(compositor, &plugin, id, items))
+            }
+            Action::Popup(markdown) => later(move |editor, compositor| {
+                let contents = crate::ui::Markdown::new(markdown, editor.syn_loader.clone());
+                let popup = crate::ui::Popup::new("plugin-popup", contents).auto_close(true);
+                compositor.replace_or_push("plugin-popup", popup);
+            }),
+            Action::ShowPrompt { plugin, id, prompt } => later(move |editor, compositor| {
+                prompt::show(editor, compositor, plugin, id, prompt)
+            }),
         }
     }
     // All edits of one call are one undo step.
@@ -410,6 +460,16 @@ pub fn register_hooks() {
         }
         Ok(())
     });
+    register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        queue(Event::DocumentClose(plugin_doc_id(event.doc.id())));
+        Ok(())
+    });
+    register_hook!(move |event: &mut SelectionDidChange<'_>| {
+        if !APPLYING.load(Ordering::Relaxed) {
+            queue(Event::SelectionChange(plugin_doc_id(event.doc.id())));
+        }
+        Ok(())
+    });
     register_hook!(move |event: &mut OnModeSwitch<'_, '_>| {
         queue(Event::ModeSwitch {
             old: plugin_mode(event.old_mode),
@@ -419,13 +479,20 @@ pub fn register_hooks() {
     });
 }
 
+/// A document was written to disk.
+pub fn document_saved(doc: DocumentId) {
+    queue(Event::DocumentSave(plugin_doc_id(doc)));
+}
+
 fn queue(event: Event) {
     if !with_host(|host| host.wants(event.kind())).unwrap_or(false) {
         return;
     }
     let mut pending = PENDING.lock();
-    // One change event per document is enough.
-    if matches!(event, Event::DocumentChange(_)) && pending.events.contains(&event) {
+    // One change (or selection change) event per document is enough.
+    if matches!(event, Event::DocumentChange(_) | Event::SelectionChange(_))
+        && pending.events.contains(&event)
+    {
         return;
     }
     pending.events.push(event);
@@ -446,7 +513,11 @@ pub fn deliver_events(editor: &mut Editor) {
         std::mem::take(&mut pending.events)
     };
     for event in events {
-        if let Event::DocumentChange(doc) | Event::DocumentOpen(doc) = event {
+        if let Event::DocumentChange(doc)
+        | Event::DocumentOpen(doc)
+        | Event::DocumentSave(doc)
+        | Event::SelectionChange(doc) = event
+        {
             if editor_doc_id(editor, doc).is_none() {
                 continue; // closed in the meantime
             }
@@ -491,6 +562,12 @@ pub fn describe() -> String {
             .contains(&helix_plugin::Permission::Process)
         {
             out.push_str(&format!("process: {}\n", plugin.process));
+        }
+        if plugin
+            .permissions
+            .contains(&helix_plugin::Permission::Filesystem)
+        {
+            out.push_str(&format!("files: {}\n", plugin.files));
         }
         for command in &plugin.commands {
             out.push_str(&format!(

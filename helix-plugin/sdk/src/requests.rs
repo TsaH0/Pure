@@ -7,16 +7,21 @@ use crate::{Item, OpenAction, Output, Picker, PickerResult, RequestId};
 
 type ProcessCallback = Box<dyn FnOnce(Result<Output, String>) -> Result<(), String>>;
 type PickerCallback = Box<dyn FnOnce(PickerResult) -> Result<(), String>>;
+type PromptCallback = Box<dyn FnOnce(Option<String>) -> Result<(), String>>;
+type QueryCallback = Box<dyn FnMut(&str) -> Result<Vec<Item>, String>>;
 
 enum Completion {
     Process(ProcessCallback),
     Picker(PickerCallback),
+    Prompt(PromptCallback),
 }
 
 thread_local! {
     static PENDING: RefCell<HashMap<RequestId, Completion>> = RefCell::new(HashMap::new());
     /// The items of open pickers, to hand the chosen ones to the callback.
     static PICKER_ITEMS: RefCell<HashMap<RequestId, Vec<Item>>> = RefCell::new(HashMap::new());
+    /// Live pickers' query handlers.
+    static QUERIES: RefCell<HashMap<RequestId, QueryCallback>> = RefCell::new(HashMap::new());
 }
 
 /// A picker result. Cancellation has no items, indices or open action.
@@ -98,6 +103,7 @@ impl Picker {
             columns: vec!["Name".into()],
             items,
             initial: None,
+            live: false,
         }
     }
 }
@@ -139,6 +145,7 @@ pub fn pick(
     let id = ui::show_picker(&picker)?;
     PICKER_ITEMS.with_borrow_mut(|open| open.insert(id, picker.items));
     register_picker(id, move |result| {
+        QUERIES.with_borrow_mut(|queries| queries.remove(&id));
         let items = PICKER_ITEMS
             .with_borrow_mut(|open| open.remove(&id))
             .unwrap_or_default();
@@ -168,6 +175,55 @@ pub fn pick(
         callback(choice)
     });
     Ok(id)
+}
+
+/// Show a live picker: instead of filtering `picker`'s items, the editor
+/// calls `query` with what the user typed (debounced) and shows the items it
+/// returns. `callback` runs once, like for [`pick`].
+pub fn pick_live(
+    mut picker: Picker,
+    query: impl FnMut(&str) -> Result<Vec<Item>, String> + 'static,
+    callback: impl FnOnce(Choice) -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    picker.live = true;
+    let id = pick(picker, callback)?;
+    QUERIES.with_borrow_mut(|queries| queries.insert(id, Box::new(query)));
+    Ok(id)
+}
+
+/// Replace the items of the open picker `id`.
+pub fn set_items(id: RequestId, items: Vec<Item>) -> Result<(), String> {
+    ui::set_items(id, &items)?;
+    PICKER_ITEMS.with_borrow_mut(|open| {
+        if let Some(open) = open.get_mut(&id) {
+            *open = items;
+        }
+    });
+    Ok(())
+}
+
+/// Ask for a line of text. `callback` gets the answer, or `None` if the user
+/// pressed Esc. `completions` are offered while typing.
+pub fn prompt(
+    message: &str,
+    initial: &str,
+    completions: Vec<String>,
+    callback: impl FnOnce(Option<String>) -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    let id = ui::show_prompt(&ui::Prompt {
+        message: message.into(),
+        initial: initial.into(),
+        completions,
+    })?;
+    PENDING.with_borrow_mut(|pending| {
+        pending.insert(id, Completion::Prompt(Box::new(callback)));
+    });
+    Ok(id)
+}
+
+/// Show markdown in a popup at the cursor, until the next key press.
+pub fn popup(markdown: &str) -> Result<(), String> {
+    ui::show_popup(markdown)
 }
 
 /// Add items to the open picker `id` (from [`pick`]), e.g. as a program's
@@ -228,6 +284,34 @@ pub fn picker_done(id: RequestId, result: PickerResult) {
     if let Some(Completion::Picker(callback)) = callback {
         report(callback(result));
     }
+}
+
+#[doc(hidden)]
+pub fn prompt_done(id: RequestId, answer: Option<String>) {
+    let callback = PENDING.with_borrow_mut(|pending| {
+        if matches!(pending.get(&id), Some(Completion::Prompt(_))) {
+            pending.remove(&id)
+        } else {
+            None
+        }
+    });
+    if let Some(Completion::Prompt(callback)) = callback {
+        report(callback(answer));
+    }
+}
+
+#[doc(hidden)]
+pub fn picker_query(id: RequestId, query: String) {
+    // Taken out while it runs, so it may use the registry itself.
+    let Some(mut handler) = QUERIES.with_borrow_mut(|queries| queries.remove(&id)) else {
+        return;
+    };
+    let result = handler(&query).and_then(|items| set_items(id, items));
+    // Put back unless the picker was closed in the meantime.
+    if PICKER_ITEMS.with_borrow(|open| open.contains_key(&id)) {
+        QUERIES.with_borrow_mut(|queries| queries.insert(id, handler));
+    }
+    report(result);
 }
 
 pub(crate) fn run_command(f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
