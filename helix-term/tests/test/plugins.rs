@@ -579,6 +579,7 @@ async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> 
         ("<down><ret>", "choice:[1]:Some(OpenAction::Replace)"),
         ("<C-v>", "choice:[0]:Some(OpenAction::Vsplit)"),
         ("<C-s>", "choice:[0]:Some(OpenAction::Hsplit)"),
+        ("<A-ret>", "choice:[0]:Some(OpenAction::Replace)"),
         ("<esc>", "choice:[]:None"),
         // Filtering keeps the original index.
         ("gam<ret>", "choice:[2]:Some(OpenAction::Replace)"),
@@ -695,5 +696,96 @@ async fn plugin_pickers_preview_text() -> anyhow::Result<()> {
     keys(&mut app, "<down><up><down><esc>").await;
     deliver_events(&mut app).await;
     assert_eq!(text(&app), "a\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_can_close_a_document_they_edited() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    let closed = helix_view::doc!(app.editor).id();
+    keys(&mut app, ":plugin-run testplugin2/edit-close<ret>").await;
+    assert!(app.editor.documents().all(|doc| doc.id() != closed));
+    keys(&mut app, "iworks<esc>").await;
+    assert_eq!(text(&app), "works\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_command_recursion_stops_and_the_depth_recovers() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    for _ in 0..2 {
+        keys(&mut app, ":plugin-run testplugin2/recursive<ret>").await;
+        assert_error(&app, "nested too deeply");
+    }
+    keys(&mut app, ":plugin-run testplugin2/log recovered<ret>").await;
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(text(&app), "recovered\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_picker_actions_run_in_call_order() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/ordered-picker<ret>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "last<ret>").await;
+    assert_eq!(
+        wait_for_status(&mut app, |s| s.starts_with("ordered:")).await,
+        "ordered:[\"last\"]"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_picker_replacement_cancels_only_the_previous_request() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    keys(&mut app, ":plugin-run testplugin2/two-pickers<ret>").await;
+    deliver_events(&mut app).await;
+    wait_for_status(&mut app, |s| s == "first:None").await;
+    keys(&mut app, "<ret>").await;
+    wait_for_status(&mut app, |s| s == "second:Some(OpenAction::Replace)").await;
+    keys(&mut app, ":plugin-log testplugin2<ret>").await;
+    assert_eq!(text(&app), "first:None\nsecond:Some(OpenAction::Replace)\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_accept_literal_double_dash_and_boolean_disable() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_plugins("#[a|]#", ALL, "");
+    keys(&mut app, ":plugin-run testplugin/status -- -x<ret>").await;
+    assert_eq!(status(&app).0, "-- -x");
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "testplugin = false")?;
+    assert!(!helix_term::plugins::command_names()
+        .iter()
+        .any(|name| name.starts_with("testplugin/")));
+    assert!(helix_term::plugins::command_names().contains(&"text-tools/upper".to_owned()));
+    keys(&mut app, ":plugin-run testplugin/status hi<ret>").await;
+    assert_error(&app, "no plugin named 'testplugin'");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_event_subscribers_see_the_previous_plugins_edits() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_v2(ALL, "append-on-open = true");
+    let second = dir.path().join("second");
+    std::fs::create_dir(&second)?;
+    std::fs::copy(
+        dir.path().join("testplugin2/plugin.wasm"),
+        second.join("plugin.wasm"),
+    )?;
+    let manifest = std::fs::read_to_string(dir.path().join("testplugin2/plugin.toml"))?;
+    std::fs::write(
+        second.join("plugin.toml"),
+        manifest.replace("testplugin2", "second"),
+    )?;
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[testplugin2]\nappend-on-open = true\n[second]\nappend-on-open = true",
+    )?;
+    let file = helpers::temp_file_with_contents("abc")?;
+    keys(&mut app, &format!(":open {}<ret>", file.path().display())).await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "abc[3][6]");
     Ok(())
 }

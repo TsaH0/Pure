@@ -1769,3 +1769,51 @@ fn fuzzing_through_the_abi() {
         assert!(host.plugins[0].disabled().is_none(), "seed {seed}");
     }
 }
+
+#[test]
+fn dispatch_to_calls_only_the_named_subscriber_with_the_supplied_snapshot() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    for name in ["first", "second"] {
+        let dir = plugin_dir(root.path(), name, &testplugin_wasm(), ALL);
+        host.load(&dir, r#"{"edit-on-change":true}"#).unwrap();
+    }
+    assert_eq!(
+        host.subscribers(EventKind::DocumentChange),
+        ["first", "second"]
+    );
+    let first = host
+        .dispatch_to("first", Event::DocumentChange(1), &snapshot("abc", 0, 0))
+        .unwrap()
+        .unwrap();
+    let mut updated = Rope::from("abc");
+    for action in first {
+        if let Action::Edit { transaction, .. } = action {
+            assert!(transaction.apply(&mut updated));
+        }
+    }
+    assert_eq!(updated.to_string(), "abc!");
+    let second = host
+        .dispatch_to(
+            "second",
+            Event::DocumentChange(1),
+            &snapshot(&updated.to_string(), 0, 0),
+        )
+        .unwrap()
+        .unwrap();
+    for action in second {
+        if let Action::Edit { transaction, .. } = action {
+            assert!(transaction.apply(&mut updated));
+        }
+    }
+    assert_eq!(updated.to_string(), "abc!!");
+    assert!(host
+        .dispatch_to("missing", Event::DocumentChange(1), &Snapshot::default())
+        .is_none());
+    for name in ["first", "second"] {
+        let actions = host
+            .run_command(name, "events", vec![], Snapshot::default())
+            .unwrap();
+        assert_eq!(statuses(&actions), ["events: change:1"]);
+    }
+}

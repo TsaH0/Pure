@@ -114,13 +114,27 @@ struct Pending {
 /// (a plugin could otherwise grant itself permissions in `plugins.toml`).
 fn file_workspace() -> Option<PathBuf> {
     let cwd = helix_stdx::env::current_working_dir();
-    let (workspace, is_fallback) = helix_loader::find_workspace_in(&cwd);
     let home = std::env::var_os("HOME").map(PathBuf::from);
+    file_workspace_in(
+        &cwd,
+        home.as_deref(),
+        &helix_loader::config_dir(),
+        &helix_loader::data_dir(),
+    )
+}
+
+fn file_workspace_in(
+    cwd: &Path,
+    home: Option<&Path>,
+    config: &Path,
+    data: &Path,
+) -> Option<PathBuf> {
+    let (workspace, is_fallback) = helix_loader::find_workspace_in(cwd);
     let too_broad = is_fallback
         || workspace.parent().is_none()
-        || home.as_ref() == Some(&workspace)
-        || helix_loader::config_dir().starts_with(&workspace)
-        || helix_loader::data_dir().starts_with(&workspace);
+        || home == Some(workspace.as_path())
+        || config.starts_with(&workspace)
+        || data.starts_with(&workspace);
     if too_broad {
         log::info!(
             "plugins get no file access to {}: not a project directory",
@@ -188,18 +202,28 @@ pub fn load_in_background() {
             return;
         };
         job::dispatch(move |editor, _| {
-            if GENERATION.load(Ordering::Relaxed) != generation {
-                return; // reloaded in the meantime
-            }
-            install(editor, host, actions, errors);
-            // Documents opened while the plugins were loading.
-            let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
-            for doc in open {
-                queue(Event::DocumentOpen(plugin_doc_id(doc)));
-            }
+            install_background(editor, generation, host, actions, errors);
         })
         .await;
     });
+}
+
+/// Complete a background load only if it is still the newest request.
+fn install_background(
+    editor: &mut Editor,
+    generation: usize,
+    host: Option<PluginHost>,
+    actions: Vec<Action>,
+    errors: Vec<anyhow::Error>,
+) {
+    if GENERATION.load(Ordering::Relaxed) != generation {
+        return;
+    }
+    install(editor, host, actions, errors);
+    let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
+    for doc in open {
+        queue(Event::DocumentOpen(plugin_doc_id(doc)));
+    }
 }
 
 /// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).
@@ -760,7 +784,7 @@ pub fn deliver_events(editor: &mut Editor) {
         // One plugin at a time, each seeing what the previous ones changed.
         for plugin in plugins {
             let snapshot = snapshot(editor);
-            let result = with_host(|host| host.dispatch_to(&plugin, event.clone(), &snapshot));
+            let result = with_host(|host| host.dispatch_to(&plugin, event, &snapshot));
             match result.flatten() {
                 Some(Ok(actions)) => apply(editor, None, actions),
                 Some(Err(err)) => editor.set_error(err.to_string()),
@@ -818,4 +842,91 @@ pub fn describe() -> String {
 /// Whether any plugin subscribes to events of `kind`.
 pub fn wants(kind: EventKind) -> bool {
     with_host(|host| host.wants(kind)).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_grants_require_a_project_outside_home_config_and_data() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let home = root.path().join("home");
+        let config = home.join(".config/helix");
+        let data = home.join(".local/share/helix");
+        let check = |cwd: &Path| file_workspace_in(cwd, Some(&home), &config, &data);
+        assert_eq!(
+            check(&project),
+            None,
+            "unmarked directories are not projects"
+        );
+        std::fs::create_dir(project.join(".git")).unwrap();
+        assert_eq!(check(&project), Some(project.clone()));
+        std::fs::create_dir_all(home.join(".git")).unwrap();
+        assert_eq!(check(&home), None, "even a HOME with a marker is refused");
+        assert_eq!(check(Path::new("/")), None);
+        assert_eq!(
+            file_workspace_in(&project, Some(&home), &project.join("config"), &data),
+            None
+        );
+        assert_eq!(
+            file_workspace_in(&project, Some(&home), &config, &project.join("data")),
+            None
+        );
+    }
+
+    #[test]
+    fn boolean_false_disables_a_plugin_without_disabling_others() {
+        let settings = toml::from_str("one = false\n[two]\nsetting = 42").unwrap();
+        assert!(plugin_settings(&settings, "one").is_none());
+        assert_eq!(
+            plugin_settings(&settings, "two").unwrap().unwrap().config,
+            r#"{"setting":42}"#
+        );
+    }
+
+    // The integration feature gives Application a terminal test backend.
+    #[cfg(feature = "integration")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_background_load_cannot_replace_a_reload() {
+        let mut app = crate::application::Application::new(
+            crate::args::Args::default(),
+            crate::config::Config::default(),
+            helix_core::syntax::Loader::default(),
+            helix_loader::workspace_trust::WorkspaceTrust::fully_trusted(),
+        )
+        .unwrap();
+        let old = GENERATION.load(Ordering::Relaxed);
+        let empty = tempfile::tempdir().unwrap();
+        load_from(&mut app.editor, empty.path(), &toml::Table::new());
+        install(
+            &mut app.editor,
+            Some(PluginHost::new(None).unwrap()),
+            vec![],
+            vec![],
+        );
+        app.editor.set_status("newer load");
+        install_background(
+            &mut app.editor,
+            old,
+            None,
+            vec![Action::Status("stale init".into())],
+            vec![anyhow::anyhow!("stale error")],
+        );
+        assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "newer load");
+        assert!(
+            with_host(|_| ()).is_some(),
+            "stale load must not replace the current host"
+        );
+        install_background(
+            &mut app.editor,
+            GENERATION.load(Ordering::Relaxed),
+            None,
+            vec![Action::Status("current init".into())],
+            vec![],
+        );
+        assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "current init");
+    }
 }

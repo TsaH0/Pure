@@ -1500,7 +1500,7 @@ impl PluginHost {
         self.subscribers(event.kind())
             .into_iter()
             .filter_map(|name| {
-                let result = self.dispatch_to(&name, event.clone(), snapshot)?;
+                let result = self.dispatch_to(&name, event, snapshot)?;
                 Some((name, result))
             })
             .collect()

@@ -6,6 +6,7 @@ use helix_plugin_api::{
 };
 
 thread_local! {
+    static APPEND_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENT_UI: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -13,10 +14,15 @@ struct TestPlugin;
 impl Plugin for TestPlugin {
     fn init(config: String) -> Result<Registration, String> {
         EVENT_UI.set(config.contains("event-ui"));
+        APPEND_ON_OPEN.set(config.contains("append-on-open"));
         editor::set_status(&format!("0.2 init:{config}"));
         Ok(Registration {
             commands: [
                 "inspect",
+                "edit-close",
+                "recursive",
+                "ordered-picker",
+                "two-pickers",
                 "arm-process",
                 "arm-picker",
                 "spawn",
@@ -52,6 +58,44 @@ impl Plugin for TestPlugin {
 
     fn run_command(name: &str, args: Vec<String>) -> Result<(), String> {
         match name {
+            "edit-close" => {
+                let doc = editor::current_document().ok_or("no document")?;
+                editor::apply_edits(
+                    doc,
+                    &[Edit {
+                        from: 0,
+                        to: 0,
+                        text: "edited".into(),
+                    }],
+                )?;
+                editor::run_command(":buffer-close!")?;
+            }
+            "recursive" => {
+                editor::run_command(":plugin-run testplugin2/recursive")?;
+            }
+            "ordered-picker" => {
+                let id = editor::pick(
+                    Picker::new("Ordered", vec![Item::text("initial")]),
+                    |choice| {
+                        editor::set_status(&format!(
+                            "ordered:{:?}",
+                            choice.items.iter().map(|i| &i.data).collect::<Vec<_>>()
+                        ));
+                        Ok(())
+                    },
+                )?;
+                editor::set_items(id, vec![Item::text("replacement")])?;
+                editor::push_items(id, vec![Item::text("last")])?;
+            }
+            "two-pickers" => {
+                for title in ["first", "second"] {
+                    editor::pick(Picker::new(title, vec![Item::text(title)]), move |choice| {
+                        editor::log(&format!("{title}:{:?}", choice.action));
+                        editor::set_status(&format!("{title}:{:?}", choice.action));
+                        Ok(())
+                    })?;
+                }
+            }
             "inspect" => {
                 let doc = editor::current_document().ok_or("no document")?;
                 let text = editor::text(doc)?;
@@ -172,7 +216,9 @@ impl Plugin for TestPlugin {
             "text-preview" => {
                 let items = args
                     .iter()
-                    .map(|arg| Item::text(arg.as_str()).with_text_preview(format!("PREVIEW {arg}\nline 2")))
+                    .map(|arg| {
+                        Item::text(arg.as_str()).with_text_preview(format!("PREVIEW {arg}\nline 2"))
+                    })
                     .collect();
                 editor::pick(Picker::new("Text", items), |_| Ok(()))?;
             }
@@ -193,7 +239,9 @@ impl Plugin for TestPlugin {
                     Picker::new("Live", vec![]),
                     |_id, query| {
                         Ok(Some(
-                            (1..=3).map(|n| Item::text(format!("{query}-{n}"))).collect(),
+                            (1..=3)
+                                .map(|n| Item::text(format!("{query}-{n}")))
+                                .collect(),
                         ))
                     },
                     |choice| {
@@ -239,7 +287,18 @@ impl Plugin for TestPlugin {
     }
 
     fn on_document_open(doc: DocumentId) {
-        if EVENT_UI.get() {
+        if APPEND_ON_OPEN.get() {
+            let text = editor::text(doc).unwrap();
+            editor::apply_edits(
+                doc,
+                &[Edit {
+                    from: text.chars().count() as u32,
+                    to: text.chars().count() as u32,
+                    text: format!("[{}]", text.chars().count()),
+                }],
+            )
+            .unwrap();
+        } else if EVENT_UI.get() {
             let interactive =
                 editor::run_interactive(&["true"], InteractiveOptions::default(), |_| Ok(()));
             let picker = editor::pick(Picker::new("Event", vec![]), |_| Ok(()));

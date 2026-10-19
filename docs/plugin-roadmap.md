@@ -401,7 +401,11 @@ run in order; file grants only cover real project directories (not `$HOME`,
 time; `alt-Enter` closes plugin pickers; `--` is passed to flagless
 commands; stale background loads are dropped; programs are killed with
 their process group; `name = false` in `plugins.toml` disables a plugin.
-**These fixes are committed but not yet covered by new tests: add some.**
+- [x] **Review-fix regression tests.** Host tests cover targeted event dispatch;
+  editor tests cover fresh snapshots, document closure, recursion recovery,
+  ordered UI actions, picker replacement, Alt-Enter, `--`, and boolean disable
+  settings. Private editor tests cover file-grant boundaries and stale load
+  installation (`cargo test -p helix-term --lib --features integration plugins::tests`).
 
 - [ ] **M11.1 Blocking WASI calls can hang the editor** (high). The epoch
   time limit only interrupts running wasm; a plugin calling
@@ -464,6 +468,12 @@ Tasks in one batch touch the same code, so give each batch to one agent.
    APIs.
 
 ## Future TODOs (not yet milestones)
+
+- [ ] **Background load metadata:** `load_in_background` writes `LOADED`
+  before its generation check. A delayed task can overwrite the reload's
+  directory/settings even when its host is correctly dropped. Install this
+  metadata under the same generation guard and extend the stale-load test.
+
 
 Small, self-contained; each one is a good single task.
 

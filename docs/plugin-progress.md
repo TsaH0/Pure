@@ -10,7 +10,7 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   access, workspace info), M6.1 (save, close and selection events).
 - Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
   (benchmarks).
-- Next: M9.3 and the "Future TODOs" in the roadmap.
+- Next: M11 hardening, then M10 (API 0.3), including M11.3 query generations.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -23,6 +23,43 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 - Should a plugin's `run-command` (API 0.1's `run-commands` permission, which
   can run `:sh`, `:write`, ...) also need the `process` grant? Unchanged for
   now.
+
+- **M5 decorations proposal:** plugin-owned ids and per-document ranges for
+  highlights and virtual text; opt-in gutter/statusline entries. Reuse the
+  existing annotation renderer and invalidate only when a plugin changes its
+  data. Owner review should settle lifetimes, priority and theme scopes first.
+- **M6 bindings/commands proposal:** optional manifest defaults merged below
+  user bindings, with an explicit per-plugin disable switch; command aliases
+  resolve through the existing command dispatcher. Review naming and conflict
+  handling before implementing either feature; preserve existing bindings.
+- **M7 background work proposal:** explicit opt-in jobs receive immutable input
+  and return bounded results through callbacks, with cancellation on reload.
+  Research WASI 0.3 separately against the pinned Rust/Wasmtime versions;
+  host async execution for time limits does not require a new guest ABI.
+- **M8 distribution proposal:** stage downloads, display requested grants,
+  verify a pinned commit and component digest, then enable explicitly. Review
+  update trust and rollback rules before adding install/update/remove commands.
+- **File-manager API proposal:** compare an editable scratch buffer with
+  plugin-owned views. A scratch buffer can reuse editing and save hooks;
+  persistent views require a larger rendering and focus API. Agree on the
+  interaction model and upstream diff budget before implementation.
+
+## Review-fix regression coverage
+
+Added real-component and in-editor tests for the `b1519e5` fixes: closing an
+edited document, successive event subscribers seeing earlier edits, bounded
+`:plugin-run` recursion with recovery, ordered picker actions, replacement
+cancellation, Alt-Enter, literal `--`, and `name = false`. File-grant tests use
+explicit paths without changing the process environment. The stale-load test
+exercises the actual installation callback with both stale and current
+loads, checking that stale actions, errors and hosts cannot replace a reload.
+All test components and examples were rebuilt with `build-plugins.sh`.
+Validation: 57 host tests (one benchmark ignored), 29 editor library tests,
+34 in-editor plugin tests, and three private integration-backend tests passed.
+Workspace formatting and `cargo clippy --workspace --all-targets` passed
+without warnings. Removed two redundant event clones and unused test-case
+storage reported by the checks; line-ending conversion still happens when
+constructing a test case.
 
 ## M0 API 0.2 groundwork (done)
 
