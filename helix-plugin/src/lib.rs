@@ -314,7 +314,15 @@ pub enum Action {
         items: Vec<PickerItem>,
     },
     /// Show markdown in a popup.
-    Popup(String),
+    Popup {
+        markdown: String,
+        centered: bool,
+        owner: Option<(String, u32)>,
+    },
+    ClosePopup {
+        plugin: String,
+        id: u32,
+    },
     /// Ask for a line of text and deliver [`Callback::PromptDone`].
     ShowPrompt {
         plugin: String,
@@ -340,6 +348,7 @@ pub enum PendingKind {
     Process,
     Picker,
     Prompt,
+    Popup,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -363,6 +372,9 @@ pub enum Callback {
         id: u32,
         query: String,
     },
+    PopupClosed {
+        id: u32,
+    },
 }
 
 impl Callback {
@@ -373,6 +385,7 @@ impl Callback {
                 (*id, PendingKind::Picker)
             }
             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
+            Self::PopupClosed { id } => (*id, PendingKind::Popup),
         }
     }
 
@@ -836,8 +849,35 @@ impl State {
 
     fn show_popup(&mut self, markdown: String) -> Result<(), String> {
         self.need_ui("show-popup")?;
-        self.actions.push(Action::Popup(markdown));
+        self.actions.push(Action::Popup {
+            markdown,
+            centered: false,
+            owner: None,
+        });
         Ok(())
+    }
+
+    fn show_popup_with_id(&mut self, markdown: String, centered: bool) -> Result<u32, String> {
+        self.need_ui("show-popup")?;
+        let id = self.request(PendingKind::Popup)?;
+        self.actions.push(Action::Popup {
+            markdown,
+            centered,
+            owner: Some((self.plugin.clone(), id)),
+        });
+        Ok(id)
+    }
+
+    fn close_popup(&mut self, id: u32) {
+        if !self.context.allows_ui() {
+            return;
+        }
+        if self.pending.get(&id) == Some(&PendingKind::Popup) {
+            self.actions.push(Action::ClosePopup {
+                plugin: self.plugin.clone(),
+                id,
+            });
+        }
     }
 
     fn show_prompt(&mut self, prompt: PromptSpec) -> Result<u32, String> {
@@ -1489,7 +1529,7 @@ impl PluginHost {
         Ok(actions)
     }
 
-    /// Reserve a result id for an API 0.2 host operation, as the host
+    /// Reserve a result id for an API 0.2 or newer host operation, as the host
     /// functions do. For tests; ids are never reused after reload.
     #[doc(hidden)]
     pub fn register_request(&mut self, plugin: &str, kind: PendingKind) -> anyhow::Result<u32> {
@@ -1499,7 +1539,10 @@ impl PluginHost {
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
         if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3") || plugin.disabled.is_some() {
-            bail!("requests require an enabled API 0.2 plugin");
+            bail!("requests require an enabled API 0.2 or newer plugin");
+        }
+        if kind == PendingKind::Popup && plugin.manifest.api != "0.3" {
+            bail!("popup requests require API 0.3");
         }
         plugin
             .store

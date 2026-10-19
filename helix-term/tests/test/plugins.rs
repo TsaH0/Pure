@@ -854,3 +854,79 @@ async fn api_03_opens_files_at_positions_in_the_requested_split() -> anyhow::Res
     assert!(cursor(&app) <= helix_view::doc!(app.editor).text().len_chars());
     Ok(())
 }
+
+async fn v3_close_popup_without_typing(app: &mut Application, id: u32) {
+    helix_term::job::dispatch_callback(helix_term::job::Callback::EditorCompositorJobs(Box::new(
+        move |editor, _, jobs| {
+            helix_term::plugins::run_command(
+                editor,
+                jobs,
+                "testplugin3/close-popup",
+                vec![id.to_string()],
+            )
+            .unwrap();
+        },
+    )))
+    .await;
+    deliver_events(app).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_popups_close_by_id_and_on_escape_once() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(&mut app, ":plugin-run testplugin3/two-popups<ret>").await;
+    deliver_events(&mut app).await;
+    let ids: Vec<u32> = status(&app)
+        .0
+        .strip_prefix("popups:")
+        .unwrap()
+        .split(',')
+        .map(|id| id.parse().unwrap())
+        .collect();
+    // Closing the lower popup must leave the upper one alive.
+    v3_close_popup_without_typing(&mut app, ids[0]).await;
+    wait_for_status(&mut app, |message| {
+        message == format!("popup-closed:{}", ids[0])
+    })
+    .await;
+    keys(&mut app, "<esc>").await;
+    wait_for_status(&mut app, |message| {
+        message == format!("popup-closed:{}", ids[1])
+    })
+    .await;
+    v3_close_popup_without_typing(&mut app, ids[0]).await;
+    keys(&mut app, ":plugin-run testplugin3/popup-events<ret>").await;
+    assert_eq!(status(&app).0, format!("closed:{ids:?}"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_popup_show_then_close_preserves_action_order() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/popup-close-now centered hello<ret>",
+    )
+    .await;
+    let closed = wait_for_status(&mut app, |message| message.starts_with("popup-closed:")).await;
+    let id: u32 = closed.strip_prefix("popup-closed:").unwrap().parse()?;
+    keys(&mut app, ":plugin-run testplugin3/popup-events<ret>").await;
+    assert_eq!(status(&app).0, format!("closed:[{id}]"));
+    keys(&mut app, "iworks<esc>").await;
+    assert_eq!(text(&app), "worksa\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_popup_next_key_closes_it_and_reaches_the_editor() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(&mut app, ":plugin-run testplugin3/popup cursor hello<ret>").await;
+    deliver_events(&mut app).await;
+    let id: u32 = status(&app).0.strip_prefix("popup:").unwrap().parse()?;
+    keys(&mut app, "ix<esc>").await;
+    wait_for_status(&mut app, |message| message == format!("popup-closed:{id}")).await;
+    assert_eq!(text(&app), "xa\n");
+    keys(&mut app, ":plugin-run testplugin3/popup-events<ret>").await;
+    assert_eq!(status(&app).0, format!("closed:[{id}]"));
+    Ok(())
+}

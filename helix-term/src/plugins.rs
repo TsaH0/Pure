@@ -19,6 +19,7 @@
 //! Every plugin can use its own directory, `<data dir>/plugins/<name>/`.
 
 mod picker;
+mod popup;
 mod process;
 mod prompt;
 
@@ -631,10 +632,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             Action::SetItems { plugin, id, items } => ui.push(Box::new(move |_, compositor| {
                 picker::set_items(compositor, &plugin, id, items)
             })),
-            Action::Popup(markdown) => ui.push(Box::new(move |editor, compositor| {
-                let contents = crate::ui::Markdown::new(markdown, editor.syn_loader.clone());
-                let popup = crate::ui::Popup::new("plugin-popup", contents).auto_close(true);
-                compositor.replace_or_push("plugin-popup", popup);
+            Action::Popup {
+                markdown,
+                centered,
+                owner,
+            } => ui.push(Box::new(move |editor, compositor| {
+                popup::show(editor, compositor, markdown, centered, owner);
+            })),
+            Action::ClosePopup { plugin, id } => ui.push(Box::new(move |_, compositor| {
+                popup::close(compositor, &plugin, id)
             })),
             Action::ShowPrompt { plugin, id, prompt } => {
                 ui.push(Box::new(move |editor, compositor| {

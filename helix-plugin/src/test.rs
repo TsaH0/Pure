@@ -988,7 +988,7 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
     let command = match kind {
         PendingKind::Process => "arm-process",
         PendingKind::Picker => "arm-picker",
-        PendingKind::Prompt => unreachable!(),
+        PendingKind::Prompt | PendingKind::Popup => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -1336,7 +1336,7 @@ fn prompts_and_popups() {
         )
         .unwrap();
     assert!(
-        matches!(&actions[..], [Action::Popup(md)] if md == "**hi** there"),
+        matches!(&actions[..], [Action::Popup { markdown: md, centered: false, owner: None }] if md == "**hi** there"),
         "{actions:?}"
     );
 
@@ -2205,5 +2205,112 @@ fn open_file_at_records_the_position_and_enforces_permission() {
             .to_string()
             .contains("permission denied: add \"open-files\""),
         "{error:#}"
+    );
+}
+
+#[test]
+fn owned_popups_close_once_and_ignore_foreign_ids() {
+    let (mut host, root) = testplugin2();
+    assert!(host
+        .register_request("testplugin2", PendingKind::Popup)
+        .unwrap_err()
+        .to_string()
+        .contains("API 0.3"));
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "popup",
+            args(&["centered", "**hello**"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[0] {
+        Action::Popup {
+            markdown,
+            centered: true,
+            owner: Some((plugin, id)),
+        } => {
+            assert_eq!(markdown, "**hello**");
+            assert_eq!(plugin, "testplugin3");
+            *id
+        }
+        other => panic!("expected owned popup: {other:?}"),
+    };
+    let state = host
+        .plugins
+        .iter_mut()
+        .find(|plugin| plugin.name() == "testplugin3")
+        .unwrap()
+        .store
+        .data_mut();
+    state.context = CallContext::Event;
+    state.close_popup(id);
+    assert!(
+        state.actions.is_empty(),
+        "event handlers cannot change popup UI"
+    );
+    let foreign = host
+        .register_request("testplugin2", PendingKind::Process)
+        .unwrap();
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "close-popup",
+            vec![foreign.to_string()],
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    let close = host
+        .run_command(
+            "testplugin3",
+            "close-popup",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&close[..], [Action::ClosePopup { plugin, id: close_id }] if plugin == "testplugin3" && *close_id == id)
+    );
+    let actions = host
+        .callback(
+            "testplugin3",
+            Callback::PopupClosed { id },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), [format!("popup-closed:{id}")]);
+    assert!(host
+        .callback(
+            "testplugin3",
+            Callback::PopupClosed { id },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "close-popup",
+            vec![id.to_string()],
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    host.clear();
+    let dir = root.path().join("testplugin3");
+    host.load(&dir, r#"{"popup-on-open":true}"#).unwrap();
+    let actions = host
+        .dispatch_to(
+            "testplugin3",
+            Event::DocumentOpen(1),
+            &snapshot("abc", 0, 0),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["show-popup is only available from plugin commands and callbacks"]
     );
 }

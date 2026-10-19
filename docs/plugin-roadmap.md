@@ -387,7 +387,7 @@ Do them together, as one version.
   - [x] Host/editor implementation, permission tests, all splits, Unicode
     columns and coordinate clamping; checked in tmux.
   - [ ] SDK/finder migration after the other 0.3 functionality works.
-- [ ] **M10.3 Popup ids and `on-popup-close`**; centered popups.
+- [x] **M10.3 Popup ids and `on-popup-close`**; centered popups.
 - [ ] **M10.4 More events:** `post-command(name)`, `focus-gained` /
   `focus-lost`, `editor-idle` (from the idle timer). Add bits to
   `plugins::event_bit` and keep the "no cost when unused" rule.
@@ -442,10 +442,12 @@ the boundary to existing host types. `tests/plugins/testplugin3` is a real
 0.3 component built directly from WIT; 0.2 compatibility tests use frozen
 components. `open-file-at` works end to end, without editor-command workarounds.
 
-**Still open:** popup ids/closing callbacks and centering, streaming process
-output, post-command/focus/idle events, and live query generations. These
+Popup ids, targeted closing, one-shot close callbacks and centering now work
+(including multiple owned popups); the legacy popup path stays unchanged.
+**Still open:** streaming process output, post-command/focus/idle events and
+live query generations. These
 paths currently return explicit "not enabled yet" errors in the 0.3 adapter
-(or are no-ops for void functions); finish them before treating 0.3 as complete.
+; finish them before treating 0.3 as complete.
 Keep the SDK default at 0.2 until those work, then implement SDK 0.3 with
 `api-v0-2`, update finder and the guide. The old host diff in `docs/drafts/`
 is a design reference, not a patch to apply blindly after the M11 changes.
@@ -474,6 +476,11 @@ Tasks in one batch touch the same code, so give each batch to one agent.
 
 ## Future TODOs (not yet milestones)
 
+- [ ] **SDK picker rollback:** failed commands currently retain changes to
+  `PICKER_ITEMS` and can leak new query/item registries. A failed push followed
+  by a successful push can give the choice callback stale item data. Journal
+  command item updates and commit only on success; clean new registries on
+  error. Test fresh SDK components without replacing frozen ABI fixtures.
 - [ ] **Preview truncation label:** the panel title counts matched source
   lines, so generated multi-line replacements can be truncated without a
   "showing" label. Track displayed-row truncation separately, retaining the

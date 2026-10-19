@@ -174,6 +174,26 @@ until implemented: popups, streaming, extra events and live query generations.
 The SDK and examples remain on 0.2. M10.1/M10.2 stay open until the SDK/finder
 migration; then finish guide and full-suite validation. No older WIT changed.
 
+## M10.3 Popup lifecycle and centering
+
+API 0.3 popups return owned request ids and close by id, Esc or the next
+ordinary key. Dropping their contents delivers `on-popup-close` exactly once;
+unknown, duplicate and foreign ids are ignored. Multiple popups can coexist,
+and targeted closing preserves the others. Showing and closing in one call
+retains action order. UI operations remain restricted to commands/callbacks.
+The 0.2 fire-and-forget popup widget and ABI remain unchanged.
+
+A small generic component-removal helper supports owned lifetimes; the popup
+widget has an opt-in centering flag. No periodic work is added. Validation:
+67 host tests, 32 editor library tests and 39 in-editor plugin tests passed;
+targeted context tests also passed. Tmux confirmed centering before/after a
+terminal resize and the Esc close callback. Fixtures rebuilt; formatting,
+warning-free workspace Clippy and normal builds passed.
+
+Streaming, extra events and live generations remain before the SDK/finder/
+guide migration. A pre-existing SDK picker-registry rollback issue found
+while reviewing callback ownership is recorded in the roadmap for SDK work.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds

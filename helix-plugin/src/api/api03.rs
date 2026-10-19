@@ -217,10 +217,12 @@ impl ui::Host for State {
         }
         State::set_items(self, id, items.into_iter().map(item).collect())
     }
-    fn show_popup(&mut self, _popup: ui::Popup) -> std::result::Result<u32, String> {
-        Err("API 0.3 popup lifecycle is not enabled yet".into())
+    fn show_popup(&mut self, popup: ui::Popup) -> std::result::Result<u32, String> {
+        State::show_popup_with_id(self, popup.markdown, popup.centered)
     }
-    fn close_popup(&mut self, _id: u32) {}
+    fn close_popup(&mut self, id: u32) {
+        State::close_popup(self, id)
+    }
     fn show_prompt(&mut self, prompt: ui::Prompt) -> std::result::Result<u32, String> {
         State::show_prompt(
             self,
@@ -279,6 +281,7 @@ pub(super) async fn callback(
 ) -> Result<()> {
     let callbacks = instance.helix_plugin_callbacks();
     match callback {
+        Callback::PopupClosed { id } => callbacks.call_on_popup_close(store, *id).await,
         Callback::ProcessDone { id, result } => {
             let result = result.as_ref().map(|output| process::Output {
                 exit_code: output.exit_code,

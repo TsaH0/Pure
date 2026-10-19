@@ -325,6 +325,7 @@ impl Instance {
         };
         let callbacks = instance.helix_plugin_callbacks();
         match callback {
+            super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
             super::Callback::ProcessDone { id, result } => {
                 callbacks
                     .call_on_process_done(store, *id, result.as_ref().map_err(|err| err.as_str()))
