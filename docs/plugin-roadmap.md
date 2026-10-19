@@ -33,9 +33,9 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 
 | Path | What |
 | --- | --- |
-| `helix-plugin/wit/helix-plugin.wit` | The API (WIT), package `helix:plugin@0.1.0` |
+| `helix-plugin/wit/v0.{1,2,3}/helix-plugin.wit` | Versioned APIs (WIT); 0.1/0.2 frozen, 0.3 current |
 | `helix-plugin/src/lib.rs` | Host: `PluginHost`, `Manifest`, `Permission`, `Snapshot`, `Action`, `Event`, `Limits`, host functions (`impl host::Host for State`) |
-| `helix-plugin/src/test.rs` | Host unit tests (32), using `tests/fixtures/testplugin.wasm` and `examples/text-tools/plugin.wasm` |
+| `helix-plugin/src/test.rs` | Host tests with real components, including frozen compatibility fixtures and current examples |
 | `helix-plugin/tests/plugins/testplugin` | Source of the test plugin (its own cargo workspace) |
 | `helix-plugin/sdk` | Rust guest SDK `helix-plugin-api` (`Plugin` trait, `register_plugin!`, `editor`, `text`) |
 | `helix-plugin/examples/text-tools` | Example plugin; `plugin.wasm` is committed |
@@ -363,7 +363,7 @@ the hook first and keep it generic.
 0.2 is released (on `master`), so it is frozen: these need a new version.
 Do them together, as one version.
 
-- [ ] **M10.1 The 0.3 world, cheaply.** Copy `wit/v0.2` to `wit/v0.3`
+- [x] **M10.1 The 0.3 world, cheaply.** Copy `wit/v0.2` to `wit/v0.3`
   (package `helix:plugin@0.3.0`) and add the functions below. In
   `helix-plugin/src/api.rs` add `mod v0_3` (a third `bindgen!`), the `Host`
   impls (thin wrappers over `State` methods, like 0.2's) and an
@@ -378,26 +378,27 @@ Do them together, as one version.
   - [x] Frozen 0.2 test-plugin and text-tools fixtures; existing 0.2 host
     and in-editor tests run against them.
   - [x] Host 0.3 world and direct-bindings guest load beside 0.1/0.2.
-    The SDK still defaults to 0.2 while the remaining 0.3 features are built.
+    The SDK defaults to 0.3, with explicit `api-v0-1` / `api-v0-2`
+    features for rebuilding legacy components.
   - Done when: 0.1, 0.2 and 0.3 plugins load side by side and every
     existing test passes.
-- [ ] **M10.2 `open-file` with a split and a position.**
+- [x] **M10.2 `open-file` with a split and a position.**
   `open-file-at: func(path, action: open-action, line: option<u32>,
   column: option<u32>)`.
   - [x] Host/editor implementation, permission tests, all splits, Unicode
     columns and coordinate clamping; checked in tmux.
-  - [ ] SDK/finder migration after the other 0.3 functionality works.
+  - [x] SDK/finder migrated to native positioned opens, including character columns.
 - [x] **M10.3 Popup ids and `on-popup-close`**; centered popups.
 - [x] **M10.4 More events:** `post-command(name)`, `focus-gained` /
   `focus-lost`, `editor-idle` (from the idle timer). Add bits to
   `plugins::event_bit` and keep the "no cost when unused" rule.
-- [ ] **M10.5 Streaming output:** `stream: bool` in `spawn-options` and
+- [x] **M10.5 Streaming output:** `stream: bool` in `spawn-options` and
   `callbacks.on-process-output(id, chunk)` (stdout lines, batched); the
   final `on-process-done` still comes. Use it in `examples/finder` `files`
   with `push-items`.
   - [x] Host/editor batches, cumulative stdout cap, bounded backpressure,
     completion ordering and callback snapshots; older ABIs unchanged.
-  - [ ] SDK streaming helper and finder migration after query generations.
+  - [x] SDK streaming helper and finder files/query migration, with rebuilt examples.
 
 ## M11. Review fixes still open (from a code review)
 
@@ -428,7 +429,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   `on-picker-query` a generation number and have `set-items` / `push-items`
   carry it (API 0.3), dropping stale ones.
   Host and UI invalidate before debounce, ignore stale queued batches, and
-  clear selectable snapshots immediately. SDK helpers move to this ABI in M10.
+  clear selectable snapshots immediately. SDK helpers and finder use this ABI.
 - [x] **M11.4 Document that `allow-process` is not a sandbox**: allowed
   programs like `rg --pre` or `git -c alias.x=!sh` can run anything, and
   a write grant to the workspace can change a project's git hooks.
@@ -449,13 +450,13 @@ components. `open-file-at` works end to end, without editor-command workarounds.
 
 Popup ids, targeted closing, one-shot close callbacks and centering now work
 (including multiple owned popups); the legacy popup path stays unchanged.
-**Still open:** streaming process output, post-command/focus/idle events and
-live query generations. These
-paths currently return explicit "not enabled yet" errors in the 0.3 adapter
-; finish them before treating 0.3 as complete.
-Keep the SDK default at 0.2 until those work, then implement SDK 0.3 with
-`api-v0-2`, update finder and the guide. The old host diff in `docs/drafts/`
-is a design reference, not a patch to apply blindly after the M11 changes.
+Streaming, post-command/focus/idle events and live-query generations now work
+in the host and editor. The SDK defaults to 0.3, with `api-v0-2` for the frozen
+old ABI. Finder streams files into its picker, tags asynchronous grep results,
+and uses native positioned opens, including byte-to-character column conversion.
+`examples/api-demo` keeps the SDK trial source, manifest and built component.
+The guide documents all versions and migration. The old host diff in
+`docs/drafts/` remains a historical design reference.
 
 ## Later: APIs for file-manager style plugins
 
@@ -550,9 +551,8 @@ Small, self-contained; each one is a good single task.
 - **Push often.** An earlier agent built M1.1–M1.3 and lost all of it
   because it was never pushed before its session ended. Commit and push
   every finished task to your branch.
-- **API versions:** 0.2 may still change until it is merged to `master`.
-  After that it is frozen (never edit a released WIT); new functions go in
-  a new version. Add new *exports* in separate interfaces (like `callbacks`
+- **API versions:** 0.1 and 0.2 are frozen (never edit a released WIT);
+  new functions go in a new version. Add new *exports* in separate interfaces (like `callbacks`
   and `events`): the SDK's `register_plugin!` implements `plugin` for both
   API versions, so changing `plugin` breaks the 0.1 ABI.
 - **Fixtures:** after changing the WIT, the SDK or a guest, run

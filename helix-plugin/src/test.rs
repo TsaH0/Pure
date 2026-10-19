@@ -665,6 +665,11 @@ fn example_text_tools() {
 }
 
 #[test]
+fn sdk_03_example_text_tools() {
+    check_text_tools("0.3");
+}
+
+#[test]
 fn legacy_example_text_tools() {
     check_text_tools("0.1");
 }
@@ -1771,6 +1776,12 @@ mod properties {
 fn benchmarks() {
     let cache = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
+    let example: toml::Table = toml::from_str(
+        &std::fs::read_to_string(fixture("examples/text-tools/plugin.toml")).unwrap(),
+    )
+    .unwrap();
+    let api = example["api"].as_str().unwrap();
+    eprintln!("text-tools API {api}; event workload: frozen API 0.2 selection-change");
     let plugins = 20;
     for i in 0..plugins {
         let name = format!("tools{i}");
@@ -1783,7 +1794,7 @@ fn benchmarks() {
         let manifest = dir.join("plugin.toml");
         let source = std::fs::read_to_string(&manifest)
             .unwrap()
-            .replace("api = \"0.1\"", "api = \"0.2\"");
+            .replace("api = \"0.1\"", &format!("api = \"{api}\""));
         std::fs::write(manifest, source).unwrap();
     }
     for (label, cold) in [("cold cache", true), ("warm cache", false)] {
@@ -2706,5 +2717,422 @@ fn owned_popups_close_once_and_ignore_foreign_ids() {
     assert_eq!(
         statuses(&actions),
         ["show-popup is only available from plugin commands and callbacks"]
+    );
+}
+
+fn example_host(name: &str) -> (PluginHost, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join(name);
+    std::fs::create_dir(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(fixture(&format!("examples/{name}/{file}")), dir.join(file)).unwrap();
+    }
+    let mut host = host();
+    host.load(&dir, "{}").unwrap();
+    (host, root)
+}
+
+#[test]
+fn sdk_03_popup_events_and_positioned_open_use_the_new_exports() {
+    let (mut host, _root) = example_host("api-demo");
+    let actions = host
+        .run_command(
+            "api-demo",
+            "popup",
+            args(&["centered", "close-now"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[0] {
+        Action::Popup {
+            centered: true,
+            owner: Some((owner, id)),
+            ..
+        } if owner == "api-demo" => *id,
+        other => panic!("expected owned popup: {other:?}"),
+    };
+    assert!(matches!(actions.last(), Some(Action::ClosePopup { id: closed, .. }) if *closed == id));
+    let closed = Callback::PopupClosed { id };
+    assert_eq!(
+        statuses(
+            &host
+                .callback("api-demo", closed.clone(), &Snapshot::default())
+                .unwrap()
+        ),
+        [format!("closed:{id}")]
+    );
+    assert!(host
+        .callback("api-demo", closed, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    for event in [
+        Event::PostCommand("move_char_left".into()),
+        Event::FocusGained,
+        Event::FocusLost,
+        Event::EditorIdle,
+    ] {
+        host.dispatch(event, &Snapshot::default());
+    }
+    let lines = host.log_lines("api-demo").unwrap();
+    for expected in [
+        "event:post:move_char_left",
+        "event:focus:gained",
+        "event:focus:lost",
+        "event:idle",
+    ] {
+        assert!(
+            lines.iter().any(|line| line.contains(expected)),
+            "{lines:?}"
+        );
+    }
+    let actions = host
+        .run_command(
+            "api-demo",
+            "open-at",
+            args(&["/tmp/a b", "vsplit", "2", "3"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::OpenFileAt { path, action: OpenAction::Vsplit, line: Some(2), column: Some(3) }] if path == Path::new("/tmp/a b"))
+    );
+}
+
+#[test]
+fn sdk_03_live_helpers_rollback_and_discard_stale_data() {
+    let (mut host, _root) = example_host("api-demo");
+    let actions = host
+        .run_command("api-demo", "live", vec![], Snapshot::default())
+        .unwrap();
+    let id = match actions[0] {
+        Action::ShowPicker {
+            id,
+            generation: Some(0),
+            ..
+        } => id,
+        ref other => panic!("{other:?}"),
+    };
+    let query = |generation| Callback::PickerQuery {
+        id,
+        generation: Some(generation),
+        query: "new".into(),
+    };
+    host.set_picker_generation("api-demo", id, 1);
+    host.callback("api-demo", query(1), &Snapshot::default())
+        .unwrap();
+    assert!(host
+        .run_command(
+            "api-demo",
+            "rollback",
+            args(&["1", "wrong"]),
+            Snapshot::default()
+        )
+        .is_err());
+    host.run_command(
+        "api-demo",
+        "push",
+        args(&["1", "right"]),
+        Snapshot::default(),
+    )
+    .unwrap();
+    assert!(host
+        .run_command(
+            "api-demo",
+            "update",
+            args(&["0", "stale"]),
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    // The host invalidates before the debounced SDK callback arrives.
+    host.set_picker_generation("api-demo", id, 2);
+    assert!(host
+        .run_command(
+            "api-demo",
+            "update",
+            args(&["1", "debounce-gap"]),
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+    let actions = host
+        .callback("api-demo", query(2), &Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::SetItems { generation: Some(2), items, .. }] if items[0].data == "new:2")
+    );
+    let actions = host
+        .callback(
+            "api-demo",
+            Callback::PickerDone {
+                id,
+                result: PickerResult::Accepted((vec![0], OpenAction::Replace)),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["choice:[\"new:2\"]"]);
+    assert!(host
+        .run_command(
+            "api-demo",
+            "push",
+            args(&["2", "closed"]),
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn sdk_03_stream_handlers_receive_batches_then_only_the_tail() {
+    let (mut host, _root) = example_host("api-demo");
+    assert!(host
+        .run_command("api-demo", "stream", args(&["echo"]), Snapshot::default())
+        .is_err());
+    host.set_process_grant("api-demo", ProcessGrant::Any);
+    let actions = host
+        .run_command("api-demo", "stream", args(&["echo"]), Snapshot::default())
+        .unwrap();
+    let id = match actions[0] {
+        Action::Spawn {
+            id, stream: true, ..
+        } => id,
+        ref other => panic!("{other:?}"),
+    };
+    for chunk in ["one\n", "two\nthree\n"] {
+        let actions = host
+            .callback(
+                "api-demo",
+                Callback::ProcessOutput {
+                    id,
+                    chunk: chunk.into(),
+                },
+                &Snapshot::default(),
+            )
+            .unwrap();
+        assert_eq!(statuses(&actions), [format!("chunk:{chunk}")]);
+    }
+    let actions = host
+        .callback(
+            "api-demo",
+            Callback::ProcessDone {
+                id,
+                result: Ok(ProcessOutput {
+                    exit_code: Some(0),
+                    stdout: "tail".into(),
+                    stderr: "err".into(),
+                }),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert_eq!(statuses(&actions), ["done:Some(0):tail:err"]);
+    assert!(host
+        .callback(
+            "api-demo",
+            Callback::ProcessOutput {
+                id,
+                chunk: "late\n".into()
+            },
+            &Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn finder_streams_files_and_opens_native_splits_without_run_commands() {
+    let (mut host, _root) = example_host("finder");
+    host.set_process_grant("finder", ProcessGrant::Any);
+    let snapshot = snapshot("", 0, 0);
+    let actions = host
+        .run_command("finder", "files", vec![], snapshot.clone())
+        .unwrap();
+    let picker = match &actions[0] {
+        Action::ShowPicker {
+            id,
+            generation: None,
+            picker,
+            ..
+        } if picker.items.is_empty() => *id,
+        other => panic!("{other:?}"),
+    };
+    let process = match &actions[1] {
+        Action::Spawn {
+            id,
+            argv,
+            stream: true,
+            ..
+        } if argv == &["rg", "--files"] => *id,
+        other => panic!("{other:?}"),
+    };
+    let actions = host
+        .callback(
+            "finder",
+            Callback::ProcessOutput {
+                id: process,
+                chunk: "src/a b.rs\n".into(),
+            },
+            &snapshot,
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::PushItems { items, .. }] if items.len() == 1 && items[0].data == "src/a b.rs")
+    );
+    let actions = host
+        .callback(
+            "finder",
+            Callback::ProcessDone {
+                id: process,
+                result: Ok(ProcessOutput {
+                    exit_code: Some(0),
+                    stdout: "tail.rs".into(),
+                    stderr: String::new(),
+                }),
+            },
+            &snapshot,
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::PushItems { items, .. }] if items.len() == 1 && items[0].data == "tail.rs")
+    );
+    let actions = host
+        .callback(
+            "finder",
+            Callback::PickerDone {
+                id: picker,
+                result: PickerResult::Accepted((vec![0], OpenAction::Hsplit)),
+            },
+            &snapshot,
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::OpenFileAt { path, action: OpenAction::Hsplit, line: None, column: None }] if path == Path::new("/work/src/a b.rs"))
+    );
+
+    let actions = host
+        .run_command("finder", "files", vec![], snapshot.clone())
+        .unwrap();
+    let picker = match actions[0] {
+        Action::ShowPicker { id, .. } => id,
+        ref other => panic!("{other:?}"),
+    };
+    let process = match actions[1] {
+        Action::Spawn { id, .. } => id,
+        ref other => panic!("{other:?}"),
+    };
+    let actions = host
+        .callback(
+            "finder",
+            Callback::PickerDone {
+                id: picker,
+                result: PickerResult::Cancelled,
+            },
+            &snapshot,
+        )
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::Kill { id, .. }] if *id == process));
+    assert!(host
+        .callback(
+            "finder",
+            Callback::ProcessOutput {
+                id: process,
+                chunk: "late.rs\n".into()
+            },
+            &snapshot
+        )
+        .unwrap()
+        .is_empty());
+    assert!(host
+        .callback(
+            "finder",
+            Callback::ProcessDone {
+                id: process,
+                result: Err("killed".into())
+            },
+            &snapshot
+        )
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn finder_grep_cancels_old_queries_and_opens_the_reported_position() {
+    let (mut host, _root) = example_host("finder");
+    host.set_process_grant("finder", ProcessGrant::Any);
+    let snapshot = snapshot("", 0, 0);
+    let actions = host
+        .run_command("finder", "grep", vec![], snapshot.clone())
+        .unwrap();
+    let picker = match actions[0] {
+        Action::ShowPicker { id, .. } => id,
+        ref other => panic!("{other:?}"),
+    };
+    let mut processes = Vec::new();
+    for generation in [1, 2] {
+        host.set_picker_generation("finder", picker, generation);
+        let actions = host
+            .callback(
+                "finder",
+                Callback::PickerQuery {
+                    id: picker,
+                    generation: Some(generation),
+                    query: format!("query{generation}"),
+                },
+                &snapshot,
+            )
+            .unwrap();
+        if generation == 2 {
+            assert!(
+                matches!(actions.first(), Some(Action::Kill { id, .. }) if *id == processes[0])
+            );
+        }
+        processes.push(
+            actions
+                .iter()
+                .find_map(|action| match action {
+                    Action::Spawn {
+                        id, stream: false, ..
+                    } => Some(*id),
+                    _ => None,
+                })
+                .unwrap(),
+        );
+    }
+    for (index, process) in processes.into_iter().enumerate() {
+        let actions = host
+            .callback(
+                "finder",
+                Callback::ProcessDone {
+                    id: process,
+                    result: Ok(ProcessOutput {
+                        exit_code: Some(0),
+                        stdout: "src/a b.rs:2:4:héllo\n".into(),
+                        stderr: String::new(),
+                    }),
+                },
+                &snapshot,
+            )
+            .unwrap();
+        if index == 0 {
+            assert!(actions.is_empty());
+        } else {
+            assert!(
+                matches!(&actions[..], [Action::SetItems { generation: Some(2), items, .. }] if items.len() == 1)
+            );
+        }
+    }
+    let actions = host
+        .callback(
+            "finder",
+            Callback::PickerDone {
+                id: picker,
+                result: PickerResult::Accepted((vec![0], OpenAction::Vsplit)),
+            },
+            &snapshot,
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::OpenFileAt { path, action: OpenAction::Vsplit, line: Some(2), column: Some(3) }] if path == Path::new("/work/src/a b.rs"))
     );
 }

@@ -2,7 +2,7 @@
 
 Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
 run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
-[`wit/v0.2/helix-plugin.wit`](wit/v0.2/helix-plugin.wit); any language that can build a
+[`wit/v0.3/helix-plugin.wit`](wit/v0.3/helix-plugin.wit); any language that can build a
 component for it works. Rust has an SDK in [`sdk/`](sdk).
 
 ## Using plugins
@@ -45,13 +45,15 @@ allow-files = "read"            # see "Files"
 
 ### Example plugins
 
-Ready to use: copy an example's `plugin.toml` and `plugin.wasm` into
+Pure ships the API; examples are optional and are never installed automatically.
+Copy an example's `plugin.toml` and `plugin.wasm` into
 `~/.config/helix/plugins/<name>/`.
 
 | Example | Commands | `plugins.toml` |
 | --- | --- | --- |
 | [`text-tools`](examples/text-tools) | `upper`, `lower`, `sort-lines`, `count` | – |
 | [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
+| [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
 
 ```toml
@@ -156,7 +158,7 @@ register_plugin!(MyPlugin);
 ```toml
 name = "my-plugin"
 version = "0.1.0"
-api = "0.2"
+api = "0.3"
 description = "Says hello"
 permissions = ["read-buffers", "edit-buffers"]
 ```
@@ -166,15 +168,16 @@ Build with `cargo build --release --target wasm32-wasip2` and copy
 `~/.config/helix/plugins/my-plugin/plugin.wasm` next to the manifest.
 
 See [`examples/text-tools`](examples/text-tools) for a complete plugin and
-[`tests/plugins/testplugin`](tests/plugins/testplugin) for every API function.
+[`examples/api-demo`](examples/api-demo) for API 0.3 callback examples.
+The versioned WIT files are the complete API reference.
 
 ## Development
 
 - `cargo test -p helix-plugin` tests the host with real plugins.
 - `cargo test -p helix-term --features integration --test integration -- plugins`
   tests plugins in a running editor.
-- `./build-plugins.sh` rebuilds the 0.1 and 0.2 test plugins (`tests/fixtures`)
-  and the example after changing guest code or the SDK. The committed
+- `./build-plugins.sh` rebuilds the 0.1, 0.2 and 0.3 test plugins (`tests/fixtures`)
+  and every example after changing guest code or the SDK. The committed
   `text-tools-v0.1.wasm`, `text-tools-v0.2.wasm`, and
   `testplugin2-v0.2.wasm` are frozen compatibility fixtures and are never
   overwritten by the script.
@@ -182,16 +185,17 @@ See [`examples/text-tools`](examples/text-tools) for a complete plugin and
 
 ## API versions and SDK callbacks
 
-Pure accepts `api = "0.1"` and `api = "0.2"`. Existing 0.1 components keep
-loading without rebuilding. SDK 0.2 keeps the same `Plugin` trait methods and
-buffer API; `text-tools` builds unchanged with `api = "0.2"`. To rebuild an
-older component with the 0.1 ABI, enable the SDK's `api-v0-1` feature:
+Pure accepts `api = "0.1"`, `api = "0.2"` and `api = "0.3"` side by side.
+Existing 0.1/0.2 components load without rebuilding. SDK 0.3 generates the
+0.3 ABI by default; set `api = "0.3"` in the plugin manifest. To rebuild an
+older component, select exactly one legacy feature and keep its manifest API:
 
 ```toml
-helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-1"] }
+# For api = "0.2" (use api-v0-1 for api = "0.1"):
+helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-2"] }
 ```
 
-SDK 0.2 also exports callback bindings automatically. `editor::spawn` and
+The SDK exports callback bindings automatically. `editor::spawn` and
 `editor::run_interactive` accept a one-shot closure receiving `Result<Output,
 String>`; `editor::pick` accepts a picker and a closure receiving `Choice`
 (items, original indices, and an optional split action; no action means
@@ -215,10 +219,10 @@ editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
 })?;
 ```
 
-UI (`run-interactive`, `pick`, `run-command`) is restricted to plugin commands
+UI (`run-interactive`, `pick`, popups, `run-command`) is restricted to plugin commands
 and callbacks, so events cannot interrupt typing. API 0.1's
-WIT remains at [`wit/v0.1/`](wit/v0.1/); existing versioned interfaces are never
-extended in place.
+WIT remains at [`wit/v0.1/`](wit/v0.1/) and 0.2 at
+[`wit/v0.2/`](wit/v0.2/); released interfaces are never extended in place.
 
 ## Running programs
 
@@ -254,6 +258,14 @@ it should also be granted only to trusted plugins.
   was killed or timed out), stdout and stderr (lossy UTF-8, at most 16 MiB
   each). The default time limit is 30 s, at most 10 min. `editor::kill(id)`
   stops it; at most 16 programs run at once per plugin.
+- API 0.3 `editor::spawn_stream(argv, options, on_output, on_done)` delivers
+  complete stdout lines (including their newlines) in bounded batches before
+  completion. `on_done` receives only the unfinished stdout tail, the full
+  stderr and the exit code, after all delivered batches. Do not append the
+  batches again from the final result. The 16 MiB stdout cap is cumulative,
+  including already delivered bytes. Backpressure bounds queued data; no
+  periodic flush timer is used. Output callbacks may update pickers or start
+  other requests. Killing a process still delivers its final callback.
 - `editor::run_interactive(argv, InteractiveOptions { cwd, chooser_file,
   wait_for_key }, callback)` hands the terminal to a full-screen program and
   calls back when it exits. With `chooser_file`, an argument containing
@@ -291,18 +303,47 @@ richer items. Only from commands and callbacks. The million-item limit covers
 initial items plus every push; `set_items` resets the count. A rejected push
 leaves the picker unchanged.
 
-`editor::pick_live(picker, query, callback)` is a live picker: what the user
-types goes to `query(id, text)` (debounced) instead of filtering, and the
-items it returns are shown. To answer later, e.g. from a program, return
-`Ok(None)` and call `editor::set_items(id, items)` (see `examples/finder`,
-`grep`).
+API 0.3 `editor::pick_live(picker, query, callback)` calls
+`query(id, generation, text)` after debounce. Return `Ok(Some(items))` for
+immediate results, or `Ok(None)` to answer asynchronously. Capture the supplied
+generation and use `editor::set_items_for_query(id, generation, items)` or
+`editor::push_items_for_query(id, generation, items)` for delayed results.
+These helpers discard obsolete generations and closed pickers. The host also
+invalidates results immediately on input, before debounce, and drops old
+queued batches; a plugin-local counter alone cannot cover that gap. Static
+pickers continue to use `set_items` and `push_items` without a generation.
+API 0.2 keeps `query(id, text)` and its original untagged update functions.
+
+See [`finder`](examples/finder): `files` opens an empty picker before streaming
+`rg --files` into it, and `grep` tags each query's asynchronous results. Closing
+either picker kills its producer. Finder opens files with the native API and
+needs only `open-files` and `process`, with the user's `allow-process` grant.
+
+## Opening a file at a position
+
+API 0.3 `editor::open_file_at(path, action, line, column)` requires
+`open-files`. `action` is `OpenAction::Replace`, `Hsplit` or `Vsplit`.
+Coordinates are optional, **one-based** line and character column (not UTF-8
+byte columns); missing coordinates use the start, and out-of-range coordinates
+are clamped. `editor::open_file(path)` remains available in every API version.
+
+```rust,ignore
+editor::open_file_at("src/main.rs", OpenAction::Vsplit, Some(12), Some(3))?;
+```
 
 ## Prompts and popups
 
 - `editor::prompt(message, initial, completions, callback)` asks for a line
   of text; the callback gets `Some(text)`, or `None` on Esc. `completions`
   are offered (fuzzy matched) while typing.
-- `editor::popup(markdown)` shows markdown at the cursor until the next key.
+- API 0.3 `editor::popup(markdown)` shows markdown at the cursor and returns
+  an owned id. `editor::close_popup(id)` closes that popup only.
+  `editor::popup_with_options(markdown, PopupOptions { centered: true },
+  on_close)` centers it and calls `on_close(id)` once when it closes by id,
+  Esc, or the next key. Esc is consumed; other keys continue to the editor.
+  Multiple owned popups may coexist. Foreign or completed ids are ignored.
+  API 0.2 retains `popup(markdown) -> Result<(), String>` and its original
+  replacement behavior.
 
 Both only from commands and callbacks.
 
@@ -331,3 +372,11 @@ Subscribe in `init`'s `Registration { events, .. }` and implement the
 `on_document_close` (the document is gone; only its id is known) and
 `on_selection_change` (debounced). Handlers get 250 ms and can't open UI or
 run commands.
+
+API 0.3 also provides `on_post_command(name)`, `on_focus_gained()`,
+`on_focus_lost()` and `on_editor_idle()`, with matching `EventKind` variants.
+Post-command reports completed native command dispatch; plugin-applied commands
+are suppressed to prevent feedback loops. Focus events work even when a picker
+or popup is open. Idle uses the editor's existing idle timer and fires once
+until input re-arms it. Unsubscribed event hooks return after an atomic mask
+check; subscribing adds no polling timer or periodic idle wake-up.

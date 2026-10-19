@@ -12,15 +12,14 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   (benchmarks).
 - Done: review-fix regression coverage and M11, including query generations
   in the API 0.3 host/editor.
-- Next: M10 (API 0.3). Frozen 0.2
-  fixtures, the third host world, positioned opens, popup lifecycle and event
-  hooks, streaming and query generations are implemented. SDK/finder migration
-  and guide updates remain open. Follow-up findings are in Future TODOs.
+- Done: M10 (API 0.3), including default SDK, finder migration, the guide,
+  frozen 0.2 compatibility fixtures and the kept API trial example.
+  Seven follow-up findings remain in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
-  `helix-plugin/examples/` (`text-tools`, `yazi`, `finder`).
+  `helix-plugin/examples/` (`text-tools`, `yazi`, `finder`, `api-demo`).
 
 ## Open questions for the owner
 
@@ -66,6 +65,56 @@ without warnings. Removed two redundant event clones and unused test-case
 storage reported by the checks; line-ending conversion still happens when
 constructing a test case. The documented full suite completed with 224 passes,
 zero failures and eight `commands::movement` tests filtered out.
+
+## M10 SDK 0.3 and finder migration
+
+The SDK now generates the 0.3 world by default, with mutually exclusive
+`api-v0-1` and `api-v0-2` legacy features. Version-specific callback exports
+cover popup closure, output batches, query generations and the four new events.
+The SDK routes streaming batches without completing their request, removes
+stream handlers on final completion, and journals live picker changes on failed
+commands. Generation helpers drop obsolete batches and closed picker updates;
+the host independently covers input before the debounced guest notification.
+
+Finder's files command installs an empty picker before starting `rg --files`,
+appends batches and the final unfinished tail once, and kills the producer on
+choice/cancel. Grep uses the supplied generation on every delayed replacement
+and cancels obsolete processes. Both open through `open-file-at`, preserve split
+choices, and no longer need `run-commands`. Grep translates ripgrep byte columns
+into character columns from the returned line, with no additional file read.
+The optional kept `examples/api-demo` exercises the new SDK callbacks, events,
+live updates and positioned opens. All example manifests now select 0.3;
+existing 0.1/0.2 tests still use frozen components, with an additional fresh 0.2
+SDK component for rollback tests. The guide documents version selection and
+migration, and the historical host diff is labeled as a design reference.
+
+Validation: 79 host tests, 37 editor library tests and 50 in-editor plugin
+tests passed. The full documented integration run passed all 241 tests with
+zero failures and eight movement tests excluded. Workspace formatting and
+workspace/default-SDK/0.2-SDK Clippy passed without warnings. SDK native unit
+tests passed in both configurations; 0.1 and 0.2 target checks passed. All guests
+were rebuilt and frozen 0.2 digests stayed unchanged. After a normal build,
+tmux checks passed for SDK popup closure, live generations, streamed output
+before exit, finder file streaming/splits and Unicode grep positions/splits.
+The first manual harness needed to wait for background registration and avoid
+assuming a header on a single-column static picker; no product change was
+needed for those harness corrections.
+
+Quiet release benchmark (API 0.3 text-tools): cold loads for 1 / 5 / 20
+plugins took 84.1 / 253.6 / 1018.8 ms; warm loads took 2.2 / 4.0 / 18.7 ms,
+within the 5 ms per cached plugin budget. The unchanged frozen API 0.2
+selection-event workload took 0.102 ms per dispatch. An initial run overlapping
+the integration suite measured 104.6 / 593.4 / 1866.8 ms cold and
+2.1 / 7.1 / 26.7 ms warm, with a 0.072 ms event; retain this as a noisy sample,
+not a speed comparison. With SDK events subscribed and both example pickers
+closed, three successive 1.2-second terminal samples showed zero scheduled
+thread timeslices. These observations do not establish whole-editor parity
+with vanilla Helix.
+
+Performance design: no new timer, startup hook or per-keystroke subscription
+was introduced by the SDK migration. Finder allocates per open picker/query;
+stream routing and generation checks run only for active requests. The optional
+trial plugin explicitly subscribes to its events; it is never installed by Pure.
 
 ## M11.1 Bounded WASI calls
 

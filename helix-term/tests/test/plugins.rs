@@ -1277,3 +1277,78 @@ async fn api_03_popup_next_key_closes_it_and_reaches_the_editor() -> anyhow::Res
     assert_eq!(status(&app).0, format!("closed:[{id}]"));
     Ok(())
 }
+
+fn app_with_example(name: &str, settings: &str) -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join(name);
+    std::fs::create_dir(&plugin).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples").join(name).join(file),
+            plugin.join(file),
+        )
+        .unwrap();
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sdk_03_example_callbacks_and_positioned_open_work_in_editor() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_example("api-demo", "");
+    keys(&mut app, ":plugin-run api-demo/popup centered<ret>").await;
+    let id = status(&app).0.strip_prefix("popup:").unwrap().to_owned();
+    keys(&mut app, "<esc>").await;
+    assert_eq!(status(&app).0, format!("closed:{id}"));
+    keys(&mut app, ":plugin-run api-demo/live<ret>").await;
+    keys(&mut app, "ab").await;
+    keys(&mut app, "<ret>").await;
+    assert_eq!(status(&app).0, "choice:[\"ab:2\"]");
+    let file = helpers::temp_file_with_contents("first\nhéllo\nlast\n")?;
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run api-demo/open-at '{}' vsplit 2 3<ret>",
+            file.path().display()
+        ),
+    )
+    .await;
+    assert_eq!(text(&app), "first\nhéllo\nlast\n");
+    assert_eq!(cursor(&app), 8);
+    assert_eq!(app.editor.tree.views().count(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sdk_03_example_streams_before_completion() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_example("api-demo", "[api-demo]\nallow-process = [\"sh\"]\n");
+    let script = dir.path().join("stream.sh");
+    let gate = dir.path().join("continue");
+    std::fs::write(&script, "printf 'first\\n'\nwhile [ ! -f \"$1\" ]; do sleep .01; done\nprintf tail\nprintf err >&2\n")?;
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run api-demo/stream sh '{}' '{}'<ret>",
+            script.display(),
+            gate.display()
+        ),
+    )
+    .await;
+    assert_eq!(
+        wait_for_status(&mut app, |message| message.starts_with("chunk:")).await,
+        "chunk:first\n"
+    );
+    assert!(!gate.exists());
+    keys(&mut app, "ix<esc>").await;
+    std::fs::write(gate, "continue")?;
+    assert_eq!(
+        wait_for_status(&mut app, |message| message.starts_with("done:")).await,
+        "done:Some(0):tail:err"
+    );
+    assert_eq!(text(&app), "xa\n");
+    Ok(())
+}
