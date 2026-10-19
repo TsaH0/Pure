@@ -9,6 +9,7 @@ thread_local! {
     static SLEEP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static APPEND_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENT_UI: Cell<bool> = const { Cell::new(false) };
+    static FAILED_PICKER: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
 struct TestPlugin;
@@ -34,8 +35,13 @@ impl Plugin for TestPlugin {
                 "spawn",
                 "interactive",
                 "picker",
+                "data-picker",
                 "push-items",
                 "push-items-fail",
+                "set-items-fail",
+                "mixed-items-fail",
+                "live-fail",
+                "query-failed",
                 "kill",
                 "popup",
                 "prompt",
@@ -179,21 +185,64 @@ impl Plugin for TestPlugin {
                     },
                 )?;
             }
-            "picker" => {
-                editor::pick(
+            "picker" | "data-picker" => {
+                let data = name == "data-picker";
+                let id = editor::pick(
                     Picker::new("Test", args.into_iter().map(Item::text).collect()),
-                    |choice| {
-                        editor::set_status(&format!(
-                            "choice:{:?}:{:?}",
-                            choice.indices, choice.action
-                        ));
+                    move |choice| {
+                        if data {
+                            editor::set_status(&format!(
+                                "data:{:?}",
+                                choice
+                                    .items
+                                    .iter()
+                                    .map(|item| item.data.as_str())
+                                    .collect::<Vec<_>>()
+                            ));
+                        } else {
+                            editor::set_status(&format!(
+                                "choice:{:?}:{:?}",
+                                choice.indices, choice.action
+                            ));
+                        }
                         Ok(())
                     },
                 )?;
+                if data {
+                    editor::set_status(&format!("data-picker:{id}"));
+                }
             }
             "push-items-fail" => {
                 editor::push_items(request_id(&args)?, vec![Item::text("discarded")])?;
                 return Err("failed after push".into());
+            }
+            "set-items-fail" | "mixed-items-fail" => {
+                let id = request_id(&args)?;
+                if name == "mixed-items-fail" {
+                    editor::push_items(id, vec![Item::text("discarded push")])?;
+                }
+                editor::set_items(id, vec![Item::text("discarded replacement")])?;
+                editor::push_items(id, vec![Item::text("discarded after replacement")])?;
+                return Err("failed after replacement".into());
+            }
+            "live-fail" => {
+                let id = editor::pick_live(
+                    Picker::new("Failed", vec![Item::text("leaked")]),
+                    |_, _| {
+                        editor::log("leaked query handler called");
+                        Ok(Some(vec![]))
+                    },
+                    |_| Ok(()),
+                )?;
+                FAILED_PICKER.set(Some(id));
+                return Err("failed after live picker".into());
+            }
+            "query-failed" => {
+                requests::picker_query(
+                    FAILED_PICKER.get().ok_or("no failed picker")?,
+                    "query".into(),
+                );
+                editor::set_status("checked");
             }
             "push-items" => {
                 editor::push_items(request_id(&args)?, vec![Item::text("new item")])?;

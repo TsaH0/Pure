@@ -612,6 +612,49 @@ async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fresh_sdk_02_picker_data_matches_the_ui_after_a_failed_push() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_v2(ALL, "");
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        dir.path().join("testplugin2/plugin.wasm"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(
+        &mut app,
+        ":plugin-run testplugin2/data-picker first second<ret>",
+    )
+    .await;
+    let id = status(&app)
+        .0
+        .strip_prefix("data-picker:")
+        .unwrap()
+        .parse::<u32>()?;
+    helix_term::job::dispatch_callback(helix_term::job::Callback::EditorCompositorJobs(Box::new(
+        move |editor, _, jobs| {
+            assert!(helix_term::plugins::run_command(
+                editor,
+                jobs,
+                "testplugin2/push-items-fail",
+                vec![id.to_string()]
+            )
+            .is_err());
+            helix_term::plugins::run_command(
+                editor,
+                jobs,
+                "testplugin2/push-items",
+                vec![id.to_string()],
+            )
+            .unwrap();
+        },
+    )))
+    .await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<down><down><ret>").await;
+    assert_eq!(status(&app).0, "data:[\"new item\"]");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_prompts_return_the_answer() -> anyhow::Result<()> {
     let (mut app, _dir) = app_with_v2(ALL, "");
     keys(&mut app, ":plugin-run testplugin2/prompt one two<ret>").await;

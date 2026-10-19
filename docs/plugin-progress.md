@@ -314,6 +314,33 @@ cancelled spawned/interactive scripts never ran and editing/saving continued.
 The existing chooser check still ran its program, received its selection,
 removed the chooser and restored the editor.
 
+## SDK picker rollback
+
+Failed commands now restore pre-existing picker data as well as dropping new
+request, query and item registries. Pushes record the original length;
+replacements move the original list into one undo entry per picker. A mixed
+push/replace sequence preserves the original prefix. Successful commands
+release the journal, and callbacks retain their existing semantics because
+the host applies their actions even when a Rust closure reports an error.
+This avoids cloning large item lists or accumulating one journal entry for
+every batch. No startup or idle work is added.
+
+Fresh 0.2 components test failed push, replacement and mixed updates, and
+discarding a failed live picker's handler. The editor regression selects a
+committed pushed row after a failed push and checks its data. Frozen 0.2
+fixtures stay immutable. This test exposed an integration-only picker bug:
+Rayon redraw callbacks lacked the owning Tokio runtime context and could
+abort the harness. Integration callbacks now capture that context; normal
+builds retain the original function callback. An adjacent queued-replacement
+selection race to investigate is recorded in Future TODOs.
+Validation after the harness fix: 73 host tests, 37 editor library tests and
+48 in-editor plugin tests passed. Formatting, warning-free workspace Clippy
+and SDK Clippy for wasm32-wasip2, and a normal build passed. Rebuilt all test
+and example components; frozen 0.2 digests are unchanged. Tmux with the fresh
+SDK confirmed ordered replacement/push, selection data matching the displayed
+last row, and editing/saving after closing the picker. The SDK remains on 0.2
+until the next migration task.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds

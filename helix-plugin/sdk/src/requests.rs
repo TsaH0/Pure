@@ -16,12 +16,23 @@ enum Completion {
     Prompt(PromptCallback),
 }
 
+enum ItemUndo {
+    Truncate(usize),
+    Replace(Vec<Item>),
+}
+
+struct CommandTransaction {
+    existing: std::collections::HashSet<RequestId>,
+    items: HashMap<RequestId, ItemUndo>,
+}
+
 thread_local! {
     static PENDING: RefCell<HashMap<RequestId, Completion>> = RefCell::new(HashMap::new());
     /// The items of open pickers, to hand the chosen ones to the callback.
     static PICKER_ITEMS: RefCell<HashMap<RequestId, Vec<Item>>> = RefCell::new(HashMap::new());
     /// Live pickers' query handlers.
     static QUERIES: RefCell<HashMap<RequestId, QueryCallback>> = RefCell::new(HashMap::new());
+    static COMMAND: RefCell<Option<CommandTransaction>> = const { RefCell::new(None) };
 }
 
 /// A picker result. Cancellation has no items, indices or open action.
@@ -219,7 +230,8 @@ pub fn set_items(id: RequestId, items: Vec<Item>) -> Result<(), String> {
     ui::set_items(id, &items)?;
     PICKER_ITEMS.with_borrow_mut(|open| {
         if let Some(open) = open.get_mut(&id) {
-            *open = items;
+            let previous = std::mem::replace(open, items);
+            record_replacement(id, previous);
         }
     });
     Ok(())
@@ -255,6 +267,17 @@ pub fn push_items(id: RequestId, items: Vec<Item>) -> Result<(), String> {
     ui::push_items(id, &items)?;
     PICKER_ITEMS.with_borrow_mut(|open| {
         if let Some(open) = open.get_mut(&id) {
+            COMMAND.with_borrow_mut(|transaction| {
+                if let Some(transaction) = transaction
+                    .as_mut()
+                    .filter(|transaction| transaction.existing.contains(&id))
+                {
+                    transaction
+                        .items
+                        .entry(id)
+                        .or_insert(ItemUndo::Truncate(open.len()));
+                }
+            });
             open.extend(items);
         }
     });
@@ -341,13 +364,66 @@ pub fn picker_query(id: RequestId, query: String) {
 }
 
 pub(crate) fn run_command(f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-    let existing: std::collections::HashSet<_> =
-        PENDING.with_borrow(|pending| pending.keys().copied().collect());
+    // Only the outer command export is a host transaction. A nested Rust
+    // helper still belongs to that same call.
+    if COMMAND.with_borrow(Option::is_some) {
+        return f();
+    }
+    let existing = PENDING.with_borrow(|pending| pending.keys().copied().collect());
+    COMMAND.with_borrow_mut(|command| {
+        *command = Some(CommandTransaction {
+            existing,
+            items: HashMap::new(),
+        })
+    });
     let result = f();
-    if result.is_err() {
-        PENDING.with_borrow_mut(|pending| pending.retain(|id, _| existing.contains(id)));
+    if let Some(transaction) = COMMAND.with_borrow_mut(Option::take) {
+        if result.is_err() {
+            PICKER_ITEMS.with_borrow_mut(|open| {
+                for (id, undo) in transaction.items {
+                    if let Some(items) = open.get_mut(&id) {
+                        match undo {
+                            ItemUndo::Truncate(len) => items.truncate(len),
+                            ItemUndo::Replace(previous) => *items = previous,
+                        }
+                    }
+                }
+                open.retain(|id, _| transaction.existing.contains(id));
+            });
+            QUERIES.with_borrow_mut(|queries| {
+                queries.retain(|id, _| transaction.existing.contains(id))
+            });
+            PENDING.with_borrow_mut(|pending| {
+                pending.retain(|id, _| transaction.existing.contains(id))
+            });
+        }
     }
     result
+}
+
+/// Keep one undo entry per pre-existing picker, moving replacement lists
+/// rather than cloning them. New requests are removed wholesale on failure.
+fn record_replacement(id: RequestId, mut previous: Vec<Item>) {
+    COMMAND.with_borrow_mut(|transaction| {
+        let Some(transaction) = transaction
+            .as_mut()
+            .filter(|transaction| transaction.existing.contains(&id))
+        else {
+            return;
+        };
+        use std::collections::hash_map::Entry;
+        match transaction.items.entry(id) {
+            Entry::Vacant(entry) => {
+                entry.insert(ItemUndo::Replace(previous));
+            }
+            Entry::Occupied(mut entry) => {
+                if let ItemUndo::Truncate(len) = entry.get() {
+                    previous.truncate(*len);
+                    entry.insert(ItemUndo::Replace(previous));
+                }
+            }
+        }
+    });
 }
 
 fn report(result: Result<(), String>) {

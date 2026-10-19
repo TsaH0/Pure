@@ -188,6 +188,23 @@ impl<T, D> Injector<T, D> {
 
 type ColumnFormatFn<T, D> = for<'a> fn(&'a T, &'a D) -> Cell<'a>;
 
+fn redraw_callback() -> Arc<dyn Fn() + Send + Sync> {
+    #[cfg(feature = "integration")]
+    {
+        // Nucleo invokes this on Rayon threads. Integration notifications are
+        // local to a Tokio runtime, so retain the owning application's context.
+        let runtime = tokio::runtime::Handle::current();
+        Arc::new(move || {
+            let _entered = runtime.enter();
+            helix_event::request_redraw();
+        })
+    }
+    #[cfg(not(feature = "integration"))]
+    {
+        Arc::new(helix_event::request_redraw)
+    }
+}
+
 pub struct Column<T, D> {
     name: Arc<str>,
     format: ColumnFormatFn<T, D>,
@@ -288,12 +305,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let columns: Arc<[_]> = columns.into_iter().collect();
         let matcher_columns = columns.iter().filter(|col| col.filter).count() as u32;
         assert!(matcher_columns > 0);
-        let matcher = Nucleo::new(
-            Config::DEFAULT,
-            Arc::new(helix_event::request_redraw),
-            None,
-            matcher_columns,
-        );
+        let matcher = Nucleo::new(Config::DEFAULT, redraw_callback(), None, matcher_columns);
         let streamer = Injector {
             dst: matcher.injector(),
             columns,
@@ -323,12 +335,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .filter(|col: &&Column<T, D>| col.filter)
             .count() as u32;
         assert!(matcher_columns > 0);
-        let matcher = Nucleo::new(
-            Config::DEFAULT,
-            Arc::new(helix_event::request_redraw),
-            None,
-            matcher_columns,
-        );
+        let matcher = Nucleo::new(Config::DEFAULT, redraw_callback(), None, matcher_columns);
         let injector = matcher.injector();
         for item in options {
             inject_nucleo_item(&injector, &columns, item, &editor_data);

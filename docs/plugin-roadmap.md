@@ -490,11 +490,16 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   kills now share the call's ordered UI effects, so a streaming process cannot
   return items before its picker is installed. Starts validate the enabled
   owner and outstanding request; same-call spawn/kill ordering is tested.
-- [ ] **SDK picker rollback:** failed commands currently retain changes to
-  `PICKER_ITEMS` and can leak new query/item registries. A failed push followed
-  by a successful push can give the choice callback stale item data. Journal
-  command item updates and commit only on success; clean new registries on
-  error. Test fresh SDK components without replacing frozen ABI fixtures.
+- [x] **SDK picker rollback:** commands journal pre-existing picker changes,
+  retaining an original length or moving the original list (no full-list
+  clone). Failure restores items and clears new item/query/callback registries.
+  Fresh SDK components test failed push, replacement and mixed updates; all
+  original 0.2 compatibility tests still use frozen fixtures.
+- [ ] **Atomic queued picker replacement:** SDK item lists change before
+  queued UI effects run. Race Enter against a pending same-generation
+  `set-items`, ensuring that selection and guest data use the same list
+  revision. Also test UI actions across nested `run-command`; a scheduling
+  fix must preserve recursion limits and avoid idle wake-ups.
 - [ ] **Preview truncation label:** the panel title counts matched source
   lines, so generated multi-line replacements can be truncated without a
   "showing" label. Track displayed-row truncation separately, retaining the

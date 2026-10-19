@@ -812,13 +812,18 @@ fn testplugin2() -> (PluginHost, tempfile::TempDir) {
 }
 
 fn testplugin2_with(permissions: &[&str]) -> (PluginHost, tempfile::TempDir) {
-    let root = tempfile::tempdir().unwrap();
-    let dir = plugin_dir(
-        root.path(),
-        "testplugin2",
-        &fixture("tests/fixtures/testplugin2-v0.2.wasm"),
+    testplugin2_component(
         permissions,
-    );
+        &fixture("tests/fixtures/testplugin2-v0.2.wasm"),
+    )
+}
+
+fn testplugin2_component(
+    permissions: &[&str],
+    component: &Path,
+) -> (PluginHost, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(root.path(), "testplugin2", component, permissions);
     let path = dir.join("plugin.toml");
     let source = std::fs::read_to_string(&path)
         .unwrap()
@@ -827,6 +832,70 @@ fn testplugin2_with(permissions: &[&str]) -> (PluginHost, tempfile::TempDir) {
     let mut host = host();
     host.load(&dir, "{}").unwrap();
     (host, root)
+}
+
+#[test]
+fn fresh_sdk_02_rolls_back_failed_picker_item_changes() {
+    let (mut host, _root) = testplugin2_component(ALL, &fixture("tests/fixtures/testplugin2.wasm"));
+    for failure in ["push-items-fail", "set-items-fail", "mixed-items-fail"] {
+        let actions = host
+            .run_command(
+                "testplugin2",
+                "data-picker",
+                args(&["first", "second"]),
+                Snapshot::default(),
+            )
+            .unwrap();
+        let id = actions
+            .iter()
+            .find_map(|action| match action {
+                Action::ShowPicker { id, .. } => Some(*id),
+                _ => None,
+            })
+            .unwrap();
+        assert!(host
+            .run_command(
+                "testplugin2",
+                failure,
+                vec![id.to_string()],
+                Snapshot::default()
+            )
+            .is_err());
+        host.run_command(
+            "testplugin2",
+            "push-items",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+        let actions = host
+            .callback(
+                "testplugin2",
+                Callback::PickerDone {
+                    id,
+                    result: PickerResult::Accepted((vec![2], OpenAction::Replace)),
+                },
+                &Snapshot::default(),
+            )
+            .unwrap();
+        assert_eq!(statuses(&actions), ["data:[\"new item\"]"], "{failure}");
+    }
+}
+
+#[test]
+fn fresh_sdk_02_discards_failed_live_picker_registries() {
+    let (mut host, _root) = testplugin2_component(ALL, &fixture("tests/fixtures/testplugin2.wasm"));
+    assert!(host
+        .run_command("testplugin2", "live-fail", vec![], Snapshot::default())
+        .is_err());
+    let actions = host
+        .run_command("testplugin2", "query-failed", vec![], Snapshot::default())
+        .unwrap();
+    assert_eq!(statuses(&actions), ["checked"]);
+    assert!(!actions
+        .iter()
+        .any(|action| matches!(action, Action::Error(_))));
+    assert!(host.log_lines("testplugin2").unwrap().is_empty());
 }
 
 fn process_done(id: u32, stdout: &str) -> Callback {
