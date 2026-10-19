@@ -833,6 +833,101 @@ fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, temp
     (app, dir)
 }
 
+/// Process an input burst in one compositor callback, without an intervening
+/// render or debounce job that could hide a stale matcher snapshot.
+async fn picker_input_burst(app: &mut Application, keys: &str) {
+    let keys = helix_view::input::parse_macro(keys).unwrap();
+    helix_term::job::dispatch_callback(helix_term::job::Callback::EditorCompositorJobs(Box::new(
+        move |editor, compositor, jobs| {
+            for key in keys {
+                compositor.handle_event(
+                    &helix_view::input::Event::Key(key),
+                    &mut helix_term::compositor::Context {
+                        editor,
+                        jobs,
+                        scroll: None,
+                    },
+                );
+            }
+        },
+    )))
+    .await;
+    deliver_events(app).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_live_query_input_invalidates_selection_before_debounce() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(&mut app, ":plugin-run testplugin3/live<ret>").await;
+    picker_input_burst(&mut app, "a<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "cancelled",
+        "the initial row cannot be accepted for a new query"
+    );
+    assert!(
+        helix_term::plugins::log_lines("testplugin3")?.is_empty(),
+        "a closed picker's queued query is dropped"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_live_pickers_ignore_stale_set_and_push_results() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(&mut app, ":plugin-run testplugin3/live<ret>").await;
+    keys(&mut app, "a").await;
+    assert!(helix_term::plugins::log_lines("testplugin3")?
+        .iter()
+        .any(|line| line.contains("query:1:a")));
+    helix_term::job::dispatch_callback(helix_term::job::Callback::EditorCompositorJobs(Box::new(
+        |editor, _, jobs| {
+            for args in [vec!["0", "set"], vec!["0", "push", "old", "older"]] {
+                helix_term::plugins::run_command(
+                    editor,
+                    jobs,
+                    "testplugin3/items",
+                    args.into_iter().map(str::to_owned).collect(),
+                )
+                .unwrap();
+            }
+        },
+    )))
+    .await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<down><ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "picked:[0]",
+        "only the current generation's row remains"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_03_live_queries_that_revert_still_get_a_new_generation() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3();
+    keys(&mut app, ":plugin-run testplugin3/live<ret>").await;
+    keys(&mut app, "a").await;
+    picker_input_burst(&mut app, "b<backspace>").await;
+    let lines = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        lines.iter().any(|line| line.contains("query:1:a")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("query:3:a")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("query:2:ab")),
+        "the intermediate query is debounced"
+    );
+    keys(&mut app, "<ret>").await;
+    assert_eq!(status(&app).0, "picked:[0]");
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn api_03_streams_before_exit_and_callbacks_see_edits_in_order() -> anyhow::Result<()> {
     let (mut app, dir) =

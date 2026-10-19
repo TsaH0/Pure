@@ -191,8 +191,10 @@ interface ui {
     cancelled,
   }
   show-picker: func(picker: picker) -> result<request-id, string>;
+  /// Live pickers require the generation supplied with on-picker-query;
+  /// stale batches are ignored. Use none for static pickers.
   push-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
-  /// Replace the items of an open picker (for live pickers).
+  /// Replace an open picker's items, with the same generation rules.
   set-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
 
   record popup {
@@ -224,7 +226,8 @@ interface callbacks {
   use ui.{picker-result};
   on-process-done: func(id: request-id, %result: result<output, string>);
   on-picker-done: func(id: request-id, %result: picker-result);
-  /// What the user typed in a live picker.
+  /// What the user typed in a live picker. Capture this generation when
+  /// starting background work and send it with every result batch.
   on-picker-query: func(id: request-id, generation: u64, query: string);
   /// Output of a program started with `stream`.
   on-process-output: func(id: request-id, chunk: string);

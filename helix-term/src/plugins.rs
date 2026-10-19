@@ -639,14 +639,29 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 ),
             },
             Action::Kill { plugin, id } => process::kill(&plugin, id),
-            Action::ShowPicker { plugin, id, picker } => ui.push(Box::new(move |_, compositor| {
-                picker::show(compositor, plugin, id, picker)
+            Action::ShowPicker {
+                plugin,
+                id,
+                picker,
+                generation,
+            } => ui.push(Box::new(move |_, compositor| {
+                picker::show(compositor, plugin, id, picker, generation)
             })),
-            Action::PushItems { plugin, id, items } => ui.push(Box::new(move |_, compositor| {
-                picker::push_items(compositor, &plugin, id, items)
+            Action::PushItems {
+                plugin,
+                id,
+                items,
+                generation,
+            } => ui.push(Box::new(move |_, compositor| {
+                picker::push_items(compositor, &plugin, id, generation, items)
             })),
-            Action::SetItems { plugin, id, items } => ui.push(Box::new(move |_, compositor| {
-                picker::set_items(compositor, &plugin, id, items)
+            Action::SetItems {
+                plugin,
+                id,
+                items,
+                generation,
+            } => ui.push(Box::new(move |_, compositor| {
+                picker::set_items(compositor, &plugin, id, generation, items)
             })),
             Action::Popup {
                 markdown,

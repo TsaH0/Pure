@@ -185,9 +185,7 @@ impl process::Host for State {
 }
 impl ui::Host for State {
     fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
-        if picker.live {
-            return Err("API 0.3 live query generations are not enabled yet".into());
-        }
+        let live = picker.live;
         State::show_picker(
             self,
             crate::PickerSpec {
@@ -195,8 +193,9 @@ impl ui::Host for State {
                 columns: picker.columns,
                 items: picker.items.into_iter().map(item).collect(),
                 initial: picker.initial,
-                live: false,
+                live,
             },
+            live,
         )
     }
     fn push_items(
@@ -205,10 +204,7 @@ impl ui::Host for State {
         generation: Option<u64>,
         items: Vec<ui::Item>,
     ) -> std::result::Result<(), String> {
-        if generation.is_some() {
-            return Err("API 0.3 live query generations are not enabled yet".into());
-        }
-        State::push_items(self, id, items.into_iter().map(item).collect())
+        State::push_items(self, id, generation, items.into_iter().map(item).collect())
     }
     fn set_items(
         &mut self,
@@ -216,10 +212,7 @@ impl ui::Host for State {
         generation: Option<u64>,
         items: Vec<ui::Item>,
     ) -> std::result::Result<(), String> {
-        if generation.is_some() {
-            return Err("API 0.3 live query generations are not enabled yet".into());
-        }
-        State::set_items(self, id, items.into_iter().map(item).collect())
+        State::set_items(self, id, generation, items.into_iter().map(item).collect())
     }
     fn show_popup(&mut self, popup: ui::Popup) -> std::result::Result<u32, String> {
         State::show_popup_with_id(self, popup.markdown, popup.centered)
@@ -309,8 +302,14 @@ pub(super) async fn callback(
             };
             callbacks.call_on_picker_done(store, *id, &result).await
         }
-        Callback::PickerQuery { id, query } => {
-            callbacks.call_on_picker_query(store, *id, 0, query).await
+        Callback::PickerQuery {
+            id,
+            query,
+            generation,
+        } => {
+            callbacks
+                .call_on_picker_query(store, *id, generation.unwrap_or_default(), query)
+                .await
         }
         Callback::PromptDone { id, result } => {
             callbacks

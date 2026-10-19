@@ -2,7 +2,7 @@
 //! pickers).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use futures_util::future::{BoxFuture, FutureExt};
@@ -35,6 +35,7 @@ pub struct Data {
     id: u32,
     /// Items so far, to number pushed ones.
     len: AtomicU32,
+    generation: Option<AtomicU64>,
 }
 
 type PluginPicker = Picker<Item, Data>;
@@ -96,13 +97,23 @@ fn live_query(
         Callback::PickerQuery {
             id: data.id,
             query: query.to_owned(),
+            generation: data
+                .generation
+                .as_ref()
+                .map(|generation| generation.load(Ordering::Relaxed)),
         },
     );
     async { Ok(()) }.boxed()
 }
 
 /// Show the picker `spec` for `plugin`'s request `id`.
-pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSpec) {
+pub fn show(
+    compositor: &mut Compositor,
+    plugin: String,
+    id: u32,
+    spec: PickerSpec,
+    generation: Option<u64>,
+) {
     // One plugin picker at a time: the previous one is cancelled. (Pickers
     // are found by type, so two would get each other's items and queries.)
     if let Some(Overlay { content, .. }) = compositor.find::<Overlay<PluginPicker>>() {
@@ -142,6 +153,7 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
         plugin: plugin.clone(),
         id,
         len: AtomicU32::new(len),
+        generation: generation.map(AtomicU64::new),
     };
     let on_accept = plugin.clone();
     let on_close = plugin.clone();
@@ -183,11 +195,23 @@ pub fn show(compositor: &mut Compositor, plugin: String, id: u32, spec: PickerSp
         picker = picker.with_initial_cursor(initial);
     }
     if live {
+        if generation.is_some() {
+            picker = picker.with_query_generations(query_changed);
+        }
         // The plugin hears about the query once the user types; until then
         // the picker shows the initial items.
         picker = picker.with_dynamic_query(live_query, Some(100));
     }
     compositor.push(Box::new(ui::overlay::overlaid(picker)));
+}
+
+fn query_changed(picker: &mut PluginPicker, generation: u64) {
+    let data = picker.editor_data();
+    data.len.store(0, Ordering::Relaxed);
+    if let Some(current) = &data.generation {
+        current.store(generation, Ordering::Relaxed);
+    }
+    super::with_host(|host| host.set_picker_generation(&data.plugin, data.id, generation));
 }
 
 /// `plugin`'s open picker `id`, if it is still open.
@@ -215,17 +239,95 @@ fn push(picker: &PluginPicker, items: Vec<PickerItem>) {
 }
 
 /// Add items to `plugin`'s open picker `id`.
-pub fn push_items(compositor: &mut Compositor, plugin: &str, id: u32, items: Vec<PickerItem>) {
+pub fn push_items(
+    compositor: &mut Compositor,
+    plugin: &str,
+    id: u32,
+    generation: Option<u64>,
+    items: Vec<PickerItem>,
+) {
     if let Some(picker) = find(compositor, plugin, id) {
-        push(picker, items);
+        if current_generation(picker) == generation {
+            push(picker, items);
+        }
     }
 }
 
 /// Replace the items of `plugin`'s open picker `id`.
-pub fn set_items(compositor: &mut Compositor, plugin: &str, id: u32, items: Vec<PickerItem>) {
+pub fn set_items(
+    compositor: &mut Compositor,
+    plugin: &str,
+    id: u32,
+    generation: Option<u64>,
+    items: Vec<PickerItem>,
+) {
     if let Some(picker) = find(compositor, plugin, id) {
-        drop(picker.restart());
+        if current_generation(picker) != generation {
+            return;
+        }
+        picker.clear_items();
         picker.editor_data().len.store(0, Ordering::Relaxed);
         push(picker, items);
+    }
+}
+
+fn current_generation(picker: &PluginPicker) -> Option<u64> {
+    picker
+        .editor_data()
+        .generation
+        .as_ref()
+        .map(|generation| generation.load(Ordering::Relaxed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helix_view::graphics::Rect;
+
+    #[tokio::test]
+    async fn queued_stale_batches_cannot_change_the_current_picker() {
+        let mut compositor = Compositor::new(Rect::new(0, 0, 80, 24));
+        show(
+            &mut compositor,
+            "generation-test".into(),
+            123,
+            PickerSpec {
+                title: "Live".into(),
+                columns: vec!["Name".into()],
+                items: vec![],
+                initial: None,
+                live: true,
+            },
+            Some(0),
+        );
+        let row = || PickerItem {
+            columns: vec!["current".into()],
+            data: "current".into(),
+            preview: None,
+        };
+        query_changed(find(&mut compositor, "generation-test", 123).unwrap(), 1);
+        set_items(
+            &mut compositor,
+            "generation-test",
+            123,
+            Some(1),
+            vec![row()],
+        );
+        set_items(&mut compositor, "generation-test", 123, Some(0), vec![]);
+        push_items(
+            &mut compositor,
+            "generation-test",
+            123,
+            Some(0),
+            vec![row(), row()],
+        );
+        assert_eq!(
+            find(&mut compositor, "generation-test", 123)
+                .unwrap()
+                .editor_data()
+                .len
+                .load(Ordering::Relaxed),
+            1
+        );
     }
 }

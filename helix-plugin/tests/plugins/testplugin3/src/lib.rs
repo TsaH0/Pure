@@ -8,6 +8,14 @@ thread_local! {
     static POPUP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static PICKER: Cell<Option<u32>> = const { Cell::new(None) };
+}
+fn item(text: &str) -> helix::plugin::ui::Item {
+    helix::plugin::ui::Item {
+        columns: vec![text.into()],
+        data: text.into(),
+        preview: None,
+    }
 }
 fn record(event: String) {
     host::log(&format!("event:{event}"));
@@ -31,6 +39,10 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "stream-fail",
                 "output-events",
                 "kill",
+                "live",
+                "live-fail",
+                "static",
+                "items",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -54,6 +66,43 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     }
     fn run_command(name: String, args: Vec<String>) -> Result<(), String> {
         match name.as_str() {
+            "live" | "live-fail" | "static" => {
+                let id = helix::plugin::ui::show_picker(&helix::plugin::ui::Picker {
+                    title: "Generations".into(),
+                    columns: vec!["Name".into()],
+                    items: vec![item("initial")],
+                    initial: None,
+                    live: name != "static",
+                })?;
+                PICKER.set(Some(id));
+                if name == "live-fail" {
+                    return Err("failed after picker".into());
+                }
+                host::set_status(&format!("picker:{id}"));
+                Ok(())
+            }
+            "items" => {
+                let id = PICKER.get().ok_or("no picker")?;
+                let generation = match args.first().map(String::as_str) {
+                    Some("-") => None,
+                    Some(generation) => Some(
+                        generation
+                            .parse::<u64>()
+                            .map_err(|error| error.to_string())?,
+                    ),
+                    None => return Err("missing generation".into()),
+                };
+                let items = args
+                    .iter()
+                    .skip(2)
+                    .map(|text| item(text))
+                    .collect::<Vec<_>>();
+                match args.get(1).map(String::as_str) {
+                    Some("push") => helix::plugin::ui::push_items(id, generation, &items),
+                    Some("set") => helix::plugin::ui::set_items(id, generation, &items),
+                    _ => Err("missing push/set".into()),
+                }
+            }
             "stream" | "stream-fail" => {
                 let id = helix::plugin::process::spawn(
                     &args,
@@ -188,8 +237,23 @@ impl exports::helix::plugin::callbacks::Guest for TestPlugin {
         OUTPUT.with_borrow_mut(|events| events.push(output.clone()));
         host::set_status(&output);
     }
-    fn on_picker_done(_id: u32, _result: helix::plugin::ui::PickerResult) {}
-    fn on_picker_query(_id: u32, _generation: u64, _query: String) {}
+    fn on_picker_done(_id: u32, result: helix::plugin::ui::PickerResult) {
+        host::set_status(&match result {
+            helix::plugin::ui::PickerResult::Accepted((indices, _)) => {
+                format!("picked:{indices:?}")
+            }
+            helix::plugin::ui::PickerResult::Cancelled => "cancelled".into(),
+        });
+    }
+    fn on_picker_query(id: u32, generation: u64, query: String) {
+        record(format!("query:{generation}:{query}"));
+        helix::plugin::ui::set_items(
+            id,
+            Some(generation),
+            &[item(&format!("{query}:{generation}"))],
+        )
+        .unwrap();
+    }
     fn on_process_output(_id: u32, chunk: String) {
         let text = host::current_document()
             .and_then(|doc| host::text(doc).ok())

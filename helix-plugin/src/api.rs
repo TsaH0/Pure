@@ -203,13 +203,13 @@ impl process::Host for State {
 }
 impl ui::Host for State {
     fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
-        State::show_picker(self, picker)
+        State::show_picker(self, picker, false)
     }
     fn push_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
-        State::push_items(self, id, items)
+        State::push_items(self, id, None, items)
     }
     fn set_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
-        State::set_items(self, id, items)
+        State::set_items(self, id, None, items)
     }
     fn show_popup(&mut self, markdown: String) -> std::result::Result<(), String> {
         State::show_popup(self, markdown)
@@ -347,7 +347,7 @@ impl Instance {
                     .call_on_prompt_done(store, *id, result.as_deref())
                     .await
             }
-            super::Callback::PickerQuery { id, query } => {
+            super::Callback::PickerQuery { id, query, .. } => {
                 callbacks.call_on_picker_query(store, *id, query).await
             }
         }

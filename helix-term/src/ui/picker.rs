@@ -276,6 +276,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     /// An event handler for syntax highlighting the currently previewed file.
     preview_highlight_handler: Sender<Arc<Path>>,
     dynamic_query_handler: Option<Sender<DynamicQueryChange>>,
+    query_generation: Option<u64>,
+    on_query_generation: Option<fn(&mut Self, u64)>,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -404,6 +406,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             file_fn: None,
             preview_highlight_handler: PreviewHighlightHandler::<T, D>::default().spawn(),
             dynamic_query_handler: None,
+            query_generation: None,
+            on_query_generation: None,
         }
     }
 
@@ -414,6 +418,14 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         self.version.fetch_add(1, atomic::Ordering::Relaxed);
         self.matcher.restart(false);
         self.injector()
+    }
+
+    /// Clear items and the selectable snapshot immediately, cancelling old injectors.
+    pub fn clear_items(&mut self) {
+        self.version.fetch_add(1, atomic::Ordering::Relaxed);
+        // A stale snapshot must not remain selectable during debounce.
+        self.matcher.restart(true);
+        self.cursor = 0;
     }
 
     pub fn editor_data(&self) -> &D {
@@ -474,14 +486,29 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         callback: DynQueryCallback<T, D>,
         debounce_ms: Option<u64>,
     ) -> Self {
-        let handler = DynamicQueryHandler::new(callback, debounce_ms).spawn();
+        let handler = DynamicQueryHandler::new(
+            callback,
+            debounce_ms,
+            self.query_generation,
+            self.version.clone(),
+        )
+        .spawn();
         let event = DynamicQueryChange {
             query: self.primary_query(),
             // Treat the initial query as a paste.
             is_paste: true,
+            generation: self.query_generation,
         };
         helix_event::send_blocking(&handler, event);
         self.dynamic_query_handler = Some(handler);
+        self
+    }
+
+    /// Opt in to invalidating results immediately on primary-query changes,
+    /// including queries that revert before the debounce finishes.
+    pub fn with_query_generations(mut self, on_change: fn(&mut Self, u64)) -> Self {
+        self.query_generation = Some(0);
+        self.on_query_generation = Some(on_change);
         self
     }
 
@@ -575,6 +602,17 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         }
         // If the query has meaningfully changed, reset the cursor to the top of the results.
         self.cursor = 0;
+        if let Some(generation) = self.query_generation {
+            let primary = &self.columns[self.primary_column].name;
+            if self.query.get(primary) != old_query.get(primary) {
+                let generation = generation.wrapping_add(1);
+                self.query_generation = Some(generation);
+                self.clear_items();
+                if let Some(on_change) = self.on_query_generation {
+                    on_change(self, generation);
+                }
+            }
+        }
         // Have nucleo reparse each changed column.
         for (i, column) in self
             .columns
@@ -610,6 +648,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             let event = DynamicQueryChange {
                 query: self.primary_query(),
                 is_paste,
+                generation: self.query_generation,
             };
             helix_event::send_blocking(handler, event);
         }

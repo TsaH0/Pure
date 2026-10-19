@@ -10,10 +10,11 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   access, workspace info), M6.1 (save, close and selection events).
 - Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
   (benchmarks).
-- Done: review-fix regression coverage and M11.1, M11.2, M11.4–M11.6.
-- Next: M10 (API 0.3), including M11.3 query generations. Frozen 0.2
+- Done: review-fix regression coverage and M11, including query generations
+  in the API 0.3 host/editor.
+- Next: M10 (API 0.3). Frozen 0.2
   fixtures, the third host world, positioned opens, popup lifecycle and event
-  hooks and streaming are implemented. Query generations, SDK/finder migration
+  hooks, streaming and query generations are implemented. SDK/finder migration
   and guide updates remain open. Follow-up findings are in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
@@ -170,8 +171,8 @@ spaces opening in a split at line 2, column 3 while preserving the first view.
 Validation: 66 host tests, 32 editor library tests and 36 in-editor plugin tests
 passed; formatting, warning-free workspace Clippy and a normal build passed.
 
-Remaining 0.3 abilities return explicit pending-feature errors in the adapter
-until implemented: live query generations.
+All 0.3 host/editor abilities are implemented. SDK helpers and examples still
+need their migration before the SDK default switches.
 The SDK and examples remain on 0.2. M10.1/M10.2 stay open until the SDK/finder
 migration; then finish guide and full-suite validation. No older WIT changed.
 
@@ -191,8 +192,7 @@ targeted context tests also passed. Tmux confirmed centering before/after a
 terminal resize and the Esc close callback. Fixtures rebuilt; formatting,
 warning-free workspace Clippy and normal builds passed.
 
-Live generations remain before the SDK/finder/
-guide migration. A pre-existing SDK picker-registry rollback issue found
+The SDK/finder/guide migration remains. A pre-existing SDK picker-registry rollback issue found
 while reviewing callback ownership is recorded in the roadmap for SDK work.
 
 ## M10.4 Command, focus and idle events
@@ -245,7 +245,7 @@ Real-component and editor tests cover callback order, editing between chunks,
 completion tails, kill, spawn failure, frozen 0.2 behavior, and request cleanup.
 Executor tests cover split UTF-8 bytes, cumulative output caps and delivery
 under backpressure beyond the pipe grace period. SDK/finder use remains open
-until query generations are implemented; the SDK still defaults to 0.2.
+and the SDK still defaults to 0.2.
 Validation: 69 host tests, 36 editor library tests and 42 in-editor plugin
 tests passed; fixtures rebuilt, formatting, warning-free workspace Clippy
 and a normal build passed. Tmux confirmed the first batch before process
@@ -255,6 +255,43 @@ timeslices; a per-thread rerun saw four across Tokio workers in the first
 1.2-second window, then zero in each of the next two windows. This records
 post-process settling activity separately from sustained idle polling;
 the latest release microbenchmarks remain the M10.4 measurements above.
+
+## M11.3 Live query generations (API 0.3 host/editor)
+
+Each live picker starts at generation zero. Input advances it and clears
+both items and the selectable matcher snapshot immediately, before debounce.
+The host resets item accounting without calling the guest; only the debounced
+query callback invokes wasm. Live `set-items`/`push-items` require the supplied
+generation, and stale updates are dropped before accounting. Static pickers
+use no generation. The UI checks again when applying queued batches.
+
+Debounce tracks generation as well as text, so changing away from a query
+and back still requests fresh results. Queued query jobs validate the original
+picker instance and generation before restarting or invoking its callback.
+Replacing items also clears the old selectable snapshot immediately. Request
+failure, completion and traps clean up generation state; the older WIT and
+frozen components remain unchanged.
+
+Host tests cover stale queries/sets/pushes, a full current-generation item
+cap, reset and cleanup, failed commands and static pickers. An editor library
+test covers stale UI batches already queued. In-editor tests cover accepting
+during the debounce gap, stale result batches and reverted query text.
+Performance: only opted-in live pickers do generation bookkeeping, using
+the existing debounce task; no polling or extra idle timer is added. SDK
+generation tokens and finder migration remain part of the M10 SDK switch.
+Validation: 71 host tests, 37 editor library tests and 45 in-editor plugin
+tests passed; formatting, warning-free workspace Clippy and a normal build
+passed. Fixtures rebuilt. Tmux confirmed initial/results replacement,
+generation 3 after reverting text, cancellation on Enter before debounce,
+and dropping a closed picker's query. With the live picker left open and
+settled, all editor threads showed zero additional scheduled timeslices
+over 1.2 seconds. Two adjacent findings (ignored picker titles and ordering
+process start with picker installation) are recorded in Future TODOs.
+Release measurements (1 / 5 / 20 plugins): cold 66.3 / 251.3 / 952.5 ms,
+warm 2.7 / 6.6 / 28.9 ms, event dispatch 0.083 ms. A quiet rerun measured
+cold 77.9 / 273.0 / 994.8 ms, warm 2.8 / 6.9 / 21.9 ms and dispatch
+0.158 ms. Both runs meet the 5 ms-per-cached-plugin budget; dispatch timings
+vary materially, so these do not establish a performance improvement.
 
 ## M0 API 0.2 groundwork (done)
 

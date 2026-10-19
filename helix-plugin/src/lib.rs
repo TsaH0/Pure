@@ -306,18 +306,21 @@ pub enum Action {
         plugin: String,
         id: u32,
         picker: PickerSpec,
+        generation: Option<u64>,
     },
     /// Add items to an open picker.
     PushItems {
         plugin: String,
         id: u32,
         items: Vec<PickerItem>,
+        generation: Option<u64>,
     },
     /// Replace the items of an open picker.
     SetItems {
         plugin: String,
         id: u32,
         items: Vec<PickerItem>,
+        generation: Option<u64>,
     },
     /// Show markdown in a popup.
     Popup {
@@ -382,6 +385,7 @@ pub enum Callback {
     PickerQuery {
         id: u32,
         query: String,
+        generation: Option<u64>,
     },
     PopupClosed {
         id: u32,
@@ -494,6 +498,7 @@ struct State {
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
     picker_items: HashMap<u32, usize>,
+    picker_generations: HashMap<u32, u64>,
     streaming: HashSet<u32>,
     process: ProcessGrant,
     files: FileGrant,
@@ -812,7 +817,7 @@ impl State {
         }
     }
 
-    fn show_picker(&mut self, picker: PickerSpec) -> Result<u32, String> {
+    fn show_picker(&mut self, picker: PickerSpec, generations: bool) -> Result<u32, String> {
         self.need_ui("show-picker")?;
         if picker.columns.is_empty() || picker.columns.len() > MAX_PICKER_COLUMNS {
             return Err(format!(
@@ -827,17 +832,39 @@ impl State {
         }
         let id = self.request(PendingKind::Picker)?;
         self.picker_items.insert(id, picker.items.len());
+        let generation = generations.then_some(0);
+        if let Some(generation) = generation {
+            self.picker_generations.insert(id, generation);
+        }
         self.actions.push(Action::ShowPicker {
             plugin: self.plugin.clone(),
             id,
             picker,
+            generation,
         });
         Ok(id)
     }
 
-    fn push_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+    fn accepts_picker_items(&self, id: u32, generation: Option<u64>) -> Result<bool, String> {
         if self.pending.get(&id) != Some(&PendingKind::Picker) {
             return Err(format!("no open picker with id {id}"));
+        }
+        match (self.picker_generations.get(&id), generation) {
+            (Some(current), Some(generation)) => Ok(*current == generation),
+            (Some(_), None) => Err("live picker updates need a query generation".into()),
+            (None, Some(_)) => Err("query generations require a live API 0.3 picker".into()),
+            (None, None) => Ok(true),
+        }
+    }
+
+    fn push_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<PickerItem>,
+    ) -> Result<(), String> {
+        if !self.accepts_picker_items(id, generation)? {
+            return Ok(());
         }
         if self.context == CallContext::Init {
             return Err("push-items can't be used from init".into());
@@ -852,13 +879,19 @@ impl State {
             plugin: self.plugin.clone(),
             id,
             items,
+            generation,
         });
         Ok(())
     }
 
-    fn set_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
-        if self.pending.get(&id) != Some(&PendingKind::Picker) {
-            return Err(format!("no open picker with id {id}"));
+    fn set_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<PickerItem>,
+    ) -> Result<(), String> {
+        if !self.accepts_picker_items(id, generation)? {
+            return Ok(());
         }
         if items.len() > MAX_PICKER_ITEMS {
             return Err(format!(
@@ -870,6 +903,7 @@ impl State {
             plugin: self.plugin.clone(),
             id,
             items,
+            generation,
         });
         Ok(())
     }
@@ -1073,6 +1107,7 @@ impl Plugin {
             Err(err) => {
                 state.pending.clear();
                 state.picker_items.clear();
+                state.picker_generations.clear();
                 state.streaming.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
@@ -1435,6 +1470,7 @@ impl PluginHost {
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
             picker_items: HashMap::new(),
+            picker_generations: HashMap::new(),
             streaming: HashSet::new(),
             process: settings.process,
             files: settings.files,
@@ -1541,6 +1577,7 @@ impl PluginHost {
         let name = plugin.manifest.name.clone();
         let pending = plugin.store.data().pending.clone();
         let picker_items = plugin.store.data().picker_items.clone();
+        let picker_generations = plugin.store.data().picker_generations.clone();
         let streaming = plugin.store.data().streaming.clone();
         let command_name = command.to_owned();
         let (result, actions) = plugin.call(
@@ -1554,6 +1591,7 @@ impl PluginHost {
         if let Err(err) = result {
             plugin.store.data_mut().pending = pending;
             plugin.store.data_mut().picker_items = picker_items;
+            plugin.store.data_mut().picker_generations = picker_generations;
             plugin.store.data_mut().streaming = streaming;
             bail!("{name}/{command}: {err}");
         }
@@ -1597,6 +1635,25 @@ impl PluginHost {
         }
     }
 
+    /// Invalidate live results as soon as input changes, before debounce.
+    /// This updates host bookkeeping without calling the guest.
+    pub fn set_picker_generation(&mut self, owner: &str, id: u32, generation: u64) {
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.name() == owner && plugin.disabled.is_none())
+        else {
+            return;
+        };
+        let state = plugin.store.data_mut();
+        if let Some(current) = state.picker_generations.get_mut(&id) {
+            if *current != generation {
+                *current = generation;
+                state.picker_items.insert(id, 0);
+            }
+        }
+    }
+
     /// Deliver a completion with the command time limit and a fresh snapshot.
     /// Unknown, duplicate, wrong-kind and late results are ignored.
     pub fn callback(
@@ -1616,6 +1673,11 @@ impl PluginHost {
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
         }
+        if let Callback::PickerQuery { generation, .. } = &callback {
+            if plugin.store.data().picker_generations.get(&id).copied() != *generation {
+                return Ok(Vec::new());
+            }
+        }
         if matches!(callback, Callback::ProcessOutput { .. })
             && !plugin.store.data().streaming.contains(&id)
         {
@@ -1624,6 +1686,7 @@ impl PluginHost {
         if callback.completes() {
             plugin.store.data_mut().pending.remove(&id);
             plugin.store.data_mut().picker_items.remove(&id);
+            plugin.store.data_mut().picker_generations.remove(&id);
             plugin.store.data_mut().streaming.remove(&id);
         }
         plugin

@@ -1403,6 +1403,7 @@ fn live_pickers_answer_every_query() {
                 Callback::PickerQuery {
                     id,
                     query: query.into(),
+                    generation: None,
                 },
                 &Snapshot::default(),
             )
@@ -1987,19 +1988,22 @@ fn picker_item_limit_is_cumulative_and_resets_on_replacement_and_close() {
         preview: None,
     };
     let id = state
-        .show_picker(PickerSpec {
-            title: "Boundary".into(),
-            columns: vec!["Name".into()],
-            items: (0..MAX_PICKER_ITEMS - 1).map(|_| item()).collect(),
-            initial: None,
-            live: false,
-        })
+        .show_picker(
+            PickerSpec {
+                title: "Boundary".into(),
+                columns: vec!["Name".into()],
+                items: (0..MAX_PICKER_ITEMS - 1).map(|_| item()).collect(),
+                initial: None,
+                live: false,
+            },
+            false,
+        )
         .unwrap();
     // Release the recorded payload, retaining the count of the open picker.
     state.actions.clear();
-    state.push_items(id, vec![item()]).unwrap();
+    state.push_items(id, None, vec![item()]).unwrap();
     assert!(state
-        .push_items(id, vec![item()])
+        .push_items(id, None, vec![item()])
         .unwrap_err()
         .contains("at most"));
     assert_eq!(
@@ -2007,8 +2011,8 @@ fn picker_item_limit_is_cumulative_and_resets_on_replacement_and_close() {
         1,
         "a refused push must not record an action"
     );
-    state.set_items(id, vec![item()]).unwrap();
-    state.push_items(id, vec![item()]).unwrap();
+    state.set_items(id, None, vec![item()]).unwrap();
+    state.push_items(id, None, vec![item()]).unwrap();
     assert_eq!(state.picker_items[&id], 2);
     host.callback(
         "testplugin2",
@@ -2021,7 +2025,7 @@ fn picker_item_limit_is_cumulative_and_resets_on_replacement_and_close() {
     .unwrap();
     let state = host.plugins[0].store.data_mut();
     assert!(!state.picker_items.contains_key(&id));
-    assert!(state.push_items(id, vec![item()]).is_err());
+    assert!(state.push_items(id, None, vec![item()]).is_err());
 }
 
 #[test]
@@ -2156,6 +2160,156 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
         .replace("api = \"0.1\"", "api = \"0.3\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
+}
+
+#[test]
+fn api_03_live_generations_drop_stale_queries_and_batches_before_accounting() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    assert!(host
+        .run_command("testplugin3", "live-fail", vec![], Snapshot::default())
+        .is_err());
+    let state = host.plugins.last().unwrap().store.data();
+    assert!(state.pending.is_empty());
+    assert!(state.picker_generations.is_empty());
+    let actions = host
+        .run_command("testplugin3", "live", vec![], Snapshot::default())
+        .unwrap();
+    let id = match actions[0] {
+        Action::ShowPicker {
+            id,
+            generation: Some(0),
+            ..
+        } => id,
+        ref other => panic!("expected live picker: {other:?}"),
+    };
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "items",
+            args(&["-", "set"]),
+            Snapshot::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("need a query generation"));
+    host.set_picker_generation("testplugin3", id, 1);
+    assert_eq!(
+        host.plugins.last().unwrap().store.data().picker_items[&id],
+        0
+    );
+    let query = |generation| Callback::PickerQuery {
+        id,
+        generation: Some(generation),
+        query: "a".into(),
+    };
+    assert!(host
+        .callback("testplugin3", query(0), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    let actions = host
+        .callback("testplugin3", query(1), &Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::SetItems { generation: Some(1), items, .. }] if items[0].data == "a:1")
+    );
+    // A full current generation must not reject a stale push at the cap,
+    // and a stale replacement must not reset the current count.
+    host.plugins
+        .last_mut()
+        .unwrap()
+        .store
+        .data_mut()
+        .picker_items
+        .insert(id, MAX_PICKER_ITEMS);
+    for update in [args(&["0", "set"]), args(&["0", "push", "old"])] {
+        assert!(host
+            .run_command("testplugin3", "items", update, Snapshot::default())
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            host.plugins.last().unwrap().store.data().picker_items[&id],
+            MAX_PICKER_ITEMS
+        );
+    }
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "items",
+            args(&["1", "push", "fresh"]),
+            Snapshot::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("at most"));
+    host.set_picker_generation("testplugin3", id, 2);
+    assert!(host
+        .callback("testplugin3", query(1), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    assert!(!host
+        .callback("testplugin3", query(2), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        host.plugins.last().unwrap().store.data().picker_items[&id],
+        1
+    );
+    host.callback(
+        "testplugin3",
+        Callback::PickerDone {
+            id,
+            result: PickerResult::Cancelled,
+        },
+        &Snapshot::default(),
+    )
+    .unwrap();
+    let state = host.plugins.last().unwrap().store.data();
+    assert!(!state.picker_items.contains_key(&id));
+    assert!(!state.picker_generations.contains_key(&id));
+    assert!(host
+        .callback("testplugin3", query(2), &Snapshot::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn api_03_static_pickers_use_unversioned_batches() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command("testplugin3", "static", vec![], Snapshot::default())
+        .unwrap();
+    assert!(matches!(
+        actions[0],
+        Action::ShowPicker {
+            generation: None,
+            ..
+        }
+    ));
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "items",
+            args(&["-", "push", "second"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::PushItems { generation: None, items, .. }] if items[0].data == "second")
+    );
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "items",
+            args(&["1", "set"]),
+            Snapshot::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("require a live API 0.3 picker"));
 }
 
 #[test]

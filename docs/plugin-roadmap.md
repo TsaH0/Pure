@@ -315,8 +315,8 @@ the hook first and keep it generic.
   `selection-change` (debounced), `post-command(name)`, `focus-gained`/`lost`,
   `editor-idle`. Each one is a variant in `event-kind`, a hook in
   `plugins::register_hooks` and an export.
-  - Done: save, close and selection change, in a new `events` export
-    interface. Still open: `post-command`, focus and idle (see TODO list).
+  - Done: save, close and selection change in API 0.2; post-command,
+    focus and idle in API 0.3 (M10.4).
 - [ ] **M6.2 Default key bindings from plugins.** `[keys]` in `plugin.toml`,
   merged *under* the user's config (the user always wins) and listed in
   `:plugin-list`. Turn off per plugin with `keys = false` in `plugins.toml`.
@@ -424,9 +424,11 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   picker in `State` (count on `show_picker`, add on `push_items`, reset on
   `set_items`, drop when the picker request completes) and refuse beyond
   `MAX_PICKER_ITEMS`.
-- [ ] **M11.3 Live pickers mix in results of old queries.** Give
+- [x] **M11.3 Live pickers mix in results of old queries.** Give
   `on-picker-query` a generation number and have `set-items` / `push-items`
   carry it (API 0.3), dropping stale ones.
+  Host and UI invalidate before debounce, ignore stale queued batches, and
+  clear selectable snapshots immediately. SDK helpers move to this ABI in M10.
 - [x] **M11.4 Document that `allow-process` is not a sandbox**: allowed
   programs like `rg --pre` or `git -c alias.x=!sh` can run anything, and
   a write grant to the workspace can change a project's git hooks.
@@ -471,14 +473,25 @@ estimate the upstream diff.
 
 Tasks in one batch touch the same code, so give each batch to one agent.
 
-1. **Done:** M0, M1, M2, M3.1–M3.2, M4, M6.1 (see `plugin-progress.md`).
-2. **Open, no owner review needed:** M3.3, M9.1–M9.3 and the small TODOs
-   below.
+1. **Done:** M0–M4, M6.1, M9, M11 and the M10 host/editor work
+   (see `plugin-progress.md`).
+2. **Open, no owner review needed:** M10 SDK/examples/guide migration and
+   the small TODOs below.
 3. **Needs the owner first:** M5, M6.2, M6.3, M7, M8 and the file-manager
    APIs.
 
 ## Future TODOs (not yet milestones)
 
+- [ ] **Picker titles:** `plugins::picker::show` does not use `PickerSpec.title`;
+  the terminal shows only the column header and query. Honor the API's title
+  with an optional label in the existing picker widget, preserving bindings
+  and the layout of native pickers. Include a terminal check.
+- [ ] **Order process start with picker installation:** `apply` starts a
+  `spawn` immediately but defers `show-picker` to the compositor. A very fast
+  streaming process can deliver a batch before its picker exists. Queue the
+  start with the call's ordered UI effects, preserve `spawn` then `kill`
+  ordering, and revalidate the owner/request before starting queued work.
+  Cover this before migrating finder/files to streaming.
 - [ ] **SDK picker rollback:** failed commands currently retain changes to
   `PICKER_ITEMS` and can leak new query/item registries. A failed push followed
   by a successful push can give the choice callback stale item data. Journal
