@@ -290,17 +290,25 @@ pub fn interactive(
         .current_dir(cwd.unwrap_or_else(helix_stdx::env::current_working_dir));
     let owner = plugin.clone();
     let mut interactive = Interactive::new(command, move |_editor, _, status| {
-        let chosen = chooser.as_ref().map(|path| {
-            let chosen = std::fs::read(path).unwrap_or_default();
-            String::from_utf8_lossy(&chosen).into_owned()
-        });
         let result = status
-            .map(|status| ProcessOutput {
-                exit_code: status.code(),
-                stdout: chosen.unwrap_or_default(),
-                stderr: String::new(),
-            })
-            .map_err(|err| format!("failed to run '{}': {err}", args[0]));
+            .map_err(|err| format!("failed to run '{}': {err}", args[0]))
+            .and_then(|status| {
+                let (stdout, truncated) = chooser
+                    .as_ref()
+                    .map(|path| read_chooser(path))
+                    .transpose()
+                    .map_err(|err| format!("failed to read chooser: {err}"))?
+                    .unwrap_or_default();
+                Ok(ProcessOutput {
+                    exit_code: status.code(),
+                    stdout,
+                    stderr: if truncated {
+                        "chooser output truncated at 16 MiB".into()
+                    } else {
+                        String::new()
+                    },
+                })
+            });
         super::deliver_later(plugin, Callback::ProcessDone { id, result });
     });
     interactive.before_run = Some(Box::new(move || {
@@ -313,6 +321,36 @@ pub fn interactive(
         interactive.wait_for_key = true;
     }
     Ok(interactive)
+}
+
+/// A chooser is untrusted process output: its path may have been replaced.
+/// Open without waiting for a FIFO writer, then check the opened descriptor
+/// (rather than racing a path metadata check against the open).
+fn read_chooser(path: &Path) -> std::io::Result<(String, bool)> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        // Some choosers delete the empty file when cancelled.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((String::new(), false))
+        }
+        Err(err) => return Err(err),
+    };
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("chooser must be a regular file"));
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_OUTPUT + 1) as u64).read_to_end(&mut bytes)?;
+    let truncated = bytes.len() > MAX_OUTPUT;
+    bytes.truncate(MAX_OUTPUT);
+    Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
 
 /// A new, empty file only the user can read, for a program to write its
@@ -573,6 +611,59 @@ mod test {
         drop((a, b));
         assert!(!a_path.exists());
         assert!(!b_path.exists());
+    }
+
+    #[test]
+    fn chooser_reads_are_capped_and_report_only_actual_truncation() {
+        let file = create_chooser_file().unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        writer.set_len(MAX_OUTPUT as u64).unwrap();
+        let (output, truncated) = read_chooser(&file).unwrap();
+        assert_eq!(output.len(), MAX_OUTPUT);
+        assert!(!truncated, "an exactly full output is not truncated");
+        writer.set_len((MAX_OUTPUT + 1) as u64).unwrap();
+        let (output, truncated) = read_chooser(&file).unwrap();
+        assert_eq!(output.len(), MAX_OUTPUT);
+        assert!(truncated);
+        std::fs::write(&file, b"selected\xff").unwrap();
+        assert_eq!(
+            read_chooser(&file).unwrap(),
+            ("selected\u{fffd}".into(), false)
+        );
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(read_chooser(&file).unwrap(), (String::new(), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chooser_replaced_with_a_fifo_is_refused_without_waiting_for_a_writer() {
+        use std::os::unix::fs::OpenOptionsExt;
+        let chooser = create_chooser_file().unwrap();
+        std::fs::remove_file(&chooser).unwrap();
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&chooser.0)
+            .status()
+            .unwrap()
+            .success());
+        let path = chooser.0.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || tx.send(read_chooser(&path)).unwrap());
+        let result = rx.recv_timeout(Duration::from_secs(2));
+        if result.is_err() {
+            // Unblock a regressed blocking open, so a failure does not leave
+            // an immortal test worker behind.
+            drop(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&chooser.0),
+            );
+        }
+        thread.join().unwrap();
+        let error = result
+            .expect("chooser open waited for a FIFO writer")
+            .unwrap_err();
+        assert!(error.to_string().contains("regular file"), "{error}");
     }
 
     #[test]

@@ -505,10 +505,9 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   lines, so generated multi-line replacements can be truncated without a
   "showing" label. Track displayed-row truncation separately, retaining the
   preview's bounded work and leaving the document untouched.
-- [ ] **Bound chooser reads:** `process::interactive` still reads the chooser
-  synchronously without a size cap. Check that it is a regular file using a
-  nonblocking open (a program can replace it with a FIFO), read at most the
-  process-output cap, and test oversized/replaced files without blocking the UI.
+- [x] **Bound chooser reads:** chooser reads check the opened descriptor is a
+  regular file, use nonblocking open on Unix, cap raw output at 16 MiB and
+  report actual truncation. Tests cover oversized files and replacement FIFOs.
 - [x] **Revalidate queued terminal requests:** owner/request checks run at
   installation and immediately before terminal handover. Stale requests are
   dropped with chooser cleanup. Tests cover reload and disable, with editing

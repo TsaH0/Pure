@@ -14,7 +14,7 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   in the API 0.3 host/editor.
 - Done: M10 (API 0.3), including default SDK, finder migration, the guide,
   frozen 0.2 compatibility fixtures and the kept API trial example.
-  Six follow-up findings remain in Future TODOs.
+  Five follow-up findings remain in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -521,3 +521,23 @@ This moves existing load-time work under the guard, removes two metadata clones
 from the background path, and adds no startup wait, event hook or idle work.
 Validation: all three private integration-backend tests passed, including the
 extended stale-load test. Formatting and workspace Clippy passed without warnings.
+
+## Follow-up: bounded chooser output
+
+Chooser completion opens nonblocking on Unix and validates the opened file
+is regular, so replacing the path with a FIFO cannot hang terminal restoration.
+Reads keep at most 16 MiB plus one byte to detect actual truncation; completion
+returns the prefix and a stderr notice only when bytes were discarded. Missing
+files remain an empty cancellation result; read failures now reach the callback
+instead of silently becoming empty output. The private chooser is still removed
+by its existing guard on every path, and failed program launches do not read it.
+Tests check exact-cap versus oversized files, lossy UTF-8, deleted files and a
+replaced FIFO without a writer. The FIFO test can release a regressed blocking
+open rather than leaking a test thread.
+
+Performance: this work runs only after a requested interactive chooser exits.
+It bounds memory and read work and introduces no timer, hook or idle wake-up.
+Validation: 39 editor library tests passed; formatting, warning-free workspace
+Clippy and a normal build passed. Tmux checks verified a valid chooser callback
+and cleanup, then a program replacing its chooser with a FIFO: error delivery,
+cleanup, terminal restoration and subsequent editing/saving all passed.
