@@ -421,7 +421,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
 - [ ] **M11.3 Live pickers mix in results of old queries.** Give
   `on-picker-query` a generation number and have `set-items` / `push-items`
   carry it (API 0.3), dropping stale ones.
-- [ ] **M11.4 Document that `allow-process` is not a sandbox**: allowed
+- [x] **M11.4 Document that `allow-process` is not a sandbox**: allowed
   programs like `rg --pre` or `git -c alias.x=!sh` can run anything, and
   a write grant to the workspace can change a project's git hooks.
 - [ ] **M11.5 Chooser file leaks** if the editor quits before a queued

@@ -234,6 +234,19 @@ Without the grant `spawn` and `run-interactive` fail with a message saying
 what to add; `:plugin-list` shows the grant. Programs are started directly
 (no shell), in the editor's working directory unless `cwd` is given.
 
+**`allow-process` is a trust decision, not a sandbox.** A program on the
+list can start other programs: for example, `rg --pre` runs a preprocessor,
+and `git -c alias.x=!sh x` invokes a shell. Shells, scripts and program options
+can therefore give a plugin arbitrary execution with your user account's
+rights, including access to files and the network. The list checks only the
+requested `argv[0]`, not what that program subsequently does. Grant it only
+to plugins you trust; Pure does not ask again for each program.
+
+A workspace write grant is also powerful: a plugin can change a project's
+git hooks, which may run later when you use git. Separately, the legacy
+`run-commands` permission allows editor commands such as `:sh` and `:write`;
+it should also be granted only to trusted plugins.
+
 - `editor::spawn(argv, SpawnOptions { cwd, stdin, timeout_ms }, callback)` runs
   a program in the background. The callback gets its exit code (`None` if it
   was killed or timed out), stdout and stderr (lossy UTF-8, at most 16 MiB

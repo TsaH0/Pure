@@ -94,6 +94,15 @@ Validation: 62 host tests, 29 editor library tests and 35 in-editor plugin
 tests passed; fixtures rebuilt, formatting and workspace Clippy passed with
 no warnings.
 
+## M11.4 Process-grant trust boundary
+
+The guide explains that `allow-process` checks only the requested program,
+not its children or options (`rg --pre`, git shell aliases), and grants the
+program the user's filesystem/network rights. Workspace writes can change
+git hooks; legacy `run-commands` also requires trust. No prompts or permission
+semantics changed. Documentation reviewed; formatting and workspace Clippy
+passed with no warnings. No runtime code changed.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds
