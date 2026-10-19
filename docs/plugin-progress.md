@@ -3,7 +3,7 @@
 ## Status
 
 - Done: M0.1 (versioned WIT layout), M0.2 (two host worlds), M0.3 (request ids and callbacks), M0.4 (SDK 0.2), M0.5 (0.2 test plugin).
-- M0 implementation complete on `plugin-api-0.2`; final full-suite validation and PR creation pending.
+- M0 complete and pushed to `plugin-api-0.2`; 216/216 full integration tests pass. PR creation is blocked by GitHub API egress.
 - Next: M2.1, then the remaining authorized milestones in the requested order.
 - Awaiting design review: M5, M6.2, M6.3, M7, M8 and the file-manager sidebar. No implementation of these is authorized.
 
@@ -14,7 +14,7 @@
 ## Environment and baseline (2026-10-19)
 
 - Installed pinned Rust 1.90.0 with rustfmt, rust-src, clippy, rust-analyzer and `wasm32-wasip2`; Wasmtime remains 41.0.4.
-- Development build and Rust/TOML parser and query health checks passed. Ten representative grammars are available; no key bindings changed.
+- Development build and Rust/TOML parser and query health checks passed. Twelve representative grammars are available; no key bindings changed.
 - Rebuilding the existing test plugin for `wasm32-wasip2` passed.
 - The initial workspace run passed 185 core unit tests and four indentation tests, then found three loader workspace-trust failures caused by unwritable default data paths. All 12 loader tests pass after redirecting XDG config, cache and data under `/workspace`.
 - The full baseline with four test threads aborted with SIGABRT, before any 0.2 host changes. All eight movement tests around the abort pass in isolation. A serial full baseline is running to obtain complete results. The roadmap's known-failure list is the comparison baseline; new failures will be investigated.
@@ -62,3 +62,11 @@
 - The old serial baseline completed 215 tests: 209 passed, one known HTML/JavaScript injection failure, and five old-host/new-example mismatches because it read the evolving fixture files. Those fixture mismatches are resolved in the current targeted suite. Added HTML/JavaScript grammars to remove the known missing-parser prerequisite; parser/query health checks pass.
 - A fresh full current suite is running with four test threads and a 16 MiB Rust thread-stack diagnostic after the untouched baseline's SIGABRT. A prior exploratory run was interrupted to recompile the corrected test input; it is not counted as validation.
 - PR creation is externally blocked: the HTTPS proxy rejects CONNECT to `api.github.com` with 403. Added that domain to the saved environment draft; review/save it in environment settings to apply access. No credential values were requested or stored.
+
+
+## M0 milestone validation (2026-10-19)
+
+- Full integration suite: **216 passed, 0 failed, 0 ignored**, `--test-threads 4`, with `RUST_MIN_STACK=16777216` (197.46 s). This includes the existing yazi/shell-adjacent command paths, quickfix, Vim substitution, default keys and both plugin API versions. No known-failure exemptions were needed after installing the required HTML/JavaScript grammars.
+- The larger Rust thread stack resolves the original baseline abort in this environment; it is captured in the activation script and saved startup instructions. Tests and assertions remain enabled and unchanged except for new coverage.
+- Host: 42 passed. Editor library: 21 passed. Plugin integrations: 19 passed. SDK: two unit tests and one generated export doctest passed; one existing illustrative snippet remains ignored. Workspace and standalone SDK Clippy passed without new warnings; formatting passed; wasm fixtures rebuilt.
+- All five M0 tasks are committed and the branch was successfully pushed using the platform Git proxy. PR draft text is prepared at `/workspace/m0-pr.md`; API access is separately blocked as described above.
