@@ -8,8 +8,14 @@
 //! enabled = false      # skip this plugin
 //!
 //! [my-plugin]
-//! some-option = 3      # everything but `enabled` is passed to the plugin
+//! some-option = 3      # everything but `enabled` and `allow-process` is
+//!                      # passed to the plugin
+//! allow-process = true # let it run programs (it also needs the `process`
+//!                      # permission); or a list: ["rg", "git"]
 //! ```
+
+mod picker;
+mod process;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,13 +24,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
-use helix_plugin::{Action, DocumentSnapshot, Event, EventKind, PluginHost, Snapshot};
+use helix_plugin::{
+    Action, Callback, DocumentSnapshot, Event, EventKind, PluginHost, ProcessGrant, Snapshot,
+};
 use helix_view::document::Mode;
 use helix_view::events::{DocumentDidChange, DocumentDidOpen};
 use helix_view::{DocumentId, Editor, ViewId};
 use parking_lot::Mutex;
 
 use crate::commands::{self, MappableCommand};
+use crate::compositor::Compositor;
 use crate::events::OnModeSwitch;
 use crate::job::{self, Jobs};
 
@@ -72,6 +81,9 @@ pub fn load(editor: &mut Editor) {
 /// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
 /// replacing any loaded plugins.
 pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
+    // The old plugins' programs and pickers are of no use to the new ones.
+    process::kill_all();
+    picker::clear();
     if !dir.is_dir() {
         *HOST.lock() = None;
         return;
@@ -84,7 +96,14 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
             return;
         }
     };
-    let (actions, errors) = host.load_all(dir, |name| plugin_settings(settings, name));
+    let (actions, mut errors) = host.load_all(dir, |name| plugin_settings(settings, name));
+    let names: Vec<String> = host.plugins().iter().map(|p| p.name().to_owned()).collect();
+    for name in names {
+        match process_grant(settings, &name) {
+            Ok(grant) => host.set_process_grant(&name, grant),
+            Err(err) => errors.push(err),
+        }
+    }
     *HOST.lock() = Some(host);
 
     apply(editor, None, actions);
@@ -118,7 +137,29 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<String> {
             return None;
         }
     }
+    table.remove("allow-process");
     Some(serde_json::to_string(&table).unwrap_or_else(|_| "{}".into()))
+}
+
+/// `allow-process` for plugin `name`: `true`, `false` or a list of programs.
+fn process_grant(settings: &toml::Table, name: &str) -> anyhow::Result<ProcessGrant> {
+    let Some(value) = settings
+        .get(name)
+        .and_then(|table| table.get("allow-process"))
+    else {
+        return Ok(ProcessGrant::None);
+    };
+    match value {
+        toml::Value::Boolean(true) => Ok(ProcessGrant::Any),
+        toml::Value::Boolean(false) => Ok(ProcessGrant::None),
+        toml::Value::Array(programs) => programs
+            .iter()
+            .map(|program| program.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .map(ProcessGrant::Only)
+            .ok_or_else(|| anyhow::anyhow!("[{name}] allow-process: expected a list of strings")),
+        _ => anyhow::bail!("[{name}] allow-process: expected true, false or a list of programs"),
+    }
 }
 
 /// Run `f` with the plugin host, if plugins are loaded.
@@ -256,6 +297,33 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             },
             Action::Status(message) => editor.set_status(message),
             Action::Error(message) => editor.set_error(message),
+            Action::Spawn {
+                plugin,
+                id,
+                argv,
+                cwd,
+                stdin,
+                timeout,
+            } => process::spawn(plugin, id, argv, cwd, stdin, timeout),
+            Action::RunInteractive {
+                plugin,
+                id,
+                argv,
+                cwd,
+                chooser_file,
+                wait_for_key,
+            } => match process::interactive(plugin.clone(), id, argv, cwd, chooser_file, wait_for_key)
+            {
+                Ok(interactive) => later(move |_, compositor| {
+                    compositor.interactive = Some(interactive);
+                }),
+                Err(err) => deliver_later(plugin, Callback::ProcessDone { id, result: Err(err) }),
+            },
+            Action::Kill { plugin, id } => process::kill(&plugin, id),
+            Action::ShowPicker { plugin, id, picker } => {
+                later(move |_, compositor| picker::show(compositor, plugin, id, picker))
+            }
+            Action::PushItems { plugin, id, items } => picker::push_items(&plugin, id, items),
         }
     }
     // All edits of one call are one undo step.
@@ -270,6 +338,30 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
         view.ensure_cursor_in_view(doc, scrolloff);
     }
     APPLYING.store(false, Ordering::Relaxed);
+}
+
+/// Run `f` once the current event is handled (with the compositor, which
+/// plugin calls don't have).
+fn later(f: impl FnOnce(&mut Editor, &mut Compositor) + Send + 'static) {
+    tokio::spawn(job::dispatch(f));
+}
+
+/// Deliver a result (a program's output, a picker choice) to `plugin` and
+/// apply what it does.
+fn deliver(editor: &mut Editor, jobs: &mut Jobs, plugin: &str, callback: Callback) {
+    let snapshot = snapshot(editor);
+    match with_host(|host| host.callback(plugin, callback, &snapshot)) {
+        Some(Ok(actions)) => apply(editor, Some(jobs), actions),
+        Some(Err(err)) => editor.set_error(err.to_string()),
+        None => {}
+    }
+}
+
+/// [`deliver`] from outside the editor's event loop.
+fn deliver_later(plugin: String, callback: Callback) {
+    tokio::spawn(job::dispatch_callback(job::Callback::EditorCompositorJobs(
+        Box::new(move |editor, _, jobs| deliver(editor, jobs, &plugin, callback)),
+    )));
 }
 
 fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
@@ -381,6 +473,9 @@ pub fn describe() -> String {
         let permissions: Vec<_> = plugin.permissions.iter().map(|p| p.as_str()).collect();
         if !permissions.is_empty() {
             out.push_str(&format!("permissions: {}\n", permissions.join(", ")));
+        }
+        if plugin.permissions.contains(&helix_plugin::Permission::Process) {
+            out.push_str(&format!("process: {}\n", plugin.process));
         }
         for command in &plugin.commands {
             out.push_str(&format!(

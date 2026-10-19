@@ -57,7 +57,7 @@ pub use bindings::helix::plugin::types::{
 pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
     #[cfg(not(feature = "api-v0-1"))]
-    pub use crate::requests::{kill, pick, run_interactive, spawn};
+    pub use crate::requests::{kill, pick, push_items, run_interactive, spawn};
 }
 
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the

@@ -119,10 +119,7 @@ impl Plugin for TestPlugin {
                 )?;
             }
             "push-items" => {
-                helix_plugin_api::bindings::helix::plugin::ui::push_items(
-                    request_id(&args)?,
-                    &[Item::text("new item")],
-                )?;
+                editor::push_items(request_id(&args)?, vec![Item::text("new item")])?;
             }
             "kill" => editor::kill(request_id(&args)?),
             _ => return Err(format!("unknown command {name}")),

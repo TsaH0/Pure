@@ -31,7 +31,7 @@ u = ":plugin-run text-tools/upper"
 why a plugin was disabled.
 
 Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
-except `enabled` is passed to the plugin's `init` as JSON:
+except `enabled` and `allow-process` is passed to the plugin's `init` as JSON:
 
 ```toml
 [text-tools]
@@ -39,6 +39,7 @@ enabled = false
 
 [my-plugin]
 width = 80
+allow-process = ["rg", "git"]   # see "Running programs"
 ```
 
 Try the example: copy [`examples/text-tools`](examples/text-tools) (its
@@ -51,7 +52,10 @@ Try the example: copy [`examples/text-tools`](examples/text-tools) (its
   - `read-buffers`: document text, paths, languages, selections
   - `edit-buffers`: change text and selections
   - `open-files`: open files
-  - `run-commands`: run editor commands (only from the plugin's own commands)
+  - `run-commands`: run editor commands (only from the plugin's own commands
+    and callbacks)
+  - `process`: run programs, see [Running programs](#running-programs). This
+    one also needs the user's `allow-process` grant.
 - No file system, network, environment variables or standard streams (WASI is
   linked with nothing granted).
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
@@ -190,9 +194,62 @@ editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
 })?;
 ```
 
-The request and callback plumbing is available; actual process execution and
-picker display are implemented by their separate roadmap milestones. Until
-then those imports return an explicit unsupported error. UI is restricted to
-plugin commands and callbacks, so events cannot interrupt typing. API 0.1's
+UI (`run-interactive`, `pick`, `run-command`) is restricted to plugin commands
+and callbacks, so events cannot interrupt typing. API 0.1's
 WIT remains at [`wit/v0.1/`](wit/v0.1/); existing versioned interfaces are never
 extended in place.
+
+## Running programs
+
+Programs run with the user's rights, outside the sandbox, so two things are
+needed: the plugin lists the `process` permission in its `plugin.toml`, and
+the user grants it in `plugins.toml`:
+
+```toml
+[my-plugin]
+allow-process = true             # any program
+# allow-process = ["rg", "fd"]   # only these (compared with argv[0] as given)
+```
+
+Without the grant `spawn` and `run-interactive` fail with a message saying
+what to add; `:plugin-list` shows the grant. Programs are started directly
+(no shell), in the editor's working directory unless `cwd` is given.
+
+- `editor::spawn(argv, SpawnOptions { cwd, stdin, timeout_ms }, callback)` runs
+  a program in the background. The callback gets its exit code (`None` if it
+  was killed or timed out), stdout and stderr (lossy UTF-8, at most 16 MiB
+  each). The default time limit is 30 s, at most 10 min. `editor::kill(id)`
+  stops it; at most 16 programs run at once per plugin.
+- `editor::run_interactive(argv, InteractiveOptions { cwd, chooser_file,
+  wait_for_key }, callback)` hands the terminal to a full-screen program and
+  calls back when it exits. With `chooser_file`, an argument containing
+  `{chooser}` gets the path of a fresh private temporary file, and the
+  callback's `stdout` is what the program wrote there. With `wait_for_key`,
+  the program runs on a cleared screen and waits for a key afterwards (like
+  `space z`). Only from commands and callbacks.
+
+A file chooser, e.g. with yazi:
+
+```rust,ignore
+editor::run_interactive(
+    &["yazi", "--chooser-file={chooser}"],
+    InteractiveOptions { chooser_file: true, ..Default::default() },
+    |output| {
+        for path in output?.stdout.lines().filter(|l| !l.is_empty()) {
+            editor::open_file(path)?;
+        }
+        Ok(())
+    },
+)?;
+```
+
+## Pickers
+
+`editor::pick(Picker, callback)` shows Pure's picker (fuzzy matching, preview,
+`C-s`/`C-v` splits) with the plugin's items: up to 8 columns and a million
+items. `Item::text(s)` is a one-column item whose data is `s`; items can also
+carry a file preview (path and lines to highlight). The callback gets a
+`Choice`: the chosen items and their indices, and the split (`None` when the
+picker was closed without choosing). `editor::push_items(id, items)` adds items to an
+open picker, e.g. as a program's output arrives. Text previews are not shown
+yet. Only from commands and callbacks.

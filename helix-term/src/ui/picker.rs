@@ -259,6 +259,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
 
     callback_fn: PickerCallback<T>,
     on_close: Option<PickerCloseCallback>,
+    /// Whether `space '` can reopen the picker after it closes.
+    reopenable: bool,
     default_action: Action,
 
     pub truncate_start: bool,
@@ -388,6 +390,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             on_close: None,
+            reopenable: true,
             default_action: Action::Replace,
             completion_height: 0,
             widths,
@@ -400,6 +403,13 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     }
 
     /// Run once when the picker closes without accepting an item.
+    /// Don't keep the picker for `space '` (`last_picker`) once it closes,
+    /// e.g. when choosing from it twice makes no sense.
+    pub fn not_reopenable(mut self) -> Self {
+        self.reopenable = false;
+        self
+    }
+
     pub fn with_on_close(mut self, on_close: impl FnOnce(&mut Context) + 'static) -> Self {
         self.on_close = Some(Box::new(on_close));
         self
@@ -1080,7 +1090,7 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             // if the picker is very large don't store it as last_picker to avoid
             // excessive memory consumption
             let callback: compositor::Callback =
-                if picker.matcher.snapshot().item_count() > 1_000_000 {
+                if !picker.reopenable || picker.matcher.snapshot().item_count() > 1_000_000 {
                     Box::new(|compositor: &mut Compositor, _ctx| {
                         // remove the layer
                         compositor.pop();
@@ -1120,6 +1130,10 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             }
             key!(Esc) | ctrl!('c') => return close_fn(self, ctx, true),
             alt!(Enter) => {
+                if self.selection().is_some() {
+                    // Accepted: closing it later is not a cancel.
+                    self.on_close = None;
+                }
                 if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, self.default_action);
                 }

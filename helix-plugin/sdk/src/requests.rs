@@ -15,6 +15,8 @@ enum Completion {
 
 thread_local! {
     static PENDING: RefCell<HashMap<RequestId, Completion>> = RefCell::new(HashMap::new());
+    /// The items of open pickers, to hand the chosen ones to the callback.
+    static PICKER_ITEMS: RefCell<HashMap<RequestId, Vec<Item>>> = RefCell::new(HashMap::new());
 }
 
 /// A picker result. Cancellation has no items, indices or open action.
@@ -134,9 +136,12 @@ pub fn pick(
     picker: Picker,
     callback: impl FnOnce(Choice) -> Result<(), String> + 'static,
 ) -> Result<RequestId, String> {
-    let items = picker.items.clone();
     let id = ui::show_picker(&picker)?;
+    PICKER_ITEMS.with_borrow_mut(|open| open.insert(id, picker.items));
     register_picker(id, move |result| {
+        let items = PICKER_ITEMS
+            .with_borrow_mut(|open| open.remove(&id))
+            .unwrap_or_default();
         let choice = match result {
             PickerResult::Cancelled => Choice {
                 items: Vec::new(),
@@ -163,6 +168,18 @@ pub fn pick(
         callback(choice)
     });
     Ok(id)
+}
+
+/// Add items to the open picker `id` (from [`pick`]), e.g. as a program's
+/// output arrives. Fails if the picker was closed.
+pub fn push_items(id: RequestId, items: Vec<Item>) -> Result<(), String> {
+    ui::push_items(id, &items)?;
+    PICKER_ITEMS.with_borrow_mut(|open| {
+        if let Some(open) = open.get_mut(&id) {
+            open.extend(items);
+        }
+    });
+    Ok(())
 }
 
 #[doc(hidden)]

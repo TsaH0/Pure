@@ -54,6 +54,9 @@ pub enum Permission {
     OpenFiles,
     /// Run editor commands.
     RunCommands,
+    /// Run programs (`spawn`, `run-interactive`). Programs run outside the
+    /// sandbox, so the user must also grant it, see [`ProcessGrant`].
+    Process,
 }
 
 impl Permission {
@@ -63,9 +66,44 @@ impl Permission {
             Permission::EditBuffers => "edit-buffers",
             Permission::OpenFiles => "open-files",
             Permission::RunCommands => "run-commands",
+            Permission::Process => "process",
         }
     }
 }
+
+/// Which programs the user lets a plugin run (`allow-process` in
+/// `plugins.toml`). Asking for the `process` permission in `plugin.toml` is
+/// not enough on its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ProcessGrant {
+    #[default]
+    None,
+    /// Any program.
+    Any,
+    /// Only these programs, compared with the program (the first argument)
+    /// exactly as the plugin passes it.
+    Only(Vec<String>),
+}
+
+impl std::fmt::Display for ProcessGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "not granted"),
+            Self::Any => write!(f, "granted"),
+            Self::Only(programs) => write!(f, "only {}", programs.join(", ")),
+        }
+    }
+}
+
+/// Most programs a plugin may run at once.
+pub const MAX_PROCESSES: usize = 16;
+/// Default and largest time limits of a background program.
+pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
+pub const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// Most items in a plugin picker.
+pub const MAX_PICKER_ITEMS: usize = 1_000_000;
+/// Most columns in a plugin picker.
+pub const MAX_PICKER_COLUMNS: usize = 8;
 
 /// `plugin.toml`
 #[derive(Debug, Clone, Deserialize)]
@@ -161,12 +199,50 @@ pub enum Action {
     RunCommand(String),
     Status(String),
     Error(String),
+    /// Run a program in the background and deliver
+    /// [`Callback::ProcessDone`] when it exits.
+    Spawn {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        stdin: Option<String>,
+        timeout: Duration,
+    },
+    /// Hand the terminal to a program, then deliver
+    /// [`Callback::ProcessDone`].
+    RunInteractive {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        cwd: Option<PathBuf>,
+        chooser_file: bool,
+        wait_for_key: bool,
+    },
+    /// Kill a program started with `Spawn`.
+    Kill { plugin: String, id: u32 },
+    /// Show a picker and deliver [`Callback::PickerDone`].
+    ShowPicker {
+        plugin: String,
+        id: u32,
+        picker: PickerSpec,
+    },
+    /// Add items to an open picker.
+    PushItems {
+        plugin: String,
+        id: u32,
+        items: Vec<PickerItem>,
+    },
 }
 
 /// Result of a background program or interactive chooser.
 pub use v0_2::helix::plugin::process::Output as ProcessOutput;
 /// A picker choice, including the requested split action.
 pub use v0_2::helix::plugin::ui::PickerResult;
+/// A picker as a plugin describes it.
+pub use v0_2::helix::plugin::ui::{Item as PickerItem, Picker as PickerSpec, Preview as PickerPreview};
+/// How to open a picked item.
+pub use v0_2::helix::plugin::types::OpenAction;
 
 /// The completion expected for an outstanding request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +353,7 @@ struct State {
     context: CallContext,
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
+    process: ProcessGrant,
 }
 
 impl WasiView for State {
@@ -470,6 +547,129 @@ impl State {
     fn log(&mut self, message: String) {
         log::info!("[plugin {}] {message}", self.plugin);
     }
+
+    /// Check that the plugin may run `argv` now.
+    fn need_process(&self, argv: &[String]) -> Result<(), String> {
+        self.need(Permission::Process)?;
+        if self.context == CallContext::Init {
+            return Err("programs can't be started from init".into());
+        }
+        let program = argv
+            .first()
+            .filter(|program| !program.is_empty())
+            .ok_or("no program given")?;
+        match &self.process {
+            ProcessGrant::None => Err(format!(
+                "process not granted: add `allow-process = true` (or a list of programs) \
+                 under [{}] in plugins.toml",
+                self.plugin
+            )),
+            ProcessGrant::Any => Ok(()),
+            ProcessGrant::Only(programs) if programs.iter().any(|p| p == program) => Ok(()),
+            ProcessGrant::Only(_) => Err(format!(
+                "'{program}' is not in allow-process for [{}] in plugins.toml",
+                self.plugin
+            )),
+        }?;
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Process)
+            .count();
+        if running >= MAX_PROCESSES {
+            return Err(format!("at most {MAX_PROCESSES} programs can run at once"));
+        }
+        Ok(())
+    }
+
+    fn spawn(
+        &mut self,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        stdin: Option<String>,
+        timeout_ms: Option<u32>,
+    ) -> Result<u32, String> {
+        self.need_process(&argv)?;
+        let timeout = timeout_ms
+            .map(|ms| Duration::from_millis(ms.into()))
+            .unwrap_or(DEFAULT_PROCESS_TIMEOUT)
+            .min(MAX_PROCESS_TIMEOUT);
+        let id = self.request(PendingKind::Process)?;
+        self.actions.push(Action::Spawn {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            cwd: cwd.map(PathBuf::from),
+            stdin,
+            timeout,
+        });
+        Ok(id)
+    }
+
+    fn run_interactive(
+        &mut self,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        chooser_file: bool,
+        wait_for_key: bool,
+    ) -> Result<u32, String> {
+        self.need_ui("run-interactive")?;
+        self.need_process(&argv)?;
+        let id = self.request(PendingKind::Process)?;
+        self.actions.push(Action::RunInteractive {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            cwd: cwd.map(PathBuf::from),
+            chooser_file,
+            wait_for_key,
+        });
+        Ok(id)
+    }
+
+    fn kill(&mut self, id: u32) {
+        if self.pending.get(&id) == Some(&PendingKind::Process) {
+            self.actions.push(Action::Kill {
+                plugin: self.plugin.clone(),
+                id,
+            });
+        }
+    }
+
+    fn show_picker(&mut self, picker: PickerSpec) -> Result<u32, String> {
+        self.need_ui("show-picker")?;
+        if picker.columns.is_empty() || picker.columns.len() > MAX_PICKER_COLUMNS {
+            return Err(format!(
+                "a picker needs 1 to {MAX_PICKER_COLUMNS} columns, got {}",
+                picker.columns.len()
+            ));
+        }
+        if picker.items.len() > MAX_PICKER_ITEMS {
+            return Err(format!("a picker can have at most {MAX_PICKER_ITEMS} items"));
+        }
+        let id = self.request(PendingKind::Picker)?;
+        self.actions.push(Action::ShowPicker {
+            plugin: self.plugin.clone(),
+            id,
+            picker,
+        });
+        Ok(id)
+    }
+
+    fn push_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+        if self.pending.get(&id) != Some(&PendingKind::Picker) {
+            return Err(format!("no open picker with id {id}"));
+        }
+        if self.context == CallContext::Init {
+            return Err("push-items can't be used from init".into());
+        }
+        self.actions.push(Action::PushItems {
+            plugin: self.plugin.clone(),
+            id,
+            items,
+        });
+        Ok(())
+    }
 }
 
 /// Build a transaction from a plugin's edits, validating them against `text`.
@@ -620,6 +820,7 @@ pub struct PluginInfo {
     pub permissions: Vec<Permission>,
     pub commands: Vec<CommandInfo>,
     pub disabled: Option<String>,
+    pub process: ProcessGrant,
 }
 
 /// Loads and runs plugins.
@@ -700,6 +901,7 @@ impl PluginHost {
                 permissions: plugin.manifest.permissions.clone(),
                 commands: plugin.commands.clone(),
                 disabled: plugin.disabled.clone(),
+                process: plugin.store.data().process.clone(),
             })
             .collect()
     }
@@ -786,6 +988,7 @@ impl PluginHost {
             context: CallContext::Init,
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
+            process: ProcessGrant::None,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -936,8 +1139,9 @@ impl PluginHost {
         Ok(actions)
     }
 
-    /// Reserve a result id for an API 0.2 host operation. Used by adapters
-    /// starting asynchronous operations; ids are never reused after reload.
+    /// Reserve a result id for an API 0.2 host operation, as the host
+    /// functions do. For tests; ids are never reused after reload.
+    #[doc(hidden)]
     pub fn register_request(&mut self, plugin: &str, kind: PendingKind) -> anyhow::Result<u32> {
         let plugin = self
             .plugins
@@ -952,6 +1156,15 @@ impl PluginHost {
             .data_mut()
             .request(kind)
             .map_err(anyhow::Error::msg)
+    }
+
+    /// Set which programs `plugin` may run (`allow-process` in
+    /// `plugins.toml`). Plugins can't run programs from `init`, so this is set
+    /// after loading.
+    pub fn set_process_grant(&mut self, plugin: &str, grant: ProcessGrant) {
+        if let Some(plugin) = self.plugins.iter_mut().find(|p| p.name() == plugin) {
+            plugin.store.data_mut().process = grant;
+        }
     }
 
     /// Deliver a completion with the command time limit and a fresh snapshot.

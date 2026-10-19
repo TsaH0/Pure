@@ -1,6 +1,11 @@
 # Plugin API 0.2: processes, the terminal and pickers
 
-Status: **design, not implemented yet.** This is the next step after phases 1–3
+Status: **implemented** (M0–M2 of [`plugin-roadmap.md`](plugin-roadmap.md),
+except live pickers and text previews). Pure ships no example plugins built
+on this (no yazi, file finder or git plugin): users write their own, see
+`helix-plugin/README.md`. The "Examples to ship" section below is superseded.
+
+This is the next step after phases 1–3
 of [`plugin-system.md`](plugin-system.md). It lets plugins do what yazi, fzf,
 lazygit and Telescope-style integrations need:
 

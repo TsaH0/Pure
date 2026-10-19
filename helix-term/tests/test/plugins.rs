@@ -494,3 +494,103 @@ async fn picker_close_hook_cancels_empty_picker_on_enter() -> anyhow::Result<()>
     assert_eq!(closed.load(Ordering::Relaxed), 1);
     Ok(())
 }
+
+/// An editor with only the 0.2 test plugin, with `permissions` and the
+/// plugin's `plugins.toml` table `settings`.
+fn app_with_v2(permissions: &str, settings: &str) -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new().with_input_text("#[a|]#\n").build().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let plugin = root.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin2\"\nversion = \"1\"\napi = \"0.2\"\npermissions = [{permissions}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        root.path(),
+        &format!("[testplugin2]\n{settings}\n"),
+    )
+    .unwrap();
+    (app, root)
+}
+
+const WITH_PROCESS: &str =
+    r#""read-buffers", "edit-buffers", "open-files", "run-commands", "process""#;
+
+/// Wait until the status message satisfies `done` (results of programs and
+/// pickers arrive asynchronously).
+async fn wait_for_status(app: &mut Application, done: impl Fn(&str) -> bool) -> String {
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        app.editor.reset_idle_timer();
+        run_event_loop_until_idle(app).await;
+        if let Some((message, _)) = app.editor.get_status() {
+            if done(message) {
+                return message.to_string();
+            }
+        }
+    }
+    panic!("timed out; status: {:?}", app.editor.get_status());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_programs_when_granted() -> anyhow::Result<()> {
+    // Without the user's grant, the permission alone is not enough.
+    let (mut app, _dir) = app_with_v2(WITH_PROCESS, "");
+    keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
+    assert_error(&app, "allow-process");
+
+    let (mut app, _dir) = app_with_v2(WITH_PROCESS, r#"allow-process = ["sh"]"#);
+    keys(&mut app, ":plugin-run testplugin2/spawn echo hi<ret>").await;
+    assert_error(&app, "'echo' is not in allow-process");
+    keys(
+        &mut app,
+        r#":plugin-run testplugin2/spawn sh -c "echo out; echo err >&2; exit 4"<ret>"#,
+    )
+    .await;
+    let message = wait_for_status(&mut app, |s| s.starts_with("exit:")).await;
+    assert_eq!(message, "exit:Some(4);out:out\n;err:err\n");
+
+    // `:plugin-list` shows the grant.
+    assert!(helix_term::plugins::describe().contains("process: only sh"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_pickers_report_the_choice_and_the_split() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v2(ALL, "");
+    for (keys_, expected) in [
+        ("<down><ret>", "choice:[1]:Some(OpenAction::Replace)"),
+        ("<C-v>", "choice:[0]:Some(OpenAction::Vsplit)"),
+        ("<C-s>", "choice:[0]:Some(OpenAction::Hsplit)"),
+        ("<esc>", "choice:[]:None"),
+        // Filtering keeps the original index.
+        ("gam<ret>", "choice:[2]:Some(OpenAction::Replace)"),
+    ] {
+        keys(&mut app, ":plugin-run testplugin2/picker alpha beta gamma<ret>").await;
+        // The picker opens once the command's event is handled.
+        run_event_loop_until_idle(&mut app).await;
+        app.editor.set_status("");
+        keys(&mut app, keys_).await;
+        let message = wait_for_status(&mut app, |s| s.starts_with("choice:")).await;
+        assert_eq!(message, expected, "{keys_}");
+    }
+    // Answered pickers are not kept for `space '`: it reopens nothing.
+    app.editor.set_status("");
+    keys(&mut app, "<space>'").await;
+    keys(&mut app, "<ret>").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    run_event_loop_until_idle(&mut app).await;
+    assert!(!app
+        .editor
+        .get_status()
+        .is_some_and(|(s, _)| s.starts_with("choice:")));
+    Ok(())
+}

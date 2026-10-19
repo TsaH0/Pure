@@ -13,7 +13,13 @@ into tasks that can be handed to an agent or contributor one at a time.
 
 Each task has an id (`M1.2`), what it depends on, the files it touches, what to
 do, and **done when** criteria. Tick the box in this file in the same PR that
-finishes the task.
+finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.md).
+
+**Scope (the owner's rule): Pure ships the plugin API, not plugins.** No
+built-in or bundled file manager, yazi integration, git UI or other end-user
+plugin: users build those themselves on the API. The only plugins in the
+repository are test fixtures and the small `text-tools` example; the guide
+shows short snippets instead of shipping example plugins.
 
 ---
 
@@ -32,7 +38,8 @@ finishes the task.
 | `helix-plugin/build-plugins.sh` | Rebuilds the test plugin and example wasm files |
 | `helix-term/src/plugins.rs` | Editor integration: loading, `snapshot`, `apply` (turns `Action`s into edits), hooks, debouncing, `:plugin-*` helpers |
 | `helix-term/src/commands/typed.rs` | `:plugin-run`, `:plugin-list`, `:plugin-reload` |
-| `helix-term/src/interactive.rs` | Handing the terminal to a program (built-in yazi, `:run-interactive`) |
+| `helix-term/src/interactive.rs` | Handing the terminal to a program (`:run-interactive`, `space z`, plugins' `run-interactive`) |
+| `helix-term/src/plugins/process.rs`, `plugins/picker.rs` | Programs and pickers started by plugins |
 | `helix-term/src/ui/picker.rs` | The picker (`Picker::new`, `with_preview`, `injector`, `with_dynamic_query`) |
 | `helix-term/tests/test/plugins.rs` | In-editor plugin tests |
 
@@ -62,7 +69,7 @@ design doc).
   (processes, files, network) needs a permission in `plugin.toml` **and** a
   grant by the user in `plugins.toml`.
 - **Don't change the user's key bindings** or existing commands without asking
-  (the owner's config uses `:sh`, `space x`, `space z`, `space e` = yazi).
+  (the owner's config uses `:sh`, `space x` and `space z`).
 - Rust is pinned to **1.90** (`rust-toolchain.toml`), which is why Wasmtime is
   at **41.0.4**. Don't bump either without checking that everything builds.
 
@@ -148,9 +155,10 @@ Nothing user-visible: the plumbing every later milestone needs.
 
 ## M1. Processes and the terminal
 
-Unlocks yazi, lazygit, fzf, git and linter plugins.
+Lets users write plugins that run programs: file managers, git tools,
+linters, fuzzy finders.
 
-- [ ] **M1.1 `process` permission and grant.** Depends on: M0.2.
+- [x] **M1.1 `process` permission and grant.** Depends on: M0.2.
   - `Permission::Process` (`"process"` in `plugin.toml`). In
     `helix-term/src/plugins.rs`, read `allow-process = true | [programs]`
     from the plugin's `plugins.toml` table (and strip it before the config
@@ -162,7 +170,7 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
   - **Open decision for the owner:** whether to also ask once per program at
     first use (like workspace trust). Implement the config grant; leave a
     hook for the prompt.
-- [ ] **M1.2 `spawn` and `kill`.** Depends on: M0.3, M1.1.
+- [x] **M1.2 `spawn` and `kill`.** Depends on: M0.3, M1.1.
   - Host function records `Action::Spawn { plugin, id, argv, options }`.
     `apply` runs it as a `tokio::process::Command` (no shell; `argv[0]`
     looked up in `PATH` and checked against the allow-list) on a task, with
@@ -177,11 +185,10 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
     streams; stdin round trip (`cat`); timeout; kill; output cap; grant
     missing; program not in the allow-list; actions from the callback
     apply (e.g. it sets the status).
-- [ ] **M1.3 `run-interactive`.** Depends on: M0.3, M1.1.
-  - Generalise `interactive::yazi` into
-    `interactive::with_chooser(argv, cwd) -> (Interactive, chooser path)`,
-    replacing a `{chooser}` argument with a fresh temp file. Built-in `yazi`
-    uses it too (behaviour unchanged; keep its ~8 ms hand-over).
+- [x] **M1.3 `run-interactive`.** Depends on: M0.3, M1.1.
+  - `plugins::process::interactive(..) -> Interactive`, replacing a
+    `{chooser}` argument with a fresh private temp file. (The built-in yazi
+    command was removed: file managers are plugins.)
   - `Action::RunInteractive` → `interactive::request`; `on_exit` reads the
     chooser file (or nothing), deletes it and delivers `ProcessDone`.
     `wait-for-key` reuses the `space z` path (`shell_command_and_wait`
@@ -190,24 +197,22 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
   - Tests: chooser substitution and cleanup as unit tests; manual tmux check
     with a script that writes to the chooser file; refusal from an event
     handler.
-- [ ] **M1.4 Examples.** Depends on: M1.2, M1.3.
-  - `examples/yazi`: opens the current file's directory in yazi and opens
-    what you choose, honouring splits via an argument
-    (`:plugin-run yazi/open vsplit`).
-  - `examples/git`: `git/branches` (spawn `git branch`, status-only until
-    M2 lands), `git/blame-line` (spawn `git blame -L`, status message).
-  - README section "Running programs" with the grant setup.
+- [x] **M1.4 Docs.** Depends on: M1.2, M1.3.
+  - No example plugins (see Scope). `helix-plugin/README.md` has a "Running
+    programs" section with the grant setup and short `spawn` /
+    `run-interactive` snippets (a file chooser, a background command).
 
 ## M2. Pickers
 
-Unlocks Telescope-style plugins: file finders, project switchers, git pickers.
+Lets users write Telescope-style plugins: file finders, project switchers,
+git pickers.
 
 - [x] **M2.1 Picker close hook (upstream-file change).** Depends on: nothing.
   - `Picker` has no way to report "closed without choosing". Add an optional
     `on_close: Option<Box<dyn FnOnce(&mut Context)>>` (`with_on_close`) that
     runs on Esc/C-c, not on accept. Keep the patch small and self-contained
     in `ui/picker.rs`.
-- [ ] **M2.2 `show-picker`.** Depends on: M0.3, M2.1.
+- [x] **M2.2 `show-picker`.** Depends on: M0.3, M2.1.
   - `Action::ShowPicker` → `Picker<PluginItem, PluginPickerData>` with the
     plugin's column headers, `with_initial_cursor`, and `with_preview` for
     `preview::file` (path plus line range) and `preview::text` (show text in
@@ -221,20 +226,23 @@ Unlocks Telescope-style plugins: file finders, project switchers, git pickers.
   - Tests (in-editor): command opens a picker; `<ret>`, `<C-s>`, `<C-v>`,
     `<esc>` deliver the right results; preview doesn't crash on missing
     files; a second `show-picker` while one is open replaces it.
-- [ ] **M2.3 `push-items`.** Depends on: M2.2.
+  - Done, except text previews: `preview::text` is accepted but not shown
+    yet (the picker previews files and documents only). Answered plugin
+    pickers are not kept for `space '`.
+- [x] **M2.3 `push-items`.** Depends on: M2.2.
   - Keep `id → Injector` for open plugin pickers (drop on close). Lets a
     plugin `spawn` a program and stream its lines in as they arrive (with
     M1.2, add an optional `on-process-output(id, chunk)` callback, behind a
     `stream: bool` spawn option).
+  - Done: `push-items` into an open picker. Streaming process output
+    (`on-process-output`) needs a new API version and is left for later.
 - [ ] **M2.4 Live pickers.** Depends on: M2.2.
   - `with_dynamic_query`-backed pickers: a `live: bool` picker flag and an
     `on-picker-query(id, query)` callback that may call `push-items` /
     `set-items`. Debounce like the global search. Enables live grep.
-- [ ] **M2.5 Examples.** Depends on: M1.2, M2.2.
-  - `examples/files` (rg/fd → picker → open with split), `examples/git`
-    `branches` becomes a picker that switches branch, `examples/projects`
-    (list dirs from the plugin config → picker → `:cd` and open the file
-    picker).
+- [x] **M2.5 Docs.** Depends on: M1.2, M2.2.
+  - No example plugins (see Scope). The guide has a picker snippet (spawn
+    `rg --files`, pick, open with the chosen split).
 
 ## M3. Popups, prompts and messages
 
@@ -257,8 +265,7 @@ Unlocks Telescope-style plugins: file finders, project switchers, git pickers.
   `<data>/plugins/<name>/` is always read-write.
 - [ ] **M4.2 Workspace info.** Host functions `workspace-root`,
   `config-dir`, `cwd`, and the open documents' modified state.
-- [ ] **M4.3 Example `notes`.** Daily-note plugin: create
-  `notes/YYYY-MM-DD.md` in the workspace and open it.
+- [ ] **M4.3 Docs.** A guide snippet using file access (no bundled plugin).
 
 ## M5. Decorations
 
@@ -323,14 +330,15 @@ the hook first and keep it generic.
   setup, every permission, every host function with an example); a book
   page linking to it.
 
-## Later: a file-manager sidebar
+## Later: APIs for file-manager style plugins
 
-A persistent tree panel (nvim-tree / oil) needs plugin-defined views that
-upstream Helix doesn't have. It becomes possible after M2 (pickers), M3
-(prompts), M4 (file access) and M5 (decorations), either as an "oil-style"
-editable buffer (a scratch document the plugin fills and reads back on save)
-or as a new `ui` component API. Start with a research task: compare both
-approaches and estimate the upstream diff.
+Pure won't ship a file manager (see Scope), but users should be able to write
+one. A persistent tree panel (nvim-tree / oil) needs plugin-defined views that
+upstream Helix doesn't have. After M2 (pickers), M3 (prompts), M4 (file
+access) and M5 (decorations) the remaining piece is either an "oil-style"
+editable buffer API (a scratch document the plugin fills and reads back on
+save) or a `ui` component API. Start with a research task: compare both and
+estimate the upstream diff.
 
 ---
 
@@ -339,8 +347,8 @@ approaches and estimate the upstream diff.
 Tasks in one batch touch the same code, so give each batch to one agent.
 
 1. **M0.1–M0.5**: the 0.2 groundwork. It must land first.
-2. **M1.1–M1.4**: processes, terminal hand-over and the yazi/git examples.
-3. **M2.1–M2.5**: pickers. M2.1 can start right away, in parallel with batch 1.
+2. **M1.1–M1.4**: processes and terminal hand-over (done).
+3. **M2.1–M2.5**: pickers (done except M2.4, live pickers).
 4. **M3 + M4**: popups, prompts and file access. These need batch 1.
 5. **M6.1 + M9.1–M9.2**: events, fuzzing and benchmarks. Mostly independent.
 

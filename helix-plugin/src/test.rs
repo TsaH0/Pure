@@ -802,12 +802,16 @@ fn manifest_selects_the_component_world() {
 }
 
 fn testplugin2() -> (PluginHost, tempfile::TempDir) {
+    testplugin2_with(ALL)
+}
+
+fn testplugin2_with(permissions: &[&str]) -> (PluginHost, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let dir = plugin_dir(
         root.path(),
         "testplugin2",
         &fixture("tests/fixtures/testplugin2.wasm"),
-        ALL,
+        permissions,
     );
     let path = dir.join("plugin.toml");
     let source = std::fs::read_to_string(&path)
@@ -938,15 +942,16 @@ fn ui_is_restricted_to_commands_and_callbacks() {
             state,
             ui::Picker {
                 title: "Test".into(),
-                columns: vec![],
+                columns: vec!["name".into()],
                 items: vec![],
                 initial: None,
             },
         );
         if context.allows_ui() {
             assert!(command.is_ok());
-            assert!(interactive.unwrap_err().contains("not implemented"));
-            assert!(picker.unwrap_err().contains("not implemented"));
+            // Past the context check: testplugin2 has no `process` permission.
+            assert!(interactive.unwrap_err().contains("permission denied"));
+            assert!(picker.is_ok());
         } else {
             assert!(command.unwrap_err().contains("only available"));
             assert!(interactive.unwrap_err().contains("only available"));
@@ -1068,4 +1073,184 @@ fn sdk_ui_requests_are_refused_from_wasm_event_handlers() {
     assert!(messages[0].starts_with("run-interactive is only available"));
     assert!(messages[1].starts_with("show-picker is only available"));
     assert!(messages[2].starts_with("run-command is only available"));
+}
+
+const WITH_PROCESS: &[&str] = &[
+    "read-buffers",
+    "edit-buffers",
+    "open-files",
+    "run-commands",
+    "process",
+];
+
+fn args(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| arg.to_string()).collect()
+}
+
+fn spawn_id(actions: &[Action]) -> u32 {
+    match actions {
+        [Action::Spawn { id, .. }] => *id,
+        other => panic!("expected one spawn, got {other:?}"),
+    }
+}
+
+#[test]
+fn processes_need_the_permission_and_the_users_grant() {
+    let (mut host, _root) = testplugin2();
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["echo", "hi"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["echo", "hi"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("allow-process"), "{err}");
+    assert_eq!(host.info()[0].process, ProcessGrant::None);
+
+    host.set_process_grant("testplugin2", ProcessGrant::Only(args(&["echo"])));
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["sh", "-c", "echo hi"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("'sh' is not in allow-process"), "{err}");
+    // The program must match exactly, not just by name.
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["/tmp/echo"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("not in allow-process"), "{err}");
+
+    let actions = host
+        .run_command("testplugin2", "spawn", args(&["echo", "hi"]), Snapshot::default())
+        .unwrap();
+    match &actions[..] {
+        [Action::Spawn {
+            plugin,
+            argv,
+            cwd,
+            stdin,
+            timeout,
+            ..
+        }] => {
+            assert_eq!(plugin, "testplugin2");
+            assert_eq!(argv, &args(&["echo", "hi"]));
+            assert_eq!((cwd, stdin), (&None, &None));
+            assert_eq!(*timeout, DEFAULT_PROCESS_TIMEOUT);
+        }
+        other => panic!("expected a spawn, got {other:?}"),
+    }
+}
+
+#[test]
+fn spawn_results_reach_the_plugin_once() {
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    host.set_process_grant("testplugin2", ProcessGrant::Any);
+    let id = spawn_id(
+        &host
+            .run_command("testplugin2", "spawn", args(&["echo"]), Snapshot::default())
+            .unwrap(),
+    );
+    let done = Callback::ProcessDone {
+        id,
+        result: Ok(ProcessOutput {
+            exit_code: Some(3),
+            stdout: "out".into(),
+            stderr: "err".into(),
+        }),
+    };
+    let actions = host
+        .callback("testplugin2", done.clone(), &Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Status(s)] if s == "exit:Some(3);out:out;err:err"),
+        "{actions:?}"
+    );
+    assert!(host
+        .callback("testplugin2", done, &Snapshot::default())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn kill_and_process_limit() {
+    let (mut host, _root) = testplugin2_with(WITH_PROCESS);
+    host.set_process_grant("testplugin2", ProcessGrant::Any);
+    let mut ids = Vec::new();
+    for _ in 0..MAX_PROCESSES {
+        let actions = host
+            .run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+            .unwrap();
+        ids.push(spawn_id(&actions));
+    }
+    let err = host
+        .run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("at most"), "{err}");
+
+    // Killing a running program asks the editor to kill it; unknown ids are
+    // ignored.
+    let actions = host
+        .run_command("testplugin2", "kill", vec![ids[0].to_string()], Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Kill { id, .. }] if *id == ids[0]),
+        "{actions:?}"
+    );
+    let actions = host
+        .run_command("testplugin2", "kill", vec!["999999".into()], Snapshot::default())
+        .unwrap();
+    assert!(actions.is_empty());
+
+    // A finished program frees its slot.
+    host.callback("testplugin2", process_done(ids[1], ""), &Snapshot::default())
+        .unwrap();
+    host.run_command("testplugin2", "spawn", args(&["true"]), Snapshot::default())
+        .unwrap();
+}
+
+#[test]
+fn pickers_and_push_items() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command("testplugin2", "picker", args(&["a", "b"]), Snapshot::default())
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::ShowPicker { id, picker, .. }] => {
+            assert_eq!(picker.items.len(), 2);
+            assert_eq!(picker.items[1].data, "b");
+            *id
+        }
+        other => panic!("expected a picker, got {other:?}"),
+    };
+    let actions = host
+        .run_command("testplugin2", "push-items", vec![id.to_string()], Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::PushItems { items, .. }] if items.len() == 1),
+        "{actions:?}"
+    );
+    let err = host
+        .run_command("testplugin2", "push-items", vec!["999999".into()], Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("no open picker"), "{err}");
+
+    // Choosing delivers the indices and the split; the picker is then gone.
+    let actions = host
+        .callback(
+            "testplugin2",
+            Callback::PickerDone {
+                id,
+                result: PickerResult::Accepted((vec![1], OpenAction::Vsplit)),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Status(s)] if s == "choice:[1]:Some(OpenAction::Vsplit)"),
+        "{actions:?}"
+    );
+    let err = host
+        .run_command("testplugin2", "push-items", vec![id.to_string()], Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("no open picker"), "{err}");
 }

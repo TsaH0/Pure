@@ -152,28 +152,34 @@ use v0_2::helix::plugin::{process, ui};
 impl process::Host for State {
     fn spawn(
         &mut self,
-        _argv: Vec<String>,
-        _options: process::SpawnOptions,
+        argv: Vec<String>,
+        options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
-        Err("process support is not implemented yet".into())
+        State::spawn(self, argv, options.cwd, options.stdin, options.timeout_ms)
     }
     fn run_interactive(
         &mut self,
-        _argv: Vec<String>,
-        _options: process::InteractiveOptions,
+        argv: Vec<String>,
+        options: process::InteractiveOptions,
     ) -> std::result::Result<u32, String> {
-        self.need_ui("run-interactive")?;
-        Err("interactive process support is not implemented yet".into())
+        State::run_interactive(
+            self,
+            argv,
+            options.cwd,
+            options.chooser_file,
+            options.wait_for_key,
+        )
     }
-    fn kill(&mut self, _id: u32) {}
+    fn kill(&mut self, id: u32) {
+        State::kill(self, id)
+    }
 }
 impl ui::Host for State {
-    fn show_picker(&mut self, _picker: ui::Picker) -> std::result::Result<u32, String> {
-        self.need_ui("show-picker")?;
-        Err("picker support is not implemented yet".into())
+    fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
+        State::show_picker(self, picker)
     }
-    fn push_items(&mut self, _id: u32, _items: Vec<ui::Item>) -> std::result::Result<(), String> {
-        Err("picker support is not implemented yet".into())
+    fn push_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
+        State::push_items(self, id, items)
     }
 }
 
