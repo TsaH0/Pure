@@ -28,7 +28,7 @@
 #[doc(hidden)]
 pub mod bindings {
     wit_bindgen::generate!({
-        path: "../wit",
+        path: "../wit/v0.1",
         world: "helix-plugin",
         pub_export_macro: true,
         export_macro_name: "__export_helix_plugin",

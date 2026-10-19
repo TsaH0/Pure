@@ -1,7 +1,7 @@
 //! WebAssembly plugin host for Helix.
 //!
 //! Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
-//! implementing the `helix-plugin` world in `wit/helix-plugin.wit`, run with
+//! implementing the `helix-plugin` world in `wit/v0.1/helix-plugin.wit`, run with
 //! Wasmtime. Each plugin lives in its own directory with a `plugin.toml`
 //! manifest and its `plugin.wasm`.
 //!
@@ -29,7 +29,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "wit",
+        path: "wit/v0.1",
         world: "helix-plugin",
     });
 }

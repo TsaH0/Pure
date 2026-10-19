@@ -2,7 +2,7 @@
 
 Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
 run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
-[`wit/helix-plugin.wit`](wit/helix-plugin.wit); any language that can build a
+[`wit/v0.1/helix-plugin.wit`](wit/v0.1/helix-plugin.wit); any language that can build a
 component for it works. Rust has an SDK in [`sdk/`](sdk).
 
 ## Using plugins

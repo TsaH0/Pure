@@ -104,7 +104,7 @@ checks run in `tmux` (`tmux new -d -s t 'target/debug/pure'`,
 
 Nothing user-visible: the plumbing every later milestone needs.
 
-- [ ] **M0.1 Versioned WIT layout.** Depends on: nothing.
+- [x] **M0.1 Versioned WIT layout.** Depends on: nothing.
   - Move `wit/helix-plugin.wit` to `wit/v0.1/helix-plugin.wit` (unchanged);
     add `wit/v0.2/` with the 0.2 package from the design doc (`types` with
     `request-id` and `open-action`, plus `host`, `process`, `ui`,
