@@ -1,0 +1,254 @@
+// The API between Helix and its WebAssembly plugins.
+//
+// Positions are char offsets into a document, like everywhere in Helix. Reads
+// see the editor's state at the time the editor called into the plugin plus
+// the plugin's own edits. Edits, selection changes, messages and commands are
+// applied by the editor after the plugin call returns, in the order they were
+// made; all edits a single call makes to a document form one undo step.
+
+package helix:plugin@0.3.0;
+
+interface types {
+  type request-id = u32;
+  enum open-action { replace, hsplit, vsplit }
+
+  type document-id = u32;
+
+  /// A selection range. `anchor` == `head` is a cursor.
+  record range {
+    anchor: u32,
+    head: u32,
+  }
+
+  /// Replace the text between char offsets `from` and `to` with `text`.
+  record edit {
+    %from: u32,
+    to: u32,
+    text: string,
+  }
+
+  enum mode {
+    normal,
+    insert,
+    select,
+  }
+
+  enum event-kind {
+    document-open,
+    document-change,
+    mode-switch,
+    /// After a document was written to disk (`events.on-document-save`).
+    document-save,
+    /// After a document was closed (`events.on-document-close`).
+    document-close,
+    /// After the selections changed, debounced (`events.on-selection-change`).
+    selection-change,
+    /// After a command ran from a key press (`events.on-post-command`).
+    post-command,
+    /// The terminal gained or lost focus (`events.on-focus-gained`/`-lost`).
+    focus-gained,
+    focus-lost,
+    /// The editor went idle after typing (`events.on-editor-idle`).
+    editor-idle,
+  }
+
+  record command-info {
+    /// Run with `:plugin-run <plugin>/<name>`.
+    name: string,
+    doc: string,
+  }
+
+  record registration {
+    commands: list<command-info>,
+    events: list<event-kind>,
+  }
+}
+
+/// Functions the editor provides. Functions returning `result` fail with a
+/// message when the plugin lacks the permission (see `plugin.toml`) or the
+/// arguments are invalid.
+interface host {
+  use types.{document-id, range, edit, mode, open-action};
+
+  /// The document in the focused view.
+  current-document: func() -> option<document-id>;
+  /// All open documents.
+  documents: func() -> list<document-id>;
+  current-mode: func() -> mode;
+
+  // Needs the `read-buffers` permission.
+  document-path: func(doc: document-id) -> result<option<string>, string>;
+  document-language: func(doc: document-id) -> result<option<string>, string>;
+  text: func(doc: document-id) -> result<string, string>;
+  text-range: func(doc: document-id, %from: u32, to: u32) -> result<string, string>;
+  /// Selections of the focused view on `doc` (or the first view showing it).
+  /// The first range is the primary selection.
+  selections: func(doc: document-id) -> result<list<range>, string>;
+
+  // Needs the `edit-buffers` permission.
+  /// Apply edits. They must not overlap; their offsets refer to the text
+  /// before this call.
+  apply-edits: func(doc: document-id, edits: list<edit>) -> result<_, string>;
+  set-selections: func(doc: document-id, ranges: list<range>) -> result<_, string>;
+
+  // Needs the `open-files` permission.
+  open-file: func(path: string) -> result<_, string>;
+  /// Open `path` in the current view or a split, with the cursor at `line`
+  /// and `column` (1-based; default 1).
+  open-file-at: func(path: string, action: open-action, line: option<u32>, column: option<u32>) -> result<_, string>;
+
+  // Needs the `run-commands` permission. Only available while running one of
+  // the plugin's commands, not in event handlers.
+  /// Run an editor command: a static command like `goto_line_end` or a typable
+  /// command line like `:write`.
+  run-command: func(command: string) -> result<_, string>;
+
+  set-status: func(message: string);
+  set-error: func(message: string);
+  /// Write to Helix's log file.
+  log: func(message: string);
+
+  /// The workspace the editor runs in (the directory with `.git`, `.helix`,
+  /// ... above the working directory), if any.
+  workspace-root: func() -> option<string>;
+  /// The editor's working directory.
+  cwd: func() -> string;
+  /// The editor's configuration directory (`~/.config/helix`).
+  config-dir: func() -> string;
+  /// A directory only this plugin uses, for its own files; readable and
+  /// writable through WASI (std::fs) as this path.
+  data-dir: func() -> string;
+  /// Needs `read-buffers`: whether `doc` has unsaved changes.
+  document-modified: func(doc: document-id) -> result<bool, string>;
+}
+
+/// Functions a plugin provides.
+interface plugin {
+  use types.{document-id, mode, registration};
+
+  /// Called once after loading with the plugin's settings from
+  /// `plugins.toml`, as a JSON object.
+  init: func(config: string) -> result<registration, string>;
+  run-command: func(name: string, args: list<string>) -> result<_, string>;
+
+  on-document-open: func(doc: document-id);
+  on-document-change: func(doc: document-id);
+  on-mode-switch: func(old: mode, new: mode);
+}
+
+/// Background programs and terminal hand-over. Requires a user process grant.
+interface process {
+  use types.{request-id};
+  record spawn-options {
+    cwd: option<string>,
+    stdin: option<string>,
+    timeout-ms: option<u32>,
+    /// Also deliver stdout as it arrives (`callbacks.on-process-output`,
+    /// whole lines, batched); `on-process-done` still comes, with the rest.
+    %stream: bool,
+  }
+  record interactive-options {
+    cwd: option<string>,
+    chooser-file: bool,
+    wait-for-key: bool,
+  }
+  record output {
+    exit-code: option<s32>,
+    stdout: string,
+    stderr: string,
+  }
+  spawn: func(argv: list<string>, options: spawn-options) -> result<request-id, string>;
+  run-interactive: func(argv: list<string>, options: interactive-options) -> result<request-id, string>;
+  kill: func(id: request-id);
+}
+
+/// UI requests are available only from commands and callbacks.
+interface ui {
+  use types.{request-id, open-action};
+  variant preview {
+    file(tuple<string, option<tuple<u32, u32>>>),
+    text(string),
+  }
+  record item {
+    columns: list<string>,
+    data: string,
+    preview: option<preview>,
+  }
+  record picker {
+    title: string,
+    columns: list<string>,
+    items: list<item>,
+    initial: option<u32>,
+    /// Live picker: the editor reports what the user types with
+    /// `callbacks.on-picker-query` (debounced) instead of filtering the
+    /// items itself; the plugin answers with `set-items`.
+    live: bool,
+  }
+  variant picker-result {
+    accepted(tuple<list<u32>, open-action>),
+    cancelled,
+  }
+  show-picker: func(picker: picker) -> result<request-id, string>;
+  push-items: func(id: request-id, items: list<item>) -> result<_, string>;
+  /// Replace the items of an open picker (for live pickers).
+  set-items: func(id: request-id, items: list<item>) -> result<_, string>;
+
+  record popup {
+    markdown: string,
+    /// In the middle of the screen instead of at the cursor.
+    centered: bool,
+  }
+  /// Show a popup until the next key press (or `close-popup`). When it
+  /// closes, `callbacks.on-popup-close` is called with its id.
+  show-popup: func(popup: popup) -> result<request-id, string>;
+  close-popup: func(id: request-id);
+
+  record prompt {
+    /// Shown before the input, e.g. "rename to:".
+    message: string,
+    /// The input to start with.
+    initial: string,
+    /// Offered as completions while typing (fuzzy matched).
+    completions: list<string>,
+  }
+  /// Ask for a line of text. The answer arrives in
+  /// `callbacks.on-prompt-done` (`none` if the user pressed Esc).
+  show-prompt: func(prompt: prompt) -> result<request-id, string>;
+}
+
+interface callbacks {
+  use types.{request-id};
+  use process.{output};
+  use ui.{picker-result};
+  on-process-done: func(id: request-id, %result: result<output, string>);
+  on-picker-done: func(id: request-id, %result: picker-result);
+  /// What the user typed in a live picker.
+  on-picker-query: func(id: request-id, query: string);
+  /// Output of a program started with `stream`.
+  on-process-output: func(id: request-id, chunk: string);
+  on-popup-close: func(id: request-id);
+  on-prompt-done: func(id: request-id, answer: option<string>);
+}
+
+/// Event handlers added in 0.2 (subscribe in `init`'s registration).
+interface events {
+  use types.{document-id};
+  on-document-save: func(doc: document-id);
+  /// The document is already closed: only its id is known.
+  on-document-close: func(doc: document-id);
+  on-selection-change: func(doc: document-id);
+  /// `command` is the command's name, e.g. `move_char_left`.
+  on-post-command: func(command: string);
+  on-focus-gained: func();
+  on-focus-lost: func();
+  on-editor-idle: func();
+}
+
+world helix-plugin {
+  import host;
+  import process;
+  import ui;
+  export plugin;
+  export callbacks;
+  export events;
+}

@@ -1,0 +1,228 @@
+diff --git a/helix-plugin/src/lib.rs b/helix-plugin/src/lib.rs
+index c479092..95a4119 100644
+--- a/helix-plugin/src/lib.rs
++++ b/helix-plugin/src/lib.rs
+@@ -34,7 +34,7 @@
+ use v0_1::helix::plugin::types;
+ 
+ /// The newest supported plugin API. API 0.1 remains supported unchanged.
+-pub const API_VERSION: &str = "0.2";
++pub const API_VERSION: &str = "0.3";
+ 
+ pub type DocumentId = u32;
+ 
+@@ -147,6 +147,11 @@ pub enum EventKind {
+     DocumentSave,
+     DocumentClose,
+     SelectionChange,
++    /// API 0.3 and later.
++    PostCommand,
++    FocusGained,
++    FocusLost,
++    EditorIdle,
+ }
+ 
+ /// Most programs a plugin may run at once.
+@@ -189,9 +194,9 @@ pub fn parse(source: &str) -> anyhow::Result<Self> {
+                 manifest.name
+             );
+         }
+-        if !matches!(manifest.api.as_str(), "0.1" | "0.2") {
++        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3") {
+             bail!(
+-                "plugin '{}' needs plugin API {} but this Pure supports 0.1 and 0.2",
++                "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
+                 manifest.name,
+                 manifest.api
+             );
+@@ -270,6 +275,8 @@ pub enum Action {
+         cwd: Option<PathBuf>,
+         stdin: Option<String>,
+         timeout: Duration,
++        /// Deliver stdout as it arrives ([`Callback::ProcessOutput`]).
++        stream: bool,
+     },
+     /// Hand the terminal to a program, then deliver
+     /// [`Callback::ProcessDone`].
+@@ -304,8 +311,24 @@ pub enum Action {
+         id: u32,
+         items: Vec<PickerItem>,
+     },
+-    /// Show markdown in a popup.
+-    Popup(String),
++    /// Show markdown in a popup; with an owner, deliver
++    /// [`Callback::PopupClosed`] when it closes.
++    Popup {
++        markdown: String,
++        centered: bool,
++        owner: Option<(String, u32)>,
++    },
++    ClosePopup {
++        plugin: String,
++        id: u32,
++    },
++    /// Open a file in the current view or a split, at a position (1-based).
++    OpenFileAt {
++        path: PathBuf,
++        action: OpenAction,
++        line: Option<u32>,
++        column: Option<u32>,
++    },
+     /// Ask for a line of text and deliver [`Callback::PromptDone`].
+     ShowPrompt {
+         plugin: String,
+@@ -331,6 +354,7 @@ pub enum PendingKind {
+     Process,
+     Picker,
+     Prompt,
++    Popup,
+ }
+ 
+ /// A result delivered after the original plugin call returned.
+@@ -354,21 +378,32 @@ pub enum Callback {
+         id: u32,
+         query: String,
+     },
++    /// Output of a program started with `stream`; doesn't complete it.
++    ProcessOutput {
++        id: u32,
++        chunk: String,
++    },
++    PopupClosed {
++        id: u32,
++    },
+ }
+ 
+ impl Callback {
+     fn request(&self) -> (u32, PendingKind) {
+         match self {
+-            Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
++            Self::ProcessDone { id, .. } | Self::ProcessOutput { id, .. } => {
++                (*id, PendingKind::Process)
++            }
+             Self::PickerDone { id, .. } | Self::PickerQuery { id, .. } => {
+                 (*id, PendingKind::Picker)
+             }
+             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
++            Self::PopupClosed { id } => (*id, PendingKind::Popup),
+         }
+     }
+ 
+     fn completes(&self) -> bool {
+-        !matches!(self, Self::PickerQuery { .. })
++        !matches!(self, Self::PickerQuery { .. } | Self::ProcessOutput { .. })
+     }
+ }
+ 
+@@ -391,7 +426,7 @@ fn allows_ui(self) -> bool {
+ static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+ 
+ /// What happened in the editor.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum Event {
+     DocumentOpen(DocumentId),
+     DocumentChange(DocumentId),
+@@ -399,6 +434,11 @@ pub enum Event {
+     DocumentSave(DocumentId),
+     DocumentClose(DocumentId),
+     SelectionChange(DocumentId),
++    /// The name of the command that ran.
++    PostCommand(String),
++    FocusGained,
++    FocusLost,
++    EditorIdle,
+ }
+ 
+ impl Event {
+@@ -410,6 +450,10 @@ pub fn kind(&self) -> EventKind {
+             Event::DocumentSave(_) => EventKind::DocumentSave,
+             Event::DocumentClose(_) => EventKind::DocumentClose,
+             Event::SelectionChange(_) => EventKind::SelectionChange,
++            Event::PostCommand(_) => EventKind::PostCommand,
++            Event::FocusGained => EventKind::FocusGained,
++            Event::FocusLost => EventKind::FocusLost,
++            Event::EditorIdle => EventKind::EditorIdle,
+         }
+     }
+ }
+@@ -624,6 +668,26 @@ fn open_file(&mut self, path: String) -> Result<(), String> {
+         Ok(())
+     }
+ 
++    fn open_file_at(
++        &mut self,
++        path: String,
++        action: OpenAction,
++        line: Option<u32>,
++        column: Option<u32>,
++    ) -> Result<(), String> {
++        self.need(Permission::OpenFiles)?;
++        if path.is_empty() {
++            return Err("empty path".into());
++        }
++        self.actions.push(Action::OpenFileAt {
++            path: PathBuf::from(path),
++            action,
++            line,
++            column,
++        });
++        Ok(())
++    }
++
+     fn run_command(&mut self, command: String) -> Result<(), String> {
+         self.need(Permission::RunCommands)?;
+         if !self.context.allows_ui() {
+@@ -694,6 +758,7 @@ fn spawn(
+         cwd: Option<String>,
+         stdin: Option<String>,
+         timeout_ms: Option<u32>,
++        stream: bool,
+     ) -> Result<u32, String> {
+         self.need_process(&argv)?;
+         let timeout = timeout_ms
+@@ -708,6 +773,7 @@ fn spawn(
+             cwd: cwd.map(PathBuf::from),
+             stdin,
+             timeout,
++            stream,
+         });
+         Ok(id)
+     }
+@@ -798,10 +864,35 @@ fn set_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+ 
+     fn show_popup(&mut self, markdown: String) -> Result<(), String> {
+         self.need_ui("show-popup")?;
+-        self.actions.push(Action::Popup(markdown));
++        self.actions.push(Action::Popup {
++            markdown,
++            centered: false,
++            owner: None,
++        });
+         Ok(())
+     }
+ 
++    /// A popup the plugin hears about when it closes (API 0.3).
++    fn show_popup_with_id(&mut self, markdown: String, centered: bool) -> Result<u32, String> {
++        self.need_ui("show-popup")?;
++        let id = self.request(PendingKind::Popup)?;
++        self.actions.push(Action::Popup {
++            markdown,
++            centered,
++            owner: Some((self.plugin.clone(), id)),
++        });
++        Ok(id)
++    }
++
++    fn close_popup(&mut self, id: u32) {
++        if self.pending.get(&id) == Some(&PendingKind::Popup) {
++            self.actions.push(Action::ClosePopup {
++                plugin: self.plugin.clone(),
++                id,
++            });
++        }
++    }
++
+     fn show_prompt(&mut self, prompt: PromptSpec) -> Result<u32, String> {
+         self.need_ui("show-prompt")?;
+         let id = self.request(PendingKind::Prompt)?;

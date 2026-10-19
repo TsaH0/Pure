@@ -426,9 +426,11 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
 
 ## API 0.3 work in progress
 
-A started (uncompiled) M10 implementation is in `git stash` only on the
-original machine, so it is lost: start M10 from the plan above. The WIT
-draft lived at `helix-plugin/wit/v0.3/helix-plugin.wit` (copy of 0.2 plus:
+A started, uncompiled M10 draft is saved in `docs/drafts/`:
+`helix-plugin-v0.3.wit` (move it to `helix-plugin/wit/v0.3/`) and
+`api-0.3-host.diff` (host type changes for `helix-plugin/src/lib.rs`, not
+yet applied; `api.rs`, SDK and editor parts are still to do). The WIT is a
+copy of 0.2 plus:
 `open-file-at`, popups with ids + `close-popup` + `on-popup-close`,
 `spawn-options.%stream` + `on-process-output`, events `post-command`,
 `focus-gained`, `focus-lost`, `editor-idle`). Host design: `Event` becomes
