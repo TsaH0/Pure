@@ -372,3 +372,125 @@ async fn no_plugins_directory() -> anyhow::Result<()> {
     assert_eq!(text(&app), "xhello");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_02_sdk_plugin_edits_alongside_legacy_plugins() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_plugins("#[hé|]#llo\n", ALL, "");
+    let plugin = dir.path().join("testplugin2");
+    std::fs::create_dir_all(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin2.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin2\"\nversion = \"1\"\napi = \"0.2\"\npermissions = [{ALL}]\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    let names = helix_term::plugins::command_names();
+    assert!(names.contains(&"testplugin/status".to_owned()));
+    assert!(names.contains(&"testplugin2/inspect".to_owned()));
+    assert!(names.contains(&"text-tools/upper".to_owned()));
+    keys(&mut app, ":plugin-run testplugin2/inspect<ret>").await;
+    assert_eq!(text(&app), "v2:héllo\n");
+    assert_eq!(status(&app).0, "héllo\n:Mode::Normal");
+    keys(&mut app, "u").await;
+    assert_eq!(text(&app), "héllo\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn picker_close_hook_runs_only_on_cancel_and_only_once() -> anyhow::Result<()> {
+    use helix_term::ui::{overlay::overlaid, Picker, PickerColumn};
+    use helix_view::editor::Action;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    let mut app = AppBuilder::new().with_input_text("#[a|]#").build()?;
+    for (key, expected_close, expected_action) in [
+        ("<esc>", 1, 0),
+        ("<C-c>", 1, 0),
+        ("<ret>", 0, 1),
+        ("<C-s>", 0, 2),
+        ("<C-v>", 0, 3),
+    ] {
+        let closed = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let close_count = closed.clone();
+        let accept_action = accepted.clone();
+        let owned_message = String::from("picker closed");
+        helix_term::job::dispatch(move |_, compositor| {
+            let picker = Picker::new(
+                [PickerColumn::new("Name", |item: &String, _: &()| {
+                    item.clone().into()
+                })],
+                0,
+                ["item".to_owned()],
+                (),
+                move |_, _, action| {
+                    accept_action.store(
+                        match action {
+                            Action::Replace => 1,
+                            Action::HorizontalSplit => 2,
+                            Action::VerticalSplit => 3,
+                            Action::Load => 4,
+                        },
+                        Ordering::Relaxed,
+                    );
+                },
+            )
+            .with_on_close(move |ctx| {
+                close_count.fetch_add(1, Ordering::Relaxed);
+                ctx.editor.set_status(owned_message);
+            });
+            compositor.push(Box::new(overlaid(picker)));
+        })
+        .await;
+        keys(&mut app, "").await;
+        keys(&mut app, key).await;
+        assert_eq!(closed.load(Ordering::Relaxed), expected_close, "{key}");
+        assert_eq!(accepted.load(Ordering::Relaxed), expected_action, "{key}");
+        keys(&mut app, "<space>'").await;
+        keys(&mut app, "<esc>").await;
+        assert_eq!(
+            closed.load(Ordering::Relaxed),
+            expected_close,
+            "reopened {key}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn picker_close_hook_cancels_empty_picker_on_enter() -> anyhow::Result<()> {
+    use helix_term::ui::{overlay::overlaid, Picker, PickerColumn};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let mut app = AppBuilder::new().with_input_text("#[a|]#").build()?;
+    let closed = Arc::new(AtomicUsize::new(0));
+    let count = closed.clone();
+    helix_term::job::dispatch(move |_, compositor| {
+        let picker = Picker::new(
+            [PickerColumn::new("Name", |item: &String, _: &()| {
+                item.clone().into()
+            })],
+            0,
+            Vec::new(),
+            (),
+            |_, _, _| panic!("empty picker cannot accept"),
+        )
+        .with_on_close(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        compositor.push(Box::new(overlaid(picker)));
+    })
+    .await;
+    keys(&mut app, "").await;
+    keys(&mut app, "<ret>").await;
+    assert_eq!(closed.load(Ordering::Relaxed), 1);
+    Ok(())
+}

@@ -25,10 +25,23 @@
 //! Build with `cargo build --release --target wasm32-wasip2` and put the
 //! resulting `.wasm` next to a `plugin.toml` in `~/.config/helix/plugins/<name>/`.
 
+#[cfg(feature = "api-v0-1")]
 #[doc(hidden)]
 pub mod bindings {
     wit_bindgen::generate!({
-        path: "../wit",
+        path: "../wit/v0.1",
+        world: "helix-plugin",
+        pub_export_macro: true,
+        export_macro_name: "__export_helix_plugin",
+        default_bindings_module: "helix_plugin_api::bindings",
+    });
+}
+
+#[cfg(not(feature = "api-v0-1"))]
+#[doc(hidden)]
+pub mod bindings {
+    wit_bindgen::generate!({
+        path: "../wit/v0.2",
         world: "helix-plugin",
         pub_export_macro: true,
         export_macro_name: "__export_helix_plugin",
@@ -43,6 +56,8 @@ pub use bindings::helix::plugin::types::{
 /// Functions provided by the editor.
 pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
+    #[cfg(not(feature = "api-v0-1"))]
+    pub use crate::requests::{kill, pick, run_interactive, spawn};
 }
 
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the
@@ -55,8 +70,11 @@ pub trait Plugin {
     /// Run one of the commands returned from `init`.
     fn run_command(name: &str, args: Vec<String>) -> Result<(), String>;
 
+    /// Called when a document opens, if subscribed.
     fn on_document_open(_doc: DocumentId) {}
+    /// Called after debounced document edits, if subscribed.
     fn on_document_change(_doc: DocumentId) {}
+    /// Called after the editor changes mode, if subscribed.
     fn on_mode_switch(_old: Mode, _new: Mode) {}
 }
 
@@ -71,7 +89,7 @@ macro_rules! register_plugin {
                 <$plugin as $crate::Plugin>::init(config)
             }
             fn run_command(name: String, args: Vec<String>) -> Result<(), String> {
-                <$plugin as $crate::Plugin>::run_command(&name, args)
+                $crate::__run_command(|| <$plugin as $crate::Plugin>::run_command(&name, args))
             }
             fn on_document_open(doc: $crate::DocumentId) {
                 <$plugin as $crate::Plugin>::on_document_open(doc)
@@ -84,6 +102,7 @@ macro_rules! register_plugin {
             }
         }
 
+        $crate::__export_callbacks!(__HelixPluginExport);
         $crate::bindings::__export_helix_plugin!(__HelixPluginExport with_types_in $crate::bindings);
     };
 }
@@ -122,5 +141,53 @@ pub mod text {
             starts.push(offset);
         }
         starts
+    }
+}
+
+#[cfg(not(feature = "api-v0-1"))]
+#[doc(hidden)]
+pub mod requests;
+
+#[cfg(not(feature = "api-v0-1"))]
+pub use bindings::helix::plugin::{
+    process::Output,
+    types::{OpenAction, RequestId},
+    ui::{Item, Picker, PickerResult, Preview},
+};
+#[cfg(not(feature = "api-v0-1"))]
+pub use requests::{Choice, InteractiveOptions, SpawnOptions};
+
+#[cfg(feature = "api-v0-1")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_callbacks {
+    ($export:ty) => {};
+}
+
+#[cfg(not(feature = "api-v0-1"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_callbacks {
+    ($export:ty) => {
+        impl $crate::bindings::exports::helix::plugin::callbacks::Guest for $export {
+            fn on_process_done(id: $crate::RequestId, result: Result<$crate::Output, String>) {
+                $crate::requests::process_done(id, result)
+            }
+            fn on_picker_done(id: $crate::RequestId, result: $crate::PickerResult) {
+                $crate::requests::picker_done(id, result)
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+pub fn __run_command(f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    #[cfg(feature = "api-v0-1")]
+    {
+        f()
+    }
+    #[cfg(not(feature = "api-v0-1"))]
+    {
+        requests::run_command(f)
     }
 }

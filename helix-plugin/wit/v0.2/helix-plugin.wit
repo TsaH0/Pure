@@ -1,0 +1,173 @@
+// The API between Helix and its WebAssembly plugins.
+//
+// Positions are char offsets into a document, like everywhere in Helix. Reads
+// see the editor's state at the time the editor called into the plugin plus
+// the plugin's own edits. Edits, selection changes, messages and commands are
+// applied by the editor after the plugin call returns, in the order they were
+// made; all edits a single call makes to a document form one undo step.
+
+package helix:plugin@0.2.0;
+
+interface types {
+  type request-id = u32;
+  enum open-action { replace, hsplit, vsplit }
+
+  type document-id = u32;
+
+  /// A selection range. `anchor` == `head` is a cursor.
+  record range {
+    anchor: u32,
+    head: u32,
+  }
+
+  /// Replace the text between char offsets `from` and `to` with `text`.
+  record edit {
+    %from: u32,
+    to: u32,
+    text: string,
+  }
+
+  enum mode {
+    normal,
+    insert,
+    select,
+  }
+
+  enum event-kind {
+    document-open,
+    document-change,
+    mode-switch,
+  }
+
+  record command-info {
+    /// Run with `:plugin-run <plugin>/<name>`.
+    name: string,
+    doc: string,
+  }
+
+  record registration {
+    commands: list<command-info>,
+    events: list<event-kind>,
+  }
+}
+
+/// Functions the editor provides. Functions returning `result` fail with a
+/// message when the plugin lacks the permission (see `plugin.toml`) or the
+/// arguments are invalid.
+interface host {
+  use types.{document-id, range, edit, mode};
+
+  /// The document in the focused view.
+  current-document: func() -> option<document-id>;
+  /// All open documents.
+  documents: func() -> list<document-id>;
+  current-mode: func() -> mode;
+
+  // Needs the `read-buffers` permission.
+  document-path: func(doc: document-id) -> result<option<string>, string>;
+  document-language: func(doc: document-id) -> result<option<string>, string>;
+  text: func(doc: document-id) -> result<string, string>;
+  text-range: func(doc: document-id, %from: u32, to: u32) -> result<string, string>;
+  /// Selections of the focused view on `doc` (or the first view showing it).
+  /// The first range is the primary selection.
+  selections: func(doc: document-id) -> result<list<range>, string>;
+
+  // Needs the `edit-buffers` permission.
+  /// Apply edits. They must not overlap; their offsets refer to the text
+  /// before this call.
+  apply-edits: func(doc: document-id, edits: list<edit>) -> result<_, string>;
+  set-selections: func(doc: document-id, ranges: list<range>) -> result<_, string>;
+
+  // Needs the `open-files` permission.
+  open-file: func(path: string) -> result<_, string>;
+
+  // Needs the `run-commands` permission. Only available while running one of
+  // the plugin's commands, not in event handlers.
+  /// Run an editor command: a static command like `goto_line_end` or a typable
+  /// command line like `:write`.
+  run-command: func(command: string) -> result<_, string>;
+
+  set-status: func(message: string);
+  set-error: func(message: string);
+  /// Write to Helix's log file.
+  log: func(message: string);
+}
+
+/// Functions a plugin provides.
+interface plugin {
+  use types.{document-id, mode, registration};
+
+  /// Called once after loading with the plugin's settings from
+  /// `plugins.toml`, as a JSON object.
+  init: func(config: string) -> result<registration, string>;
+  run-command: func(name: string, args: list<string>) -> result<_, string>;
+
+  on-document-open: func(doc: document-id);
+  on-document-change: func(doc: document-id);
+  on-mode-switch: func(old: mode, new: mode);
+}
+
+/// Background programs and terminal hand-over. Requires a user process grant.
+interface process {
+  use types.{request-id};
+  record spawn-options {
+    cwd: option<string>,
+    stdin: option<string>,
+    timeout-ms: option<u32>,
+  }
+  record interactive-options {
+    cwd: option<string>,
+    chooser-file: bool,
+    wait-for-key: bool,
+  }
+  record output {
+    exit-code: option<s32>,
+    stdout: string,
+    stderr: string,
+  }
+  spawn: func(argv: list<string>, options: spawn-options) -> result<request-id, string>;
+  run-interactive: func(argv: list<string>, options: interactive-options) -> result<request-id, string>;
+  kill: func(id: request-id);
+}
+
+/// UI requests are available only from commands and callbacks.
+interface ui {
+  use types.{request-id, open-action};
+  variant preview {
+    file(tuple<string, option<tuple<u32, u32>>>),
+    text(string),
+  }
+  record item {
+    columns: list<string>,
+    data: string,
+    preview: option<preview>,
+  }
+  record picker {
+    title: string,
+    columns: list<string>,
+    items: list<item>,
+    initial: option<u32>,
+  }
+  variant picker-result {
+    accepted(tuple<list<u32>, open-action>),
+    cancelled,
+  }
+  show-picker: func(picker: picker) -> result<request-id, string>;
+  push-items: func(id: request-id, items: list<item>) -> result<_, string>;
+}
+
+interface callbacks {
+  use types.{request-id};
+  use process.{output};
+  use ui.{picker-result};
+  on-process-done: func(id: request-id, %result: result<output, string>);
+  on-picker-done: func(id: request-id, %result: picker-result);
+}
+
+world helix-plugin {
+  import host;
+  import process;
+  import ui;
+  export plugin;
+  export callbacks;
+}

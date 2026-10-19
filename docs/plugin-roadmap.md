@@ -104,14 +104,14 @@ checks run in `tmux` (`tmux new -d -s t 'target/debug/pure'`,
 
 Nothing user-visible: the plumbing every later milestone needs.
 
-- [ ] **M0.1 Versioned WIT layout.** Depends on: nothing.
+- [x] **M0.1 Versioned WIT layout.** Depends on: nothing.
   - Move `wit/helix-plugin.wit` to `wit/v0.1/helix-plugin.wit` (unchanged);
     add `wit/v0.2/` with the 0.2 package from the design doc (`types` with
     `request-id` and `open-action`, plus `host`, `process`, `ui`,
     `callbacks`). The SDK and test plugin point at the new paths.
   - Done when: the 0.1 fixtures still build byte-for-byte compatible bindings
     and all `helix-plugin` tests pass.
-- [ ] **M0.2 Two worlds in the host.** Depends on: M0.1.
+- [x] **M0.2 Two worlds in the host.** Depends on: M0.1.
   - `bindgen!` once per version in `mod v0_1` / `mod v0_2`. Move the
     host-function bodies into plain methods on `State`, so both worlds'
     `Host` impls are thin wrappers (no duplicated logic).
@@ -121,7 +121,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     versions.
   - Done when: the 0.1 test plugin and `text-tools` load and pass every
     existing test, and a minimal 0.2 test plugin loads.
-- [ ] **M0.3 Request ids and callbacks.** Depends on: M0.2.
+- [x] **M0.3 Request ids and callbacks.** Depends on: M0.2.
   - In `State`/`Plugin`: a `next_id` counter and `pending: HashMap<u32,
     PendingKind>`. Add `pub enum Callback { ProcessDone { id, result },
     PickerDone { id, result }, PromptDone { .. } }` and
@@ -133,7 +133,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     already does).
   - Done when: a unit test fakes a callback for a pending id, gets the
     plugin's actions back, and an unknown id is a no-op.
-- [ ] **M0.4 SDK 0.2.** Depends on: M0.1.
+- [x] **M0.4 SDK 0.2.** Depends on: M0.1.
   - `helix-plugin-api` 0.2: `thread_local!` registry `id → Box<dyn FnOnce>`;
     `register_plugin!` also exports `callbacks` and routes each callback to
     its closure. Public API sketch in the design doc (`editor::spawn`,
@@ -141,7 +141,7 @@ Nothing user-visible: the plumbing every later milestone needs.
     source-compatible.
   - Done when: `text-tools` builds against SDK 0.2 unchanged except for
     `api = "0.2"`, and the SDK has doc comments for every public item.
-- [ ] **M0.5 0.2 test plugin.** Depends on: M0.2, M0.4.
+- [x] **M0.5 0.2 test plugin.** Depends on: M0.2, M0.4.
   - `tests/plugins/testplugin2` with commands that exercise each new host
     function (added as later tasks land). Add it to `build-plugins.sh`;
     commit `tests/fixtures/testplugin2.wasm`.
@@ -202,7 +202,7 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
 
 Unlocks Telescope-style plugins: file finders, project switchers, git pickers.
 
-- [ ] **M2.1 Picker close hook (upstream-file change).** Depends on: nothing.
+- [x] **M2.1 Picker close hook (upstream-file change).** Depends on: nothing.
   - `Picker` has no way to report "closed without choosing". Add an optional
     `on_close: Option<Box<dyn FnOnce(&mut Context)>>` (`with_on_close`) that
     runs on Esc/C-c, not on accept. Keep the patch small and self-contained
