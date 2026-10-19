@@ -1733,3 +1733,39 @@ fn benchmarks() {
         started.elapsed().as_secs_f64() * 1000.0 / rounds as f64
     );
 }
+
+/// Random input through the real ABI (see testplugin2's `fuzz`): the host
+/// may refuse it but must never crash or disable the plugin, and what it
+/// accepts must apply cleanly.
+#[test]
+fn fuzzing_through_the_abi() {
+    let (mut host, _root) = testplugin2();
+    for seed in 1..300 {
+        let text = "héllo\nwörld\r\n".repeat((seed % 4) as usize);
+        let result = host.run_command(
+            "testplugin2",
+            "fuzz",
+            vec![seed.to_string()],
+            snapshot(&text, 0, 0),
+        );
+        let actions = result.unwrap_or_else(|err| panic!("seed {seed}: {err}"));
+        // Every edit the host accepted applies to the text in order.
+        let mut rope = Rope::from(text.as_str());
+        for action in actions {
+            match action {
+                Action::Edit { transaction, .. } => {
+                    assert!(transaction.apply(&mut rope), "seed {seed}");
+                }
+                Action::SetSelection { selection, .. } => {
+                    let selection = selection.ensure_invariants(rope.slice(..));
+                    assert!(selection
+                        .ranges()
+                        .iter()
+                        .all(|r| r.to() <= rope.len_chars()));
+                }
+                _ => {}
+            }
+        }
+        assert!(host.plugins[0].disabled().is_none(), "seed {seed}");
+    }
+}

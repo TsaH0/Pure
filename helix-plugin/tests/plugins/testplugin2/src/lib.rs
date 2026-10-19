@@ -32,6 +32,7 @@ impl Plugin for TestPlugin {
                 "write-data",
                 "log",
                 "text-preview",
+                "fuzz",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -137,6 +138,37 @@ impl Plugin for TestPlugin {
             }
             "kill" => editor::kill(request_id(&args)?),
             "popup" => editor::popup(&args.join(" "))?,
+            // Random edits, selections and reads through the real ABI, from
+            // a seed. Errors are expected; the host must not crash.
+            "fuzz" => {
+                let mut seed: u64 = request_id(&args)?.into();
+                let mut next = move |max: u32| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed % (max as u64 + 1)) as u32
+                };
+                let doc = editor::current_document().ok_or("no document")?;
+                for _ in 0..20 {
+                    let len = editor::text(doc)?.chars().count() as u32;
+                    let edits: Vec<Edit> = (0..next(3))
+                        .map(|_| Edit {
+                            from: next(len + 2),
+                            to: next(len + 2),
+                            text: ["", "x", "é", "\n", "ab\r\n"][next(4) as usize].into(),
+                        })
+                        .collect();
+                    let _ = editor::apply_edits(doc, &edits);
+                    let ranges: Vec<helix_plugin_api::Range> = (0..next(3))
+                        .map(|_| helix_plugin_api::Range {
+                            anchor: next(len + 2),
+                            head: next(len + 2),
+                        })
+                        .collect();
+                    let _ = editor::set_selections(doc, &ranges);
+                    let _ = editor::text_range(doc, next(len + 2), next(len + 2));
+                }
+            }
             "text-preview" => {
                 let items = args
                     .iter()

@@ -437,9 +437,9 @@ Small, self-contained; each one is a good single task.
 - [x] **A `plugins` cargo feature** (on by default): `cargo build
   --no-default-features --features git` builds Pure without Wasmtime
   (`helix-term/src/plugins_disabled.rs` stands in).
-- [ ] **Fuzz the WASM boundary itself** (M9.1 covers the host's validation
-  with quickcheck): a test plugin that sends random edits, ranges and
-  picker data through the real ABI.
+- [x] **Fuzz the WASM boundary itself**: testplugin2's `fuzz` command
+  sends random edits, selections and ranges through the real ABI
+  (`fuzzing_through_the_abi`, 300 seeds).
 - [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
 ## Guidelines for agents (lessons from earlier work)
