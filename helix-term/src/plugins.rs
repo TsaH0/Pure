@@ -200,18 +200,17 @@ pub fn load_in_background() {
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     tokio::spawn(async move {
         let (settings, error) = read_settings();
-        *LOADED.lock() = Some((dir.clone(), settings.clone()));
         let built = tokio::task::spawn_blocking(move || {
             let (host, actions, mut errors) = build_host(&dir, &settings);
             errors.extend(error);
-            (host, actions, errors)
+            (host, actions, errors, (dir, settings))
         })
         .await;
-        let Ok((host, actions, errors)) = built else {
+        let Ok((host, actions, errors, loaded)) = built else {
             return;
         };
         job::dispatch(move |editor, _| {
-            install_background(editor, generation, host, actions, errors);
+            install_background(editor, generation, host, actions, errors, loaded);
         })
         .await;
     });
@@ -224,10 +223,12 @@ fn install_background(
     host: Option<PluginHost>,
     actions: Vec<Action>,
     errors: Vec<anyhow::Error>,
+    loaded: (PathBuf, toml::Table),
 ) {
     if GENERATION.load(Ordering::Relaxed) != generation {
         return;
     }
+    *LOADED.lock() = Some(loaded);
     install(editor, host, actions, errors);
     let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
     for doc in open {
@@ -1049,7 +1050,8 @@ mod tests {
         .unwrap();
         let old = GENERATION.load(Ordering::Relaxed);
         let empty = tempfile::tempdir().unwrap();
-        load_from(&mut app.editor, empty.path(), &toml::Table::new());
+        let newer_settings = toml::from_str("[newer]\nallow-process = [\"rg\"]\n").unwrap();
+        load_from(&mut app.editor, empty.path(), &newer_settings);
         install(
             &mut app.editor,
             Some(PluginHost::new(None).unwrap()),
@@ -1063,6 +1065,12 @@ mod tests {
             None,
             vec![Action::Status("stale init".into())],
             vec![anyhow::anyhow!("stale error")],
+            (empty.path().join("stale"), toml::Table::new()),
+        );
+        assert_eq!(
+            *LOADED.lock(),
+            Some((empty.path().to_path_buf(), newer_settings)),
+            "stale settings must not replace the reload's grants or directory"
         );
         assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "newer load");
         assert!(
@@ -1075,7 +1083,12 @@ mod tests {
             None,
             vec![Action::Status("current init".into())],
             vec![],
+            (empty.path().join("current"), toml::Table::new()),
         );
         assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "current init");
+        assert_eq!(
+            *LOADED.lock(),
+            Some((empty.path().join("current"), toml::Table::new()))
+        );
     }
 }

@@ -522,10 +522,9 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
   pool can survive until the FIFO wakes. Track upstream WASI/cap-std support
   for opening nonblocking from the start; keep host shutdown nonblocking.
-- [ ] **Background load metadata:** `load_in_background` writes `LOADED`
-  before its generation check. A delayed task can overwrite the reload's
-  directory/settings even when its host is correctly dropped. Install this
-  metadata under the same generation guard and extend the stale-load test.
+- [x] **Background load metadata:** directory/settings install under the same
+  generation guard as the host. Stale-load tests check that both reload grants
+  and directory survive an obsolete result, and a current result installs both.
 
 
 Small, self-contained; each one is a good single task.

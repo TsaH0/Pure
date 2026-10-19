@@ -14,7 +14,7 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   in the API 0.3 host/editor.
 - Done: M10 (API 0.3), including default SDK, finder migration, the guide,
   frozen 0.2 compatibility fixtures and the kept API trial example.
-  Seven follow-up findings remain in Future TODOs.
+  Six follow-up findings remain in Future TODOs.
 - Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -510,3 +510,14 @@ Goal from the owner: plugins must never make Pure slower than vanilla Helix.
 - Benchmark (release, 4 cores, `text-tools`): warm cache 1.4 / 2.9 / 12.6 ms
   for 1 / 5 / 20 plugins (all off the startup path now); cold cache 56 /
   231 / 731 ms; one event to one plugin 0.05 ms.
+
+## Follow-up: background load metadata
+
+Background builds now return their directory/settings with their host result;
+the editor installs both only after accepting the generation. A stale task
+cannot replace a reload's grants or directory. The private stale-load test
+checks both rejected and accepted metadata, alongside host/actions/errors.
+This moves existing load-time work under the guard, removes two metadata clones
+from the background path, and adds no startup wait, event hook or idle work.
+Validation: all three private integration-backend tests passed, including the
+extended stale-load test. Formatting and workspace Clippy passed without warnings.
