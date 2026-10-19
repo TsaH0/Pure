@@ -202,7 +202,7 @@ Unlocks yazi, lazygit, fzf, git and linter plugins.
 
 Unlocks Telescope-style plugins: file finders, project switchers, git pickers.
 
-- [ ] **M2.1 Picker close hook (upstream-file change).** Depends on: nothing.
+- [x] **M2.1 Picker close hook (upstream-file change).** Depends on: nothing.
   - `Picker` has no way to report "closed without choosing". Add an optional
     `on_close: Option<Box<dyn FnOnce(&mut Context)>>` (`with_on_close`) that
     runs on Esc/C-c, not on accept. Keep the patch small and self-contained

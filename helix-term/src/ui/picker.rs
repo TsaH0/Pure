@@ -258,6 +258,7 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     widths: Vec<Constraint>,
 
     callback_fn: PickerCallback<T>,
+    on_close: Option<PickerCloseCallback>,
     default_action: Action,
 
     pub truncate_start: bool,
@@ -386,6 +387,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             truncate_start: true,
             show_preview: true,
             callback_fn: Box::new(callback_fn),
+            on_close: None,
             default_action: Action::Replace,
             completion_height: 0,
             widths,
@@ -395,6 +397,12 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_highlight_handler: PreviewHighlightHandler::<T, D>::default().spawn(),
             dynamic_query_handler: None,
         }
+    }
+
+    /// Run once when the picker closes without accepting an item.
+    pub fn with_on_close(mut self, on_close: impl FnOnce(&mut Context) + 'static) -> Self {
+        self.on_close = Some(Box::new(on_close));
+        self
     }
 
     pub fn injector(&self) -> Injector<T, D> {
@@ -1063,7 +1071,12 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             _ => return EventResult::Ignored(None),
         };
 
-        let close_fn = |picker: &mut Self| {
+        let close_fn = |picker: &mut Self, ctx: &mut Context, cancelled: bool| {
+            if let Some(on_close) = picker.on_close.take() {
+                if cancelled {
+                    on_close(ctx);
+                }
+            }
             // if the picker is very large don't store it as last_picker to avoid
             // excessive memory consumption
             let callback: compositor::Callback =
@@ -1105,7 +1118,7 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             key!(End) => {
                 self.to_end();
             }
-            key!(Esc) | ctrl!('c') => return close_fn(self),
+            key!(Esc) | ctrl!('c') => return close_fn(self, ctx, true),
             alt!(Enter) => {
                 if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, self.default_action);
@@ -1131,9 +1144,12 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                     // Inserting from the history register is a paste.
                     self.handle_prompt_change(true);
                 } else {
-                    if let Some(option) = self.selection() {
+                    let accepted = if let Some(option) = self.selection() {
                         (self.callback_fn)(ctx, option, self.default_action);
-                    }
+                        true
+                    } else {
+                        false
+                    };
                     if let Some(history_register) = self.prompt.history_register() {
                         if let Err(err) = ctx
                             .editor
@@ -1143,20 +1159,26 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                             ctx.editor.set_error(err.to_string());
                         }
                     }
-                    return close_fn(self);
+                    return close_fn(self, ctx, !accepted);
                 }
             }
             ctrl!('s') => {
-                if let Some(option) = self.selection() {
+                let accepted = if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, Action::HorizontalSplit);
-                }
-                return close_fn(self);
+                    true
+                } else {
+                    false
+                };
+                return close_fn(self, ctx, !accepted);
             }
             ctrl!('v') => {
-                if let Some(option) = self.selection() {
+                let accepted = if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, Action::VerticalSplit);
-                }
-                return close_fn(self);
+                    true
+                } else {
+                    false
+                };
+                return close_fn(self, ctx, !accepted);
             }
             ctrl!('t') => {
                 self.toggle_preview();
@@ -1205,3 +1227,4 @@ impl<T: 'static + Send + Sync, D> Drop for Picker<T, D> {
 }
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
+type PickerCloseCallback = Box<dyn FnOnce(&mut Context)>;
