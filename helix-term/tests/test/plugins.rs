@@ -995,6 +995,66 @@ async fn api_03_streams_finish_after_kill_and_spawn_errors() -> anyhow::Result<(
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_process_requests_are_dropped_on_reload_and_disable() -> anyhow::Result<()> {
+    let settings = "[testplugin3]\nallow-process = [\"sh\"]\n";
+    let (mut app, dir) = app_with_v3_settings(WITH_PROCESS, settings);
+    let script = dir.path().join("must-not-run.sh");
+    let marker = dir.path().join("ran");
+    std::fs::write(&script, "printf ran > \"$1\"\n")?;
+    for (index, command) in [
+        "spawn-reload",
+        "interactive-reload",
+        "spawn-disable",
+        "interactive-disable",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings)?;
+        keys(
+            &mut app,
+            &format!(
+                ":plugin-run testplugin3/{command} sh '{}' '{}'<ret>",
+                script.display(),
+                marker.display()
+            ),
+        )
+        .await;
+        deliver_events(&mut app).await;
+        assert!(!marker.exists(), "{command} started a cancelled request");
+        assert!(
+            !helix_term::plugins::command_names()
+                .iter()
+                .any(|name| name.starts_with("testplugin3/")),
+            "{command} must have removed or disabled the owner"
+        );
+        keys(&mut app, "ix<esc>").await;
+        assert_eq!(
+            text(&app),
+            format!("{}a\n", "x".repeat(index + 1)),
+            "{command} must not leave a queued terminal handover"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn spawn_then_kill_in_one_call_keeps_action_order() -> anyhow::Result<()> {
+    let (mut app, _dir) =
+        app_with_v3_settings(WITH_PROCESS, "[testplugin3]\nallow-process = [\"sh\"]\n");
+    keys(
+        &mut app,
+        r#":plugin-run testplugin3/spawn-kill sh -c "sleep 30"<ret>"#,
+    )
+    .await;
+    assert_eq!(
+        wait_for_status(&mut app, |message| message.starts_with("done:")).await,
+        "done:None::[killed]"
+    );
+    Ok(())
+}
+
 async fn v3_focus(app: &mut Application, focused: bool) {
     #[cfg(not(windows))]
     let event = if focused {

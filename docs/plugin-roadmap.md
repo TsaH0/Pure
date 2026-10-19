@@ -486,12 +486,10 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   the terminal shows only the column header and query. Honor the API's title
   with an optional label in the existing picker widget, preserving bindings
   and the layout of native pickers. Include a terminal check.
-- [ ] **Order process start with picker installation:** `apply` starts a
-  `spawn` immediately but defers `show-picker` to the compositor. A very fast
-  streaming process can deliver a batch before its picker exists. Queue the
-  start with the call's ordered UI effects, preserve `spawn` then `kill`
-  ordering, and revalidate the owner/request before starting queued work.
-  Cover this before migrating finder/files to streaming.
+- [x] **Order process start with picker installation:** process starts and
+  kills now share the call's ordered UI effects, so a streaming process cannot
+  return items before its picker is installed. Starts validate the enabled
+  owner and outstanding request; same-call spawn/kill ordering is tested.
 - [ ] **SDK picker rollback:** failed commands currently retain changes to
   `PICKER_ITEMS` and can leak new query/item registries. A failed push followed
   by a successful push can give the choice callback stale item data. Journal
@@ -505,9 +503,15 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   synchronously without a size cap. Check that it is a regular file using a
   nonblocking open (a program can replace it with a FIFO), read at most the
   process-output cap, and test oversized/replaced files without blocking the UI.
-- [ ] **Revalidate queued terminal requests:** a queued `run-interactive` can
-  outlive plugin reload/disable. Check its owner/request immediately before
-  handing over the terminal; dropping it must retain chooser cleanup.
+- [x] **Revalidate queued terminal requests:** owner/request checks run at
+  installation and immediately before terminal handover. Stale requests are
+  dropped with chooser cleanup. Tests cover reload and disable, with editing
+  continuing after cancellation.
+- [ ] **Complete displaced terminal requests:** two `run-interactive` actions
+  in one call overwrite the compositor's single pending program. The first
+  chooser is dropped, but its process request/callback remains pending. Cancel
+  the displaced plugin request with a completion error (or serialize it),
+  preserving native commands. Test two requests and request-slot recovery.
 - [ ] **Cancel blocked filesystem workers:** async timeouts stop the guest
   and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
   pool can survive until the FIFO wakes. Track upstream WASI/cap-std support

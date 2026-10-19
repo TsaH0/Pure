@@ -1299,6 +1299,7 @@ impl Application {
             clear_screen,
             banner,
             wait_for_key,
+            before_run: _,
         } = interactive;
         use helix_view::graphics::CursorKind;
         self.terminal
@@ -1412,6 +1413,9 @@ impl Application {
                 break;
             }
             if let Some(interactive) = self.compositor.interactive.take() {
+                if !interactive.can_run() {
+                    continue;
+                }
                 // Dropping the stream stops its reader thread, otherwise it
                 // would compete with the program for terminal input.
                 drop(input_stream);

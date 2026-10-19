@@ -611,7 +611,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 stdin,
                 timeout,
                 stream,
-            } => process::spawn(plugin, id, argv, cwd, stdin, timeout, stream),
+            } => ui.push(Box::new(move |_, _| {
+                if with_host(|host| {
+                    host.has_request(&plugin, id, helix_plugin::PendingKind::Process)
+                })
+                .unwrap_or(false)
+                {
+                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream);
+                }
+            })),
             Action::RunInteractive {
                 plugin,
                 id,
@@ -628,7 +636,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 wait_for_key,
             ) {
                 Ok(interactive) => ui.push(Box::new(move |_, compositor| {
-                    compositor.interactive = Some(interactive);
+                    if interactive.can_run() {
+                        compositor.interactive = Some(interactive);
+                    }
                 })),
                 Err(err) => deliver_later(
                     plugin,
@@ -638,7 +648,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     },
                 ),
             },
-            Action::Kill { plugin, id } => process::kill(&plugin, id),
+            Action::Kill { plugin, id } => {
+                ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
+            }
             Action::ShowPicker {
                 plugin,
                 id,

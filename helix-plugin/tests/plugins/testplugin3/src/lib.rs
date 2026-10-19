@@ -37,6 +37,13 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "events",
                 "stream",
                 "stream-fail",
+                "spawn-kill",
+                "spawn-reload",
+                "spawn-disable",
+                "interactive-reload",
+                "interactive-disable",
+                "pause",
+                "loop",
                 "output-events",
                 "kill",
                 "live",
@@ -66,6 +73,28 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     }
     fn run_command(name: String, args: Vec<String>) -> Result<(), String> {
         match name.as_str() {
+            "loop" => loop {
+                std::hint::spin_loop();
+            },
+            "pause" => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                Ok(())
+            }
+            "interactive-reload" | "interactive-disable" => {
+                helix::plugin::process::run_interactive(
+                    &args,
+                    &helix::plugin::process::InteractiveOptions {
+                        cwd: None,
+                        chooser_file: true,
+                        wait_for_key: false,
+                    },
+                )?;
+                host::run_command(if name == "interactive-reload" {
+                    ":plugin-reload"
+                } else {
+                    ":plugin-run testplugin3/loop"
+                })
+            }
             "live" | "live-fail" | "static" => {
                 let id = helix::plugin::ui::show_picker(&helix::plugin::ui::Picker {
                     title: "Generations".into(),
@@ -103,7 +132,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     _ => Err("missing push/set".into()),
                 }
             }
-            "stream" | "stream-fail" => {
+            "stream" | "stream-fail" | "spawn-kill" | "spawn-reload" | "spawn-disable" => {
                 let id = helix::plugin::process::spawn(
                     &args,
                     &helix::plugin::process::SpawnOptions {
@@ -115,6 +144,17 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 )?;
                 if name == "stream-fail" {
                     return Err("failed after spawn".into());
+                }
+                if name == "spawn-kill" {
+                    helix::plugin::process::kill(id);
+                }
+                if name == "spawn-reload" {
+                    host::run_command(":plugin-run testplugin3/pause")?;
+                    host::run_command(":plugin-reload")?;
+                    return Ok(());
+                }
+                if name == "spawn-disable" {
+                    return host::run_command(":plugin-run testplugin3/loop");
                 }
                 host::set_status(&format!("stream-id:{id}"));
                 Ok(())

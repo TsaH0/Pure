@@ -293,6 +293,27 @@ cold 77.9 / 273.0 / 994.8 ms, warm 2.8 / 6.9 / 21.9 ms and dispatch
 0.158 ms. Both runs meet the 5 ms-per-cached-plugin budget; dispatch timings
 vary materially, so these do not establish a performance improvement.
 
+## Queued process ordering and revalidation
+
+Process starts and kills now share the call's ordered compositor effects.
+This installs a picker before starting a program that feeds it, while
+preserving same-call spawn/kill order. Deferred starts check that their owner
+is enabled and the request is outstanding. Interactive requests check at
+installation and again before the input reader or terminal is released;
+discarding a stale request drops its chooser guard.
+
+Host checks cover request identity, kind and completion. Editor tests exercise
+spawned and interactive requests followed by reload or disable in the same
+call, verify that their scripts never run, and confirm editing still works.
+A spawn/kill test covers both effects queued in one call. Performance: checks
+run only for requested program work; no startup, typing or idle task is added.
+Validation: 71 host tests, 37 editor library tests and 47 in-editor plugin
+tests passed; fixtures rebuilt. Formatting, warning-free workspace Clippy,
+the build without plugins and a normal build passed. Tmux confirmed that
+cancelled spawned/interactive scripts never ran and editing/saving continued.
+The existing chooser check still ran its program, received its selection,
+removed the chooser and restored the editor.
+
 ## M0 API 0.2 groundwork (done)
 
 - `wit/v0.1/` (byte-identical to the original API) and `wit/v0.2/` (adds

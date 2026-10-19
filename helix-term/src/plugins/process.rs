@@ -288,6 +288,7 @@ pub fn interactive(
     command
         .args(&args[1..])
         .current_dir(cwd.unwrap_or_else(helix_stdx::env::current_working_dir));
+    let owner = plugin.clone();
     let mut interactive = Interactive::new(command, move |_editor, _, status| {
         let chosen = chooser.as_ref().map(|path| {
             let chosen = std::fs::read(path).unwrap_or_default();
@@ -302,6 +303,10 @@ pub fn interactive(
             .map_err(|err| format!("failed to run '{}': {err}", args[0]));
         super::deliver_later(plugin, Callback::ProcessDone { id, result });
     });
+    interactive.before_run = Some(Box::new(move || {
+        super::with_host(|host| host.has_request(&owner, id, helix_plugin::PendingKind::Process))
+            .unwrap_or(false)
+    }));
     if wait_for_key {
         // Like `space z`: the output stays on a cleared screen until a key.
         interactive.clear_screen = true;
@@ -583,6 +588,10 @@ mod test {
         .unwrap();
         let path = PathBuf::from(request.command.as_std().get_args().next().unwrap());
         assert!(path.is_file());
+        assert!(
+            !request.can_run(),
+            "an absent owner cannot hand over the terminal"
+        );
         drop(request);
         assert!(
             !path.exists(),

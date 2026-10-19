@@ -844,6 +844,9 @@ fn process_done(id: u32, stdout: &str) -> Callback {
 fn callbacks_are_delivered_once_and_check_their_kind() {
     let (mut host, _root) = testplugin2();
     let id = arm_request(&mut host, PendingKind::Process).unwrap();
+    assert!(host.has_request("testplugin2", id, PendingKind::Process));
+    assert!(!host.has_request("other", id, PendingKind::Process));
+    assert!(!host.has_request("testplugin2", id, PendingKind::Picker));
     let wrong_kind = Callback::PickerDone {
         id,
         result: PickerResult::Cancelled,
@@ -866,6 +869,7 @@ fn callbacks_are_delivered_once_and_check_their_kind() {
         "{messages:?}"
     );
     assert!(messages[0].contains("hello"), "{messages:?}");
+    assert!(!host.has_request("testplugin2", id, PendingKind::Process));
     assert!(host
         .callback(
             "testplugin2",

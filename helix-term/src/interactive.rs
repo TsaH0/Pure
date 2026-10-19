@@ -20,6 +20,8 @@ pub type OnExit = Box<dyn FnOnce(&mut Editor, &mut Compositor, io::Result<ExitSt
 pub struct Interactive {
     pub command: Command,
     pub on_exit: OnExit,
+    /// Optional validity check for a deferred request, before terminal handover.
+    pub before_run: Option<Box<dyn Fn() -> bool + Send>>,
     /// Run on the terminal's normal screen, below the shell's scrollback,
     /// instead of on the editor's alternate screen (like Vim's `:!`).
     pub normal_screen: bool,
@@ -40,11 +42,16 @@ impl Interactive {
         Self {
             command,
             on_exit: Box::new(on_exit),
+            before_run: None,
             normal_screen: false,
             clear_screen: false,
             banner: None,
             wait_for_key: false,
         }
+    }
+
+    pub fn can_run(&self) -> bool {
+        self.before_run.as_ref().is_none_or(|check| check())
     }
 }
 

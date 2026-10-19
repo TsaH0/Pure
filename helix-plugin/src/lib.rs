@@ -1635,6 +1635,15 @@ impl PluginHost {
         }
     }
 
+    /// Whether deferred work still belongs to an enabled, outstanding request.
+    pub fn has_request(&self, owner: &str, id: u32, kind: PendingKind) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.name() == owner
+                && plugin.disabled.is_none()
+                && plugin.store.data().pending.get(&id) == Some(&kind)
+        })
+    }
+
     /// Invalidate live results as soon as input changes, before debounce.
     /// This updates host bookkeeping without calling the guest.
     pub fn set_picker_generation(&mut self, owner: &str, id: u32, generation: u64) {
