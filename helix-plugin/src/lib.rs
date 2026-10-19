@@ -452,6 +452,7 @@ struct State {
     context: CallContext,
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
+    picker_items: HashMap<u32, usize>,
     process: ProcessGrant,
     files: FileGrant,
     /// The plugin's own directory (`data-dir`), preopened read-write.
@@ -758,6 +759,7 @@ impl State {
             ));
         }
         let id = self.request(PendingKind::Picker)?;
+        self.picker_items.insert(id, picker.items.len());
         self.actions.push(Action::ShowPicker {
             plugin: self.plugin.clone(),
             id,
@@ -773,6 +775,12 @@ impl State {
         if self.context == CallContext::Init {
             return Err("push-items can't be used from init".into());
         }
+        let count = self.picker_items.get(&id).copied().unwrap_or(0);
+        let total = count
+            .checked_add(items.len())
+            .filter(|total| *total <= MAX_PICKER_ITEMS)
+            .ok_or_else(|| format!("a picker can have at most {MAX_PICKER_ITEMS} items"))?;
+        self.picker_items.insert(id, total);
         self.actions.push(Action::PushItems {
             plugin: self.plugin.clone(),
             id,
@@ -790,6 +798,7 @@ impl State {
                 "a picker can have at most {MAX_PICKER_ITEMS} items"
             ));
         }
+        self.picker_items.insert(id, items.len());
         self.actions.push(Action::SetItems {
             plugin: self.plugin.clone(),
             id,
@@ -969,6 +978,7 @@ impl Plugin {
             Ok(value) => Ok((value, actions)),
             Err(err) => {
                 state.pending.clear();
+                state.picker_items.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
                         format!("it took longer than {} ms", limit.as_millis())
@@ -1328,6 +1338,7 @@ impl PluginHost {
             context: CallContext::Init,
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
+            picker_items: HashMap::new(),
             process: settings.process,
             files: settings.files,
             data_dir,
@@ -1429,6 +1440,7 @@ impl PluginHost {
         }
         let name = plugin.manifest.name.clone();
         let pending = plugin.store.data().pending.clone();
+        let picker_items = plugin.store.data().picker_items.clone();
         let command_name = command.to_owned();
         let (result, actions) = plugin.call(
             snapshot,
@@ -1440,6 +1452,7 @@ impl PluginHost {
         )?;
         if let Err(err) = result {
             plugin.store.data_mut().pending = pending;
+            plugin.store.data_mut().picker_items = picker_items;
             bail!("{name}/{command}: {err}");
         }
         Ok(actions)
@@ -1500,6 +1513,7 @@ impl PluginHost {
         }
         if callback.completes() {
             plugin.store.data_mut().pending.remove(&id);
+            plugin.store.data_mut().picker_items.remove(&id);
         }
         plugin
             .call(

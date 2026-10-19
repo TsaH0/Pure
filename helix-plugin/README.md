@@ -272,7 +272,9 @@ carry a file preview (path and lines to highlight). The callback gets a
 picker was closed without choosing). `editor::push_items(id, items)` adds items to an
 open picker, e.g. as a program's output arrives; `Item::new(columns, data)`
 and `.with_file_preview(path, lines)` / `.with_text_preview(text)` build
-richer items. Only from commands and callbacks.
+richer items. Only from commands and callbacks. The million-item limit covers
+initial items plus every push; `set_items` resets the count. A rejected push
+leaves the picker unchanged.
 
 `editor::pick_live(picker, query, callback)` is a live picker: what the user
 types goes to `query(id, text)` (debounced) instead of filtering, and the

@@ -79,7 +79,20 @@ and exercise sleep in both ABIs, init/events/callbacks, a blocked FIFO open,
 and host destruction. A tmux check with scratch configuration showed the
 2-second timeout after 2.12 seconds, followed by successful editing and saving.
 Formatting, workspace Clippy (no warnings), and the normal editor build passed.
-The release benchmark is running; its measurements will be recorded separately.
+Release benchmark: cold loads for 1 / 5 / 20 plugins took
+57.0 / 233.4 / 932.6 ms; warm loads took 1.6 / 4.2 / 14.9 ms (within the
+5 ms per cached plugin budget). One event dispatch took 0.078 ms.
+
+## M11.2 Cumulative picker limits
+
+The host counts initial and pushed items for each picker, refuses a push
+beyond one million without recording an action, resets the count when items
+are replaced, and drops it on completion or a trap. A failed command restores
+the previous counts alongside its pending requests. Tests exercise the real
+million-item boundary, replacement, completion, and guest-command rollback.
+Validation: 62 host tests, 29 editor library tests and 35 in-editor plugin
+tests passed; fixtures rebuilt, formatting and workspace Clippy passed with
+no warnings.
 
 ## M0 API 0.2 groundwork (done)
 

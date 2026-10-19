@@ -1962,3 +1962,86 @@ fn wasi_fifo_open_and_host_shutdown_are_bounded() {
         drop(root);
     });
 }
+
+#[test]
+fn picker_item_limit_is_cumulative_and_resets_on_replacement_and_close() {
+    let (mut host, _root) = testplugin2();
+    let state = host.plugins[0].store.data_mut();
+    state.context = CallContext::Command;
+    let item = || PickerItem {
+        columns: vec![],
+        data: String::new(),
+        preview: None,
+    };
+    let id = state
+        .show_picker(PickerSpec {
+            title: "Boundary".into(),
+            columns: vec!["Name".into()],
+            items: (0..MAX_PICKER_ITEMS - 1).map(|_| item()).collect(),
+            initial: None,
+            live: false,
+        })
+        .unwrap();
+    // Release the recorded payload, retaining the count of the open picker.
+    state.actions.clear();
+    state.push_items(id, vec![item()]).unwrap();
+    assert!(state
+        .push_items(id, vec![item()])
+        .unwrap_err()
+        .contains("at most"));
+    assert_eq!(
+        state.actions.len(),
+        1,
+        "a refused push must not record an action"
+    );
+    state.set_items(id, vec![item()]).unwrap();
+    state.push_items(id, vec![item()]).unwrap();
+    assert_eq!(state.picker_items[&id], 2);
+    host.callback(
+        "testplugin2",
+        Callback::PickerDone {
+            id,
+            result: PickerResult::Cancelled,
+        },
+        &Snapshot::default(),
+    )
+    .unwrap();
+    let state = host.plugins[0].store.data_mut();
+    assert!(!state.picker_items.contains_key(&id));
+    assert!(state.push_items(id, vec![item()]).is_err());
+}
+
+#[test]
+fn failed_commands_restore_picker_item_accounting() {
+    let (mut host, _root) = testplugin2();
+    let actions = host
+        .run_command(
+            "testplugin2",
+            "picker",
+            args(&["one", "two"]),
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match actions[0] {
+        Action::ShowPicker { id, .. } => id,
+        _ => panic!("expected picker"),
+    };
+    let error = host
+        .run_command(
+            "testplugin2",
+            "push-items-fail",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("failed after push"));
+    assert_eq!(host.plugins[0].store.data().picker_items[&id], 2);
+    host.run_command(
+        "testplugin2",
+        "push-items",
+        vec![id.to_string()],
+        Snapshot::default(),
+    )
+    .unwrap();
+    assert_eq!(host.plugins[0].store.data().picker_items[&id], 3);
+}

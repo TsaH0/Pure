@@ -35,6 +35,7 @@ impl Plugin for TestPlugin {
                 "interactive",
                 "picker",
                 "push-items",
+                "push-items-fail",
                 "kill",
                 "popup",
                 "prompt",
@@ -189,6 +190,10 @@ impl Plugin for TestPlugin {
                         Ok(())
                     },
                 )?;
+            }
+            "push-items-fail" => {
+                editor::push_items(request_id(&args)?, vec![Item::text("discarded")])?;
+                return Err("failed after push".into());
             }
             "push-items" => {
                 editor::push_items(request_id(&args)?, vec![Item::text("new item")])?;

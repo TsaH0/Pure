@@ -414,7 +414,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   `std::thread::sleep` or reading a FIFO blocks the UI forever. Fix: enable
   Wasmtime `async_support`, call exports with `call_*_async` under
   `tokio::time::timeout`; or deny blocking clock/poll imports.
-- [ ] **M11.2 `push-items` has no cumulative cap.** Track items per open
+- [x] **M11.2 `push-items` has no cumulative cap.** Track items per open
   picker in `State` (count on `show_picker`, add on `push_items`, reset on
   `set_items`, drop when the picker request completes) and refuse beyond
   `MAX_PICKER_ITEMS`.
