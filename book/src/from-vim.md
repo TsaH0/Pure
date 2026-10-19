@@ -33,7 +33,7 @@ delete a character:
 
 copy a line:
 * vim: `yy`
-* helix: `Xy` (`X` extends all selections to whole lines)
+* helix: `xy` (`x` selects whole lines; `X` does the same upwards)
 
 global replace:
 * vim: `:%s/word/replacement/g<ret>`
