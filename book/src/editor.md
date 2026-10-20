@@ -50,6 +50,7 @@
 | `completion-trigger-len` | The min-length of word under cursor to trigger autocompletion | `2` |
 | `completion-replace` | Whether to make completions always replace the entire word and not just the part before the cursor | `false` |
 | `directory-handler` | A plugin command that opens directories passed on the command line or to `:open` (it gets the directory as its argument), e.g. `"oil/open"`. Without it, or if it fails, the file picker opens | unset |
+| `auto-reload` | Reload files other programs change on disk, like Vim's `autoread`: buffers without unsaved changes follow the file; for the others you get a warning (`:reload` takes the disk's version, `:w!` keeps yours). Checked every second and when the terminal regains focus | `true` |
 | `auto-info` | Whether to display info boxes | `true` |
 | `true-color` | Whether to override automatic detection of terminal truecolor support in the event of a false negative | `false` |
 | `undercurl` | Whether to override automatic detection of terminal undercurl support in the event of a false negative | `false` |
@@ -81,19 +82,42 @@ and plugins) look.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim | `"bottom"` |
-| `popup-width` | Width of the popup in percent of the screen | `70` |
-| `popup-rows` | Most completions the popup lists | `15` |
-| `descriptions` | In the popup, show each command's category, what it does and its aliases (plugin commands too) | `true` |
+| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above the statusline, one per row, like Runyte | `"bottom"` |
+| `popup-width` | Width of the popup or panel in percent of the screen (the panel is left-aligned) | `70` |
+| `popup-rows` | Most completions the popup or panel lists | `15` |
+| `descriptions` | In the popup and panel, show each command's category, what it does and its aliases (plugin commands too) | `true` |
 
 ```toml
 [editor.cmdline]
 style = "popup"
 ```
 
+A Runyte-like editor: the panel across the whole width, and a statusline
+with the mode as a coloured block, then the file and the workspace:
+
+```toml
+[editor.cmdline]
+style = "panel"
+popup-width = 100
+popup-rows = 22
+
+[editor]
+color-modes = true
+
+[editor.statusline]
+left = ["mode", "separator", "file-name", "separator", "workspace-diagnostics"]
+right = ["diagnostics", "selections", "position"]
+separator = "│"
+mode.normal = "NOR"
+mode.insert = "INS"
+mode.select = "SEL"
+```
+
 Its colors come from `ui.cmdline.popup`, `ui.cmdline.border` and
 `ui.cmdline.title` (falling back to `ui.popup`, `ui.window` and
-`ui.text.focus`), and the selected row from `ui.menu.selected`.
+`ui.text.focus`), and the selected row from `ui.menu.selected`; the mode
+blocks from `ui.statusline.normal`, `ui.statusline.insert` and
+`ui.statusline.select` (see [themes](./themes.md)).
 
 ### `[editor.clipboard-provider]` Section
 

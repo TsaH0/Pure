@@ -812,7 +812,7 @@ fn manifest_selects_the_component_world() {
         .to_string()
         .contains("failed to start"));
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
-    assert!(err.to_string().contains("supports 0.1, 0.2 and 0.3"));
+    assert!(err.to_string().contains("supports 0.1 to 0.4"));
 }
 
 fn testplugin2() -> (PluginHost, tempfile::TempDir) {

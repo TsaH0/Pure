@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Point this at your Pure checkout, or a published SDK.
-helix-plugin-api = { git = "https://github.com/TsaH0/helix-editor-custom", subdirectory = "helix-plugin/sdk" }
+helix-plugin-api = { git = "https://github.com/TsaH0/Pure" }
 
 [profile.release]
 opt-level = "s"

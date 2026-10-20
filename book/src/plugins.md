@@ -6,7 +6,10 @@ with none installed it does no plugin work at all. Plugins load in the
 background, so they never delay startup.
 
 The full guide, including how to write plugins, is
-[`helix-plugin/README.md`](https://github.com/TsaH0/helix-editor-custom/blob/master/helix-plugin/README.md).
+[`helix-plugin/README.md`](https://github.com/TsaH0/helix-editor-custom/blob/master/helix-plugin/README.md). For coding agents, copy
+[`helix-plugin/AGENTS.md`](https://github.com/TsaH0/Pure/blob/master/helix-plugin/AGENTS.md)
+into your plugin project or `~/.config/helix/`: it has everything an agent
+needs to build, test and benchmark a plugin.
 
 ## Installing a plugin
 

@@ -2,8 +2,12 @@
 
 Plugins are [WebAssembly components](https://component-model.bytecodealliance.org)
 run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
-[`wit/v0.3/helix-plugin.wit`](wit/v0.3/helix-plugin.wit); any language that can build a
+[`wit/v0.4/helix-plugin.wit`](wit/v0.4/helix-plugin.wit); any language that can build a
 component for it works. Rust has an SDK in [`sdk/`](sdk).
+
+Writing a plugin with a coding agent (Claude Code, Codex, ...)? Copy
+[`AGENTS.md`](AGENTS.md) into the plugin's project (or `~/.config/helix/`):
+it tells the agent how to build, test and benchmark a plugin for Pure.
 
 ## Using plugins
 
@@ -31,7 +35,7 @@ u = ":plugin-run text-tools/upper"
 why a plugin was disabled.
 
 Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
-except `enabled` and `allow-process` is passed to the plugin's `init` as JSON:
+except `enabled`, `allow-process`, `allow-files`, `allow-dirs` and `keys` is passed to the plugin's `init` as JSON:
 
 ```toml
 [text-tools]
@@ -646,7 +650,7 @@ the next task gets a fresh instance (the plugin stays enabled).
 Start from the template:
 
 ```sh
-cargo generate --git https://github.com/TsaH0/helix-editor-custom helix-plugin/template
+cargo generate --git https://github.com/TsaH0/Pure helix-plugin/template
 ```
 
 Build it (`cargo build --release --target wasm32-wasip2`), copy the `.wasm`

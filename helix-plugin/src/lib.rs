@@ -321,7 +321,7 @@ impl Manifest {
         }
         if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.4",
                 manifest.name,
                 manifest.api
             );
