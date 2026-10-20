@@ -3556,6 +3556,47 @@ fn runaway_background_tasks_time_out_without_disabling_the_plugin() {
     assert_eq!(background(&mut host, "square", "3"), Ok("9".into()));
 }
 
+#[test]
+fn background_tasks_are_still_interrupted_after_the_host_is_dropped() {
+    let mut host = host_with_limits(Limits {
+        background: Duration::from_millis(300),
+        ..Limits::default()
+    });
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // One spinning task and one queued behind it.
+    for _ in 0..2 {
+        let actions = host
+            .run_command(
+                "testplugin3",
+                "background",
+                vec!["spin".into(), String::new()],
+                snapshot("main text", 0, 0),
+            )
+            .unwrap();
+        let [Action::RunBackground { id, task, input, .. }] = &actions[..] else {
+            panic!("expected a background task, got {actions:?}");
+        };
+        let sender = sender.clone();
+        host.run_background(
+            "testplugin3",
+            *id,
+            task.clone(),
+            input.clone(),
+            Box::new(move |result| {
+                let _ = sender.send(result);
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    drop(host);
+    let first = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(first.unwrap_err().contains("took longer"));
+    let second = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(second, Err("the plugins were reloaded".into()));
+}
+
 /// What one Markdown re-render costs (see `examples/markdown`). Run with
 /// `cargo test -p helix-plugin --release -- --ignored --nocapture markdown_cost`.
 #[test]

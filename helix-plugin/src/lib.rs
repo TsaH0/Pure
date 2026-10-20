@@ -1973,11 +1973,15 @@ fn spawn_worker(
             let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
             let mut instance: Option<(Store<State>, Instance)> = None;
             while let Ok(job) = tasks.recv() {
+                // Tasks still queued when the plugins were reloaded aren't run.
+                let Some(busy) = ticker.busy_unless_stopped() else {
+                    (job.done)(Err("the plugins were reloaded".into()));
+                    continue;
+                };
                 if instance.is_none() {
                     let mut store = Store::new(&engine, State::background(&name, memory));
                     store.limiter(|state| &mut state.limits);
                     store.set_epoch_deadline(ticks);
-                    let busy = ticker.busy();
                     let started = runtime.run(limit, async {
                         if api == "0.3" {
                             v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
@@ -1989,10 +1993,10 @@ fn spawn_worker(
                                 .map(|instance| Instance::V0_4(Box::new(instance)))
                         }
                     });
-                    drop(busy);
                     match started {
                         Ok(started) => instance = Some((store, started)),
                         Err(err) => {
+                            drop(busy);
                             (job.done)(Err(format!(
                                 "the background instance failed to start: {err:#}"
                             )));
@@ -2002,7 +2006,6 @@ fn spawn_worker(
                 }
                 let (store, guest) = instance.as_mut().unwrap();
                 store.set_epoch_deadline(ticks);
-                let busy = ticker.busy();
                 let result =
                     runtime.run(limit, guest.call_background(store, &job.task, &job.input));
                 drop(busy);
@@ -2164,8 +2167,14 @@ impl Ticker {
                 let Ok(ticker) = receiver.recv() else {
                     return;
                 };
-                while !ticker.stop.load(Ordering::Relaxed) {
-                    if ticker.busy.load(Ordering::Acquire) == 0 {
+                // After the host is dropped, keep ticking until the calls
+                // still running (background tasks) are interrupted.
+                loop {
+                    let stopping = ticker.stop.load(Ordering::SeqCst);
+                    if ticker.busy.load(Ordering::SeqCst) == 0 {
+                        if stopping {
+                            break;
+                        }
                         // Woken by `busy()` or on drop.
                         std::thread::park();
                         continue;
@@ -2188,9 +2197,16 @@ impl Ticker {
 
     /// Tick until the returned guard is dropped.
     fn busy(self: &Arc<Self>) -> TickerGuard {
-        self.busy.fetch_add(1, Ordering::AcqRel);
+        self.busy.fetch_add(1, Ordering::SeqCst);
         self.thread.unpark();
         TickerGuard(self.clone())
+    }
+
+    /// Like `busy`, but `None` once the host is gone (the ticker may have
+    /// stopped, so the call couldn't be interrupted).
+    fn busy_unless_stopped(self: &Arc<Self>) -> Option<TickerGuard> {
+        let guard = self.busy();
+        (!self.stop.load(Ordering::SeqCst)).then_some(guard)
     }
 }
 
@@ -2198,13 +2214,13 @@ struct TickerGuard(Arc<Ticker>);
 
 impl Drop for TickerGuard {
     fn drop(&mut self) {
-        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+        self.0.busy.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 impl Drop for PluginHost {
     fn drop(&mut self) {
-        self.ticker.stop.store(true, Ordering::Relaxed);
+        self.ticker.stop.store(true, Ordering::SeqCst);
         self.ticker.thread.unpark();
     }
 }
