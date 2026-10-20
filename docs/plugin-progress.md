@@ -652,3 +652,39 @@ Design notes:
   buffer keys, completion and the oil workflow
   (`oil_example_edits_directories_as_buffers`).
 
+
+## Overhead with 10 plugins vs vanilla (2026-10-20, after M12, API 0.4, sidebar)
+
+Same harness (`docs/bench/vs-helix.py`), release builds, alternating runs.
+"10 plugins": oil, tree, markdown, todos, lint, emoji, finder, text-tools,
+yank-history and pomodoro, with their grants.
+
+| Median | Vanilla | Pure, none | Pure, 10 plugins |
+| --- | --- | --- | --- |
+| big.rs: startup | 435 ms | 444 ms | 451 ms |
+| big.rs: CPU, start then quit | 362 ms | 377 ms | 421 ms |
+| big.rs: CPU, editing session | 24.0 s | 26.7 s* | 23.9 s |
+| big.md: startup | 133 ms | 132 ms | 133 ms |
+| big.md: CPU, start then quit | 60 ms | 57 ms | 114 ms |
+| big.md: CPU, editing session | 760 ms | 784 ms | 1519 ms |
+| Idle 5 s, both files | 0 wake-ups | 0 wake-ups | 0 wake-ups |
+| Peak memory, big.rs | 36.2 MiB | 41.4 MiB | 63.8 MiB |
+
+\* The big.rs editing runs varied ±10 % on this machine (vanilla 22.0–24.9 s,
+Pure 23.7–28.9 s, Pure with plugins 23.0–25.2 s): within noise.
+
+- Startup to the first frame and idle are unchanged with any number of
+  plugins: plugins load after the first frame and nothing runs while idle.
+- With 10 plugins, starting costs ~50 ms more CPU (instantiating 10
+  components, after the first frame). The first run after installing them
+  also compiles them once (up to ~2.5 s of background CPU, then cached).
+- Editing the 6,700-line Markdown file costs what the plugins asked for:
+  markdown re-renders the changed part, lint re-checks the document, todos
+  re-scans, emoji is asked for completions while typing. Together about
+  2.8 ms per edit, under one frame.
+- Memory without plugins: the heap is the same as before this work (19.6
+  MiB anonymous memory for both the previous and the current build); the
+  extra RSS is file-backed code pages of the larger binary (+3 MiB since
+  the previous build, shared and reclaimable, not allocations). Building
+  with `--no-default-features --features git` drops Wasmtime entirely.
+  With 10 plugins: +22 MiB (about 2 MiB per plugin instance).
