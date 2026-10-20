@@ -62,6 +62,8 @@ pub enum Permission {
     /// Read (or write) files in the workspace through WASI. The user must
     /// also grant it, see [`FileGrant`].
     Filesystem,
+    /// Read and write registers (API 0.3; the clipboard only write).
+    Registers,
 }
 
 impl Permission {
@@ -73,6 +75,7 @@ impl Permission {
             Permission::RunCommands => "run-commands",
             Permission::Process => "process",
             Permission::Filesystem => "filesystem",
+            Permission::Registers => "registers",
         }
     }
 }
@@ -128,6 +131,9 @@ pub struct PluginSettings {
     pub config: String,
     pub process: ProcessGrant,
     pub files: FileGrant,
+    /// Directories besides the workspace that `files` applies to
+    /// (`allow-dirs`), absolute.
+    pub dirs: Vec<PathBuf>,
 }
 
 impl PluginSettings {
@@ -154,6 +160,11 @@ pub enum EventKind {
     FocusGained,
     FocusLost,
     EditorIdle,
+    /// API 0.3: the plugin is a completion source.
+    Completion,
+    /// Not subscribable: `:write` on a plugin's buffer goes to its owner
+    /// ([`PluginHost::buffer_write`]).
+    BufferWrite,
 }
 
 /// What a [`Action::Decorate`] sets, validated against the document.
@@ -175,6 +186,43 @@ pub enum Decorations {
 /// limit ([`Limits::background`]).
 pub const MAX_BACKGROUND: usize = 4;
 pub const BACKGROUND_LIMIT: Duration = Duration::from_secs(30);
+
+/// Most running timers per plugin.
+pub const MAX_TIMERS: usize = 16;
+/// Most items in one completion answer.
+pub const MAX_COMPLETIONS: usize = 1000;
+/// Longest diagnostic message, in chars.
+pub const MAX_DIAGNOSTIC_MESSAGE: usize = 4096;
+
+/// How serious a [`PluginDiagnostic`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Hint,
+    Info,
+    Warning,
+    Error,
+}
+
+/// A diagnostic from a plugin; char offsets, validated against the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDiagnostic {
+    pub range: std::ops::Range<usize>,
+    pub severity: DiagnosticSeverity,
+    pub message: String,
+    pub code: Option<String>,
+    pub source: Option<String>,
+}
+
+/// A completion from a plugin. `replace_from` is a char offset, checked by
+/// the editor against the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCompletion {
+    pub label: String,
+    pub insert: Option<String>,
+    pub kind: Option<String>,
+    pub documentation: Option<String>,
+    pub replace_from: Option<usize>,
+}
 
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
@@ -254,6 +302,8 @@ pub struct DocumentSnapshot {
     pub selection: Option<Selection>,
     /// Whether it has unsaved changes.
     pub modified: bool,
+    /// `(plugin, name)` for a plugin's own buffer (`open-buffer`).
+    pub owner: Option<(String, String)>,
 }
 
 /// The editor state a plugin call can read.
@@ -265,6 +315,9 @@ pub struct Snapshot {
     pub workspace: Option<PathBuf>,
     pub cwd: PathBuf,
     pub config_dir: PathBuf,
+    /// Register contents, only filled in when a plugin has the `registers`
+    /// permission ([`PluginHost::wants_registers`]); no clipboard.
+    pub registers: BTreeMap<char, Vec<String>>,
 }
 
 impl Default for Snapshot {
@@ -276,6 +329,7 @@ impl Default for Snapshot {
             workspace: None,
             cwd: PathBuf::new(),
             config_dir: PathBuf::new(),
+            registers: BTreeMap::new(),
         }
     }
 }
@@ -377,6 +431,50 @@ pub enum Action {
         task: String,
         input: String,
     },
+    /// Open a scratch buffer holding `text`; with `owner`, a buffer of
+    /// that plugin with that name (shown instead if it exists).
+    OpenScratch {
+        text: String,
+        language: Option<String>,
+        action: OpenAction,
+        owner: Option<(String, String)>,
+    },
+    /// Mark a plugin's buffer as saved.
+    MarkSaved(DocumentId),
+    /// File operations through the editor (language servers and buffers
+    /// follow). Paths are absolute and checked against the plugin's grant.
+    CreatePath {
+        path: PathBuf,
+        directory: bool,
+    },
+    RenamePath {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    DeletePath(PathBuf),
+    SetRegister {
+        name: char,
+        values: Vec<String>,
+    },
+    /// Replace `plugin`'s diagnostics on `doc`.
+    Diagnostics {
+        plugin: String,
+        doc: DocumentId,
+        diagnostics: Vec<PluginDiagnostic>,
+    },
+    /// Deliver [`Callback::Timer`] after `delay`.
+    SetTimer {
+        plugin: String,
+        id: u32,
+        delay: Duration,
+    },
+    /// The answer to completion request `id`
+    /// ([`PluginHost::request_completion`]).
+    Completions {
+        plugin: String,
+        id: u32,
+        items: Vec<PluginCompletion>,
+    },
     /// Set (or, empty, remove) a statusline segment.
     StatusLine {
         plugin: String,
@@ -410,6 +508,8 @@ pub enum PendingKind {
     Prompt,
     Popup,
     Background,
+    Timer,
+    Completion,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -447,6 +547,9 @@ pub enum Callback {
         id: u32,
         result: Result<String, String>,
     },
+    Timer {
+        id: u32,
+    },
 }
 
 impl Callback {
@@ -461,6 +564,7 @@ impl Callback {
             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
             Self::PopupClosed { id } => (*id, PendingKind::Popup),
             Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
+            Self::Timer { id } => (*id, PendingKind::Timer),
         }
     }
 
@@ -492,7 +596,10 @@ static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 pub enum Event {
     DocumentOpen(DocumentId),
     DocumentChange(DocumentId),
-    ModeSwitch { old: Mode, new: Mode },
+    ModeSwitch {
+        old: Mode,
+        new: Mode,
+    },
     DocumentSave(DocumentId),
     DocumentClose(DocumentId),
     SelectionChange(DocumentId),
@@ -500,6 +607,14 @@ pub enum Event {
     FocusGained,
     FocusLost,
     EditorIdle,
+    /// API 0.3: `:write` on the plugin's own buffer.
+    BufferWrite(DocumentId),
+    /// API 0.3: answer with `complete(id, ...)`.
+    Completion {
+        id: u32,
+        doc: DocumentId,
+        position: u32,
+    },
 }
 
 impl Event {
@@ -515,6 +630,8 @@ impl Event {
             Event::FocusGained => EventKind::FocusGained,
             Event::FocusLost => EventKind::FocusLost,
             Event::EditorIdle => EventKind::EditorIdle,
+            Event::Completion { .. } => EventKind::Completion,
+            Event::BufferWrite(_) => EventKind::BufferWrite,
         }
     }
 }
@@ -563,6 +680,8 @@ struct State {
     streaming: HashSet<u32>,
     process: ProcessGrant,
     files: FileGrant,
+    /// The directories `files` applies to: the workspace and `allow-dirs`.
+    roots: Vec<PathBuf>,
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
     /// The latest `log` lines, for `:plugin-log`.
@@ -596,6 +715,7 @@ impl State {
             streaming: HashSet::new(),
             process: ProcessGrant::None,
             files: FileGrant::None,
+            roots: Vec::new(),
             data_dir: None,
             log: Default::default(),
         }
@@ -1141,6 +1261,236 @@ impl State {
         Ok(id)
     }
 
+    fn open_scratch(
+        &mut self,
+        text: String,
+        language: Option<String>,
+        action: OpenAction,
+    ) -> Result<(), String> {
+        self.need(Permission::OpenFiles)?;
+        self.actions.push(Action::OpenScratch {
+            text,
+            language,
+            action,
+            owner: None,
+        });
+        Ok(())
+    }
+
+    fn open_buffer(
+        &mut self,
+        name: String,
+        text: String,
+        language: Option<String>,
+        action: OpenAction,
+    ) -> Result<(), String> {
+        self.need(Permission::OpenFiles)?;
+        if name.is_empty() || name.chars().count() > 256 || name.contains('\n') {
+            return Err(format!(
+                "invalid buffer name '{name}': 1-256 chars, one line"
+            ));
+        }
+        self.actions.push(Action::OpenScratch {
+            text,
+            language,
+            action,
+            owner: Some((self.plugin.clone(), name)),
+        });
+        Ok(())
+    }
+
+    /// `path` if the plugin may write it: absolute, without `..`, inside the
+    /// workspace or an `allow-dirs` directory, with `allow-files = "write"`.
+    fn writable(&self, path: &str) -> Result<PathBuf, String> {
+        self.need(Permission::Filesystem)?;
+        if self.files != FileGrant::Write {
+            return Err("file changes need allow-files = \"write\" in plugins.toml".into());
+        }
+        let path = PathBuf::from(path);
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "not an absolute, normalized path: {}",
+                path.display()
+            ));
+        }
+        let outside = || {
+            Err(format!(
+                "{} is outside the directories this plugin may change",
+                path.display()
+            ))
+        };
+        let Some(root) = self
+            .roots
+            .iter()
+            .find(|root| path.starts_with(root) && **root != path)
+        else {
+            return outside();
+        };
+        // The editor changes the real file system: a symlinked directory on
+        // the way must not lead outside the root.
+        let real = |p: &Path| std::fs::canonicalize(p).ok();
+        let parent = path.ancestors().skip(1).find(|a| a.exists());
+        match (parent.and_then(real), real(root)) {
+            (Some(parent), Some(root)) if parent.starts_with(&root) => Ok(path),
+            _ => outside(),
+        }
+    }
+
+    fn create_path(&mut self, path: String, directory: bool) -> Result<(), String> {
+        let path = self.writable(&path)?;
+        self.actions.push(Action::CreatePath { path, directory });
+        Ok(())
+    }
+
+    fn rename_path(&mut self, from: String, to: String) -> Result<(), String> {
+        let from = self.writable(&from)?;
+        let to = self.writable(&to)?;
+        self.actions.push(Action::RenamePath { from, to });
+        Ok(())
+    }
+
+    fn delete_path(&mut self, path: String) -> Result<(), String> {
+        let path = self.writable(&path)?;
+        self.actions.push(Action::DeletePath(path));
+        Ok(())
+    }
+
+    /// The directories this plugin may read (or write): the workspace and
+    /// `allow-dirs`, if granted.
+    fn file_roots(&self) -> Vec<String> {
+        if !self.permissions.contains(&Permission::Filesystem) || self.files == FileGrant::None {
+            return Vec::new();
+        }
+        self.roots
+            .iter()
+            .filter(|root| root.is_dir())
+            .map(|root| root.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn buffer_name(&self, doc: DocumentId) -> Option<String> {
+        let (owner, name) = self.snapshot.documents.get(&doc)?.owner.as_ref()?;
+        (*owner == self.plugin).then(|| name.clone())
+    }
+
+    fn mark_saved(&mut self, doc: DocumentId) -> Result<(), String> {
+        if self.buffer_name(doc).is_none() {
+            return Err(format!(
+                "document {doc} is not one of this plugin's buffers"
+            ));
+        }
+        self.actions.push(Action::MarkSaved(doc));
+        Ok(())
+    }
+
+    fn register(&self, name: char) -> Result<Vec<String>, String> {
+        self.need(Permission::Registers)?;
+        if matches!(name, '+' | '*') {
+            return Err("plugins can't read the clipboard".into());
+        }
+        Ok(self
+            .snapshot
+            .registers
+            .get(&name)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn set_register(&mut self, name: char, values: Vec<String>) -> Result<(), String> {
+        self.need(Permission::Registers)?;
+        if values.is_empty() {
+            return Err("a register needs at least one value".into());
+        }
+        if !matches!(name, '+' | '*') {
+            // Reads later in this call see it.
+            self.snapshot.registers.insert(name, values.clone());
+        }
+        self.actions.push(Action::SetRegister { name, values });
+        Ok(())
+    }
+
+    fn set_diagnostics(
+        &mut self,
+        doc: DocumentId,
+        diagnostics: Vec<PluginDiagnostic>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, "diagnostics", diagnostics.len())?;
+        for diagnostic in &diagnostics {
+            if diagnostic.range.start > diagnostic.range.end || diagnostic.range.end > len {
+                return Err(format!(
+                    "invalid range {}..{} for a document of {len} chars",
+                    diagnostic.range.start, diagnostic.range.end
+                ));
+            }
+        }
+        let diagnostics = diagnostics
+            .into_iter()
+            .map(|mut diagnostic| {
+                if diagnostic.message.chars().count() > MAX_DIAGNOSTIC_MESSAGE {
+                    diagnostic.message = diagnostic
+                        .message
+                        .chars()
+                        .take(MAX_DIAGNOSTIC_MESSAGE)
+                        .collect();
+                }
+                diagnostic
+            })
+            .collect();
+        self.actions.push(Action::Diagnostics {
+            plugin: self.plugin.clone(),
+            doc,
+            diagnostics,
+        });
+        Ok(())
+    }
+
+    fn set_timer(&mut self, delay_ms: u32) -> Result<u32, String> {
+        if self.context == CallContext::Init {
+            return Err("set-timer can't be used from init".into());
+        }
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Timer)
+            .count();
+        if running >= MAX_TIMERS {
+            return Err(format!("at most {MAX_TIMERS} timers can run at once"));
+        }
+        let id = self.request(PendingKind::Timer)?;
+        self.actions.push(Action::SetTimer {
+            plugin: self.plugin.clone(),
+            id,
+            delay: Duration::from_millis(delay_ms.max(1).into()),
+        });
+        Ok(id)
+    }
+
+    fn cancel_timer(&mut self, id: u32) {
+        if self.pending.get(&id) == Some(&PendingKind::Timer) {
+            self.pending.remove(&id);
+        }
+    }
+
+    fn complete(&mut self, id: u32, items: Vec<PluginCompletion>) -> Result<(), String> {
+        if self.pending.get(&id) != Some(&PendingKind::Completion) {
+            return Err(format!("no open completion request {id}"));
+        }
+        if items.len() > MAX_COMPLETIONS {
+            return Err(format!("at most {MAX_COMPLETIONS} completions"));
+        }
+        self.pending.remove(&id);
+        self.actions.push(Action::Completions {
+            plugin: self.plugin.clone(),
+            id,
+            items,
+        });
+        Ok(())
+    }
+
     fn set_raw_on_cursor_line(
         &mut self,
         doc: DocumentId,
@@ -1349,7 +1699,7 @@ fn spawn_worker(
                     let started = runtime.run(limit, async {
                         v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
                             .await
-                            .map(Instance::V0_3)
+                            .map(|instance| Instance::V0_3(Box::new(instance)))
                     });
                     drop(busy);
                     match started {
@@ -1732,6 +2082,7 @@ impl PluginHost {
         name: &str,
         manifest: &Manifest,
         files: FileGrant,
+        dirs: &[PathBuf],
     ) -> anyhow::Result<(WasiCtx, Option<PathBuf>)> {
         let mut wasi = WasiCtx::builder();
         wasi.allow_blocking_current_thread(false);
@@ -1750,20 +2101,17 @@ impl PluginHost {
             }
             None => None,
         };
-        if let (true, Some(workspace)) = (
-            manifest.permissions.contains(&Permission::Filesystem) && files != FileGrant::None,
-            &self.workspace,
-        ) {
+        if manifest.permissions.contains(&Permission::Filesystem) && files != FileGrant::None {
             let (dir_perms, file_perms) = match files {
                 FileGrant::Write => (DirPerms::all(), FilePerms::all()),
                 _ => (DirPerms::READ, FilePerms::READ),
             };
-            wasi.preopened_dir(
-                workspace,
-                workspace.to_string_lossy(),
-                dir_perms,
-                file_perms,
-            )?;
+            for dir in self.workspace.iter().chain(dirs) {
+                if !dir.is_dir() {
+                    continue;
+                }
+                wasi.preopened_dir(dir, dir.to_string_lossy(), dir_perms, file_perms)?;
+            }
         }
         Ok((wasi.build(), data_dir))
     }
@@ -1801,7 +2149,7 @@ impl PluginHost {
             )
         })?;
 
-        let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files)?;
+        let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files, &settings.dirs)?;
         let state = State {
             wasi,
             table: ResourceTable::new(),
@@ -1823,6 +2171,12 @@ impl PluginHost {
             streaming: HashSet::new(),
             process: settings.process,
             files: settings.files,
+            roots: self
+                .workspace
+                .iter()
+                .chain(&settings.dirs)
+                .cloned()
+                .collect(),
             data_dir,
             log: Default::default(),
         };
@@ -1844,7 +2198,7 @@ impl PluginHost {
                         .map(Instance::V0_2),
                     "0.3" => v0_3::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
-                        .map(Instance::V0_3),
+                        .map(|instance| Instance::V0_3(Box::new(instance))),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -2138,11 +2492,33 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Option<anyhow::Result<Vec<Action>>> {
-        let limit = self.limits.event;
         let kind = event.kind();
-        let plugin = self.plugins.iter_mut().find(|p| {
-            p.manifest.name == plugin && p.disabled.is_none() && p.events.contains(&kind)
-        })?;
+        self.dispatch_if(plugin, event, snapshot, |p| p.events.contains(&kind))
+    }
+
+    /// [`Self::dispatch_to`] whether or not the plugin subscribed (e.g. the
+    /// open event of a buffer it created). API 0.3 plugins only.
+    pub fn dispatch_unsubscribed(
+        &mut self,
+        plugin: &str,
+        event: Event,
+        snapshot: &Snapshot,
+    ) -> Option<anyhow::Result<Vec<Action>>> {
+        self.dispatch_if(plugin, event, snapshot, |p| p.manifest.api == "0.3")
+    }
+
+    fn dispatch_if(
+        &mut self,
+        plugin: &str,
+        event: Event,
+        snapshot: &Snapshot,
+        wanted: impl Fn(&Plugin) -> bool,
+    ) -> Option<anyhow::Result<Vec<Action>>> {
+        let limit = self.limits.event;
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.manifest.name == plugin && p.disabled.is_none() && wanted(p))?;
         Some(
             plugin
                 .call(
@@ -2153,6 +2529,73 @@ impl PluginHost {
                 )
                 .map(|((), actions)| actions),
         )
+    }
+
+    /// Ask `plugin` for completions at `position`: a new request replaces
+    /// the plugin's open one. Returns the request id and the actions of the
+    /// event call (the answer may be among them, or come later).
+    pub fn request_completion(
+        &mut self,
+        plugin: &str,
+        doc: DocumentId,
+        position: u32,
+        snapshot: &Snapshot,
+    ) -> Option<(u32, anyhow::Result<Vec<Action>>)> {
+        let state = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none())?
+            .store
+            .data_mut();
+        state
+            .pending
+            .retain(|_, kind| *kind != PendingKind::Completion);
+        let id = state.request(PendingKind::Completion).ok()?;
+        let result = self.dispatch_to(plugin, Event::Completion { id, doc, position }, snapshot)?;
+        Some((id, result))
+    }
+
+    /// `:write` on `plugin`'s buffer `doc`: call its `on-buffer-write` as a
+    /// command (it may show prompts).
+    pub fn buffer_write(
+        &mut self,
+        plugin: &str,
+        doc: DocumentId,
+        snapshot: &Snapshot,
+    ) -> anyhow::Result<Vec<Action>> {
+        let limit = self.limits.command;
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none() && p.manifest.api == "0.3")
+            .ok_or_else(|| anyhow!("the plugin owning this buffer isn't running"))?;
+        plugin
+            .call(
+                snapshot.clone(),
+                CallContext::Command,
+                limit,
+                move |guest, store| Box::pin(guest.call_event(store, Event::BufferWrite(doc))),
+            )
+            .map(|((), actions)| actions)
+    }
+
+    /// Drop an unanswered request (e.g. a completion the editor stopped
+    /// waiting for).
+    pub fn forget_request(&mut self, owner: &str, id: u32, kind: PendingKind) {
+        if let Some(plugin) = self.plugins.iter_mut().find(|p| p.name() == owner) {
+            let pending = &mut plugin.store.data_mut().pending;
+            if pending.get(&id) == Some(&kind) {
+                pending.remove(&id);
+            }
+        }
+    }
+
+    /// Whether snapshots need register contents.
+    pub fn wants_registers(&self) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.disabled.is_none()
+                && plugin.manifest.permissions.contains(&Permission::Registers)
+        })
     }
 
     /// Whether any enabled plugin listens to events of `kind`.

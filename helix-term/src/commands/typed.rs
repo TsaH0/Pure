@@ -382,6 +382,11 @@ fn write_impl(
     path: Option<&str>,
     options: WriteOptions,
 ) -> anyhow::Result<()> {
+    // A plugin's buffer (Pure): the plugin writes it.
+    if path.is_none() && doc!(cx.editor).plugin_owner.is_some() {
+        let doc_id = doc!(cx.editor).id();
+        return crate::plugins::write_buffer(cx.editor, cx.jobs, doc_id);
+    }
     let config = cx.editor.config();
     let (view, doc) = current!(cx.editor);
     let doc_id = doc.id();
@@ -863,6 +868,7 @@ pub fn write_all_impl(
 ) -> anyhow::Result<()> {
     let mut errors: Vec<&'static str> = Vec::new();
     let config = cx.editor.config();
+    let mut plugin_buffers = Vec::new();
     let saves: Vec<_> = cx
         .editor
         .documents
@@ -873,6 +879,10 @@ pub fn write_all_impl(
         .filter_map(|id| {
             let doc = doc!(cx.editor, &id);
             if !doc.is_modified() {
+                return None;
+            }
+            if doc.path().is_none() && doc.plugin_owner.is_some() {
+                plugin_buffers.push(id);
                 return None;
             }
             if doc.path().is_none() {
@@ -887,6 +897,12 @@ pub fn write_all_impl(
             Some((id, target_view))
         })
         .collect();
+
+    for doc_id in plugin_buffers {
+        if let Err(err) = crate::plugins::write_buffer(cx.editor, cx.jobs, doc_id) {
+            cx.editor.set_error(err.to_string());
+        }
+    }
 
     for (doc_id, target_view) in saves {
         let doc = doc_mut!(cx.editor, &doc_id);

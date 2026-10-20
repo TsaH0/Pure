@@ -73,8 +73,8 @@ pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
     #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
     pub use crate::requests::{
-        close_popup, popup_with_options, push_items_for_query, run_background, set_items_for_query,
-        spawn_stream,
+        cancel_timer, close_popup, popup_with_options, push_items_for_query, run_background,
+        set_items_for_query, set_timer, spawn_stream,
     };
     #[cfg(not(feature = "api-v0-1"))]
     pub use crate::requests::{
@@ -123,6 +123,50 @@ pub mod decorations {
     }
 }
 
+/// Diagnostics for linters (API 0.3): shown like a language server's, in
+/// the gutter, inline, by `]d`/`[d`, in the pickers and the statusline.
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
+pub mod diagnostics {
+    pub use crate::bindings::helix::plugin::diagnostics::*;
+
+    /// A diagnostic over chars `from..to`.
+    pub fn diagnostic(from: u32, to: u32, severity: Severity, message: impl Into<String>) -> Diagnostic {
+        Diagnostic {
+            from,
+            to,
+            severity,
+            message: message.into(),
+            code: None,
+            source: None,
+        }
+    }
+}
+
+/// File operations through the editor (API 0.3): open buffers and language
+/// servers follow renames. Needs `filesystem` and `allow-files = "write"`.
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
+pub mod files {
+    pub use crate::bindings::helix::plugin::files::*;
+}
+
+/// Completion sources (API 0.3): subscribe to `EventKind::Completion`,
+/// implement [`Plugin::on_completion`] and answer with [`complete`].
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
+pub mod completion {
+    pub use crate::bindings::helix::plugin::completion::*;
+
+    /// An item inserting its label in place of the word before the cursor.
+    pub fn item(label: impl Into<String>) -> CompletionItem {
+        CompletionItem {
+            label: label.into(),
+            insert: None,
+            kind: None,
+            documentation: None,
+            replace_from: None,
+        }
+    }
+}
+
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the
 /// event handlers are only called for the events returned from `init`.
 pub trait Plugin {
@@ -162,6 +206,15 @@ pub trait Plugin {
     fn on_focus_lost() {}
     /// Called by the editor's existing idle timer, if subscribed (API 0.3).
     fn on_editor_idle() {}
+    /// The editor wants completions at `position` in `doc`, if subscribed to
+    /// `EventKind::Completion` (API 0.3). Answer with
+    /// `completion::complete(id, ...)`, now or from a later callback.
+    fn on_completion(_id: u32, _doc: DocumentId, _position: u32) {}
+    /// `:write` on one of the plugin's buffers (`editor::open_buffer`), as a
+    /// command (API 0.3). Call `editor::mark_saved` once applied.
+    fn on_buffer_write(_doc: DocumentId) -> Result<(), String> {
+        Err("this buffer can't be written".into())
+    }
 }
 
 /// Export a type implementing [`Plugin`] as the plugin.
@@ -312,6 +365,9 @@ macro_rules! __export_callbacks {
             fn on_background_done(id: $crate::RequestId, result: Result<String, String>) {
                 $crate::requests::background_done(id, result)
             }
+            fn on_timer(id: $crate::RequestId) {
+                $crate::requests::timer_fired(id)
+            }
         }
         impl $crate::bindings::exports::helix::plugin::background::Guest for $export {
             fn run(task: String, input: String) -> Result<String, String> {
@@ -339,6 +395,17 @@ macro_rules! __export_callbacks {
             }
             fn on_editor_idle() {
                 <$plugin as $crate::Plugin>::on_editor_idle()
+            }
+            fn on_completion(id: $crate::RequestId, doc: $crate::DocumentId, position: u32) {
+                <$plugin as $crate::Plugin>::on_completion(id, doc, position)
+            }
+            fn on_buffer_write(doc: $crate::DocumentId) {
+                // Like a command: errors show, requests made here commit.
+                if let Err(err) =
+                    $crate::__run_command(|| <$plugin as $crate::Plugin>::on_buffer_write(doc))
+                {
+                    $crate::editor::set_error(&err);
+                }
             }
         }
     };

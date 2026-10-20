@@ -1,7 +1,9 @@
 //! API 0.3 adapters. Older worlds retain their generated types unchanged.
 use super::{types, v0_3, CommandInfo, DocumentId, Event, EventKind, Mode, State};
 use crate::{Callback, OpenAction};
-use v0_3::helix::plugin::{decorations, process, ui, worker};
+use v0_3::helix::plugin::{
+    completion, decorations, diagnostics, files, process, timers, ui, worker,
+};
 use wasmtime::{Result, Store};
 
 impl v0_3::helix::plugin::types::Host for State {}
@@ -87,6 +89,35 @@ impl v0_3::helix::plugin::host::Host for State {
         column: Option<u32>,
     ) -> Result<(), String> {
         State::open_file_at(self, path, from_action(action), line, column)
+    }
+    fn open_scratch(
+        &mut self,
+        text: String,
+        language: Option<String>,
+        action: v0_3::helix::plugin::types::OpenAction,
+    ) -> Result<(), String> {
+        State::open_scratch(self, text, language, from_action(action))
+    }
+    fn open_buffer(
+        &mut self,
+        name: String,
+        text: String,
+        language: Option<String>,
+        action: v0_3::helix::plugin::types::OpenAction,
+    ) -> Result<(), String> {
+        State::open_buffer(self, name, text, language, from_action(action))
+    }
+    fn buffer_name(&mut self, doc: DocumentId) -> Option<String> {
+        State::buffer_name(self, doc)
+    }
+    fn mark_saved(&mut self, doc: DocumentId) -> Result<(), String> {
+        State::mark_saved(self, doc)
+    }
+    fn register(&mut self, name: char) -> Result<Vec<String>, String> {
+        State::register(self, name)
+    }
+    fn set_register(&mut self, name: char, values: Vec<String>) -> Result<(), String> {
+        State::set_register(self, name, values)
     }
     fn run_command(&mut self, command: String) -> Result<(), String> {
         State::run_command(self, command)
@@ -251,6 +282,76 @@ impl decorations::Host for State {
     }
 }
 
+impl diagnostics::Host for State {
+    fn set_diagnostics(
+        &mut self,
+        doc: DocumentId,
+        list: Vec<diagnostics::Diagnostic>,
+    ) -> std::result::Result<(), String> {
+        use crate::DiagnosticSeverity as S;
+        let list = list
+            .into_iter()
+            .map(|d| crate::PluginDiagnostic {
+                range: d.from as usize..d.to as usize,
+                severity: match d.severity {
+                    diagnostics::Severity::Hint => S::Hint,
+                    diagnostics::Severity::Info => S::Info,
+                    diagnostics::Severity::Warning => S::Warning,
+                    diagnostics::Severity::Error => S::Error,
+                },
+                message: d.message,
+                code: d.code,
+                source: d.source,
+            })
+            .collect();
+        State::set_diagnostics(self, doc, list)
+    }
+}
+
+impl files::Host for State {
+    fn roots(&mut self) -> Vec<String> {
+        State::file_roots(self)
+    }
+    fn create_path(&mut self, path: String, directory: bool) -> std::result::Result<(), String> {
+        State::create_path(self, path, directory)
+    }
+    fn rename_path(&mut self, from: String, to: String) -> std::result::Result<(), String> {
+        State::rename_path(self, from, to)
+    }
+    fn delete_path(&mut self, path: String) -> std::result::Result<(), String> {
+        State::delete_path(self, path)
+    }
+}
+
+impl timers::Host for State {
+    fn set_timer(&mut self, delay_ms: u32) -> std::result::Result<u32, String> {
+        State::set_timer(self, delay_ms)
+    }
+    fn cancel_timer(&mut self, id: u32) {
+        State::cancel_timer(self, id)
+    }
+}
+
+impl completion::Host for State {
+    fn complete(
+        &mut self,
+        id: u32,
+        items: Vec<completion::CompletionItem>,
+    ) -> std::result::Result<(), String> {
+        let items = items
+            .into_iter()
+            .map(|item| crate::PluginCompletion {
+                label: item.label,
+                insert: item.insert,
+                kind: item.kind,
+                documentation: item.documentation,
+                replace_from: item.replace_from.map(|from| from as usize),
+            })
+            .collect();
+        State::complete(self, id, items)
+    }
+}
+
 impl ui::Host for State {
     fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
         let live = picker.live;
@@ -334,6 +435,7 @@ pub(super) async fn init(
                     E::FocusGained => EventKind::FocusGained,
                     E::FocusLost => EventKind::FocusLost,
                     E::EditorIdle => EventKind::EditorIdle,
+                    E::Completion => EventKind::Completion,
                 })
                 .collect();
             (commands, events)
@@ -351,6 +453,7 @@ pub(super) async fn callback(
             callbacks.call_on_process_output(store, *id, chunk).await
         }
         Callback::PopupClosed { id } => callbacks.call_on_popup_close(store, *id).await,
+        Callback::Timer { id } => callbacks.call_on_timer(store, *id).await,
         Callback::BackgroundDone { id, result } => {
             callbacks
                 .call_on_background_done(
@@ -425,6 +528,18 @@ pub(super) async fn event(
             instance
                 .helix_plugin_events()
                 .call_on_editor_idle(store)
+                .await
+        }
+        Event::Completion { id, doc, position } => {
+            instance
+                .helix_plugin_events()
+                .call_on_completion(store, id, doc, position)
+                .await
+        }
+        Event::BufferWrite(doc) => {
+            instance
+                .helix_plugin_events()
+                .call_on_buffer_write(store, doc)
                 .await
         }
         Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,

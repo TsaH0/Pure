@@ -70,6 +70,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             language: Some("rust".into()),
             selection: Some(Selection::single(anchor, head)),
             modified: true,
+            owner: None,
         },
     );
     Snapshot {
@@ -79,6 +80,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         workspace: Some(PathBuf::from("/work")),
         cwd: PathBuf::from("/work/src"),
         config_dir: PathBuf::from("/config"),
+        registers: BTreeMap::new(),
     }
 }
 
@@ -1066,7 +1068,11 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
     let command = match kind {
         PendingKind::Process => "arm-process",
         PendingKind::Picker => "arm-picker",
-        PendingKind::Prompt | PendingKind::Popup | PendingKind::Background => unreachable!(),
+        PendingKind::Prompt
+        | PendingKind::Popup
+        | PendingKind::Background
+        | PendingKind::Timer
+        | PendingKind::Completion => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -2244,6 +2250,199 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
         .replace("api = \"0.1\"", "api = \"0.3\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
+}
+
+fn load_v3_with(host: &mut PluginHost, root: &Path, permissions: &[&str], config: &str) {
+    let dir = plugin_dir(
+        root,
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        permissions,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.3\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, config).unwrap();
+}
+
+#[test]
+fn api_03_diagnostics_are_validated() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command("testplugin3", "diagnose", vec![], snapshot("hello", 0, 0))
+        .unwrap();
+    match &actions[..] {
+        [Action::Diagnostics {
+            plugin,
+            doc: 1,
+            diagnostics,
+        }] => {
+            assert_eq!(plugin, "testplugin3");
+            assert_eq!(diagnostics[0].range, 0..1);
+            assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+            assert_eq!(diagnostics[0].code.as_deref(), Some("T1"));
+        }
+        other => panic!("{other:?}"),
+    }
+    let err = host
+        .run_command(
+            "testplugin3",
+            "diagnose-bad",
+            vec![],
+            snapshot("hello", 0, 0),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid range"), "{err}");
+}
+
+#[test]
+fn api_03_timers_fire_once_and_can_be_cancelled() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "timer",
+            vec!["5".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let id = match &actions[..] {
+        [Action::SetTimer { id, delay, .. }] => {
+            assert_eq!(*delay, Duration::from_millis(5));
+            *id
+        }
+        other => panic!("{other:?}"),
+    };
+    let fired = host
+        .callback("testplugin3", Callback::Timer { id }, &Snapshot::default())
+        .unwrap();
+    assert!(matches!(&fired[..], [Action::Status(s)] if *s == format!("timer-fired:{id}")));
+    // Only once.
+    let again = host
+        .callback("testplugin3", Callback::Timer { id }, &Snapshot::default())
+        .unwrap();
+    assert!(again.is_empty());
+
+    let actions = host
+        .run_command("testplugin3", "timer-cancel", vec![], Snapshot::default())
+        .unwrap();
+    let [Action::SetTimer { id, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    let fired = host
+        .callback(
+            "testplugin3",
+            Callback::Timer { id: *id },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(fired.is_empty(), "a cancelled timer must not fire");
+}
+
+#[test]
+fn api_03_registers_need_the_permission() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    assert!(!host.wants_registers());
+    let err = host
+        .run_command("testplugin3", "registers", vec![], Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    let mut host = self::host();
+    let root = tempfile::tempdir().unwrap();
+    let mut permissions = ALL.to_vec();
+    permissions.push("registers");
+    load_v3(&mut host, root.path(), &permissions);
+    assert!(host.wants_registers());
+    let actions = host
+        .run_command("testplugin3", "registers", vec![], Snapshot::default())
+        .unwrap();
+    assert!(matches!(
+        &actions[..],
+        [Action::SetRegister { name: 'a', values }, Action::Status(status)]
+            if values == &["x", "y"] && status == "registers:x,y"
+    ));
+    let err = host
+        .run_command("testplugin3", "read-clipboard", vec![], Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("clipboard"), "{err}");
+}
+
+#[test]
+fn api_03_completion_requests_are_answered_once() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3_with(&mut host, root.path(), ALL, "{\"completion\": true}");
+    assert!(host.wants(EventKind::Completion));
+    let (id, actions) = host
+        .request_completion("testplugin3", 1, 3, &snapshot("alp", 3, 3))
+        .unwrap();
+    let actions = actions.unwrap();
+    match &actions[..] {
+        [Action::Completions {
+            id: answered,
+            items,
+            ..
+        }] => {
+            assert_eq!(*answered, id);
+            assert_eq!(items[0].label, "alpha");
+            assert_eq!(items[1].kind.as_deref(), Some("test"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!host.has_request("testplugin3", id, PendingKind::Completion));
+    // A new request replaces an unanswered one.
+    let old = host
+        .register_request("testplugin3", PendingKind::Completion)
+        .unwrap();
+    let (new, _) = host
+        .request_completion("testplugin3", 1, 3, &snapshot("alp", 3, 3))
+        .unwrap();
+    assert!(!host.has_request("testplugin3", old, PendingKind::Completion));
+    assert_ne!(old, new);
+}
+
+#[test]
+fn api_03_plugin_buffers() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), ALL);
+    let actions = host
+        .run_command("testplugin3", "buffer", vec![], Snapshot::default())
+        .unwrap();
+    assert!(matches!(
+        &actions[..],
+        [Action::OpenScratch { owner: Some((plugin, name)), text, .. }]
+            if plugin == "testplugin3" && name == "test://buffer" && text == "one\n"
+    ));
+    let actions = host
+        .run_command("testplugin3", "scratch", vec![], Snapshot::default())
+        .unwrap();
+    assert!(matches!(
+        &actions[..],
+        [Action::OpenScratch { owner: None, language: Some(language), .. }] if language == "markdown"
+    ));
+
+    // Writing: only the owner's buffers can be marked saved.
+    let mut snap = snapshot("two\n", 0, 0);
+    snap.documents.get_mut(&1).unwrap().owner =
+        Some(("testplugin3".into(), "test://buffer".into()));
+    let actions = host.buffer_write("testplugin3", 1, &snap).unwrap();
+    assert!(matches!(
+        &actions[..],
+        [Action::Status(status), Action::MarkSaved(1)] if status == "written:test://buffer:two"
+    ));
+    snap.documents.get_mut(&1).unwrap().owner = Some(("other".into(), "x".into()));
+    let actions = host.buffer_write("testplugin3", 1, &snap).unwrap();
+    assert!(matches!(&actions[..], [Action::Status(status)] if status == "written::two"));
 }
 
 #[test]

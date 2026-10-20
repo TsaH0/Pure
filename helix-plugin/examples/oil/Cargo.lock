@@ -102,6 +102,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "oil"
+version = "0.1.0"
+dependencies = [
+ "helix-plugin-api",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -328,13 +335,6 @@ dependencies = [
  "serde_json",
  "unicode-ident",
  "wasmparser",
-]
-
-[[package]]
-name = "yazi"
-version = "0.1.0"
-dependencies = [
- "helix-plugin-api",
 ]
 
 [[package]]

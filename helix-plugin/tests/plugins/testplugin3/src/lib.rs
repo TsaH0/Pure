@@ -54,6 +54,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "live-fail",
                 "static",
                 "items",
+                "diagnose",
+                "diagnose-bad",
+                "timer",
+                "timer-cancel",
+                "scratch",
+                "buffer",
+                "registers",
+                "read-clipboard",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -63,6 +71,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             .collect(),
             events: {
                 let mut events = vec![types::EventKind::DocumentOpen];
+                if config.contains("completion") {
+                    events.push(types::EventKind::Completion);
+                }
                 if config.contains("extended-events") {
                     events.extend([
                         types::EventKind::PostCommand,
@@ -271,10 +282,50 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 };
                 host::open_file_at(path, action, number(2)?, number(3)?)
             }
+            "diagnose" | "diagnose-bad" => {
+                use helix::plugin::diagnostics::{self, Diagnostic, Severity};
+                let doc = host::current_document().ok_or("no document")?;
+                let to = if name == "diagnose" { 1 } else { 1_000_000 };
+                diagnostics::set_diagnostics(
+                    doc,
+                    &[Diagnostic {
+                        from: 0,
+                        to,
+                        severity: Severity::Error,
+                        message: "bad".into(),
+                        code: Some("T1".into()),
+                        source: None,
+                    }],
+                )
+            }
+            "timer" => {
+                let delay = args.first().and_then(|d| d.parse().ok()).unwrap_or(1);
+                let id = helix::plugin::timers::set_timer(delay)?;
+                host::log(&format!("timer-set:{id}"));
+                Ok(())
+            }
+            "timer-cancel" => {
+                let id = helix::plugin::timers::set_timer(1)?;
+                helix::plugin::timers::cancel_timer(id);
+                host::log(&format!("timer-cancelled:{id}"));
+                Ok(())
+            }
+            "scratch" => host::open_scratch("scratch text\n", Some("markdown"), types::OpenAction::Replace),
+            "buffer" => host::open_buffer("test://buffer", "one\n", None, types::OpenAction::Replace),
+            "registers" => {
+                host::set_register('a', &["x".into(), "y".into()])?;
+                let values = host::register('a')?;
+                host::set_status(&format!("registers:{}", values.join(",")));
+                Ok(())
+            }
+            "read-clipboard" => host::register('+').map(|_| ()),
             _ => Err("unknown command".into()),
         }
     }
     fn on_document_open(doc: u32) {
+        if let Some(name) = host::buffer_name(doc) {
+            host::log(&format!("buffer-open:{name}:{doc}"));
+        }
         if POPUP_ON_OPEN.get() {
             host::set_status(
                 &helix::plugin::ui::show_popup(&helix::plugin::ui::Popup {
@@ -333,6 +384,10 @@ impl exports::helix::plugin::callbacks::Guest for TestPlugin {
         host::set_status(&format!("popup-closed:{id}"));
     }
     fn on_prompt_done(_id: u32, _answer: Option<String>) {}
+    fn on_timer(id: u32) {
+        host::log(&format!("timer-fired:{id}"));
+        host::set_status(&format!("timer-fired:{id}"));
+    }
     fn on_background_done(_id: u32, result: Result<String, String>) {
         host::set_status(&match result {
             Ok(value) => format!("background:{value}"),
@@ -355,6 +410,24 @@ impl exports::helix::plugin::events::Guest for TestPlugin {
     }
     fn on_editor_idle() {
         record("idle".into());
+    }
+    fn on_completion(id: u32, _doc: u32, position: u32) {
+        use helix::plugin::completion::{complete, CompletionItem};
+        let item = |label: &str| CompletionItem {
+            label: label.into(),
+            insert: None,
+            kind: Some("test".into()),
+            documentation: None,
+            replace_from: None,
+        };
+        host::log(&format!("completion:{id}:{position}"));
+        let _ = complete(id, &[item("alpha"), item("alphabet")]);
+    }
+    fn on_buffer_write(doc: u32) {
+        let name = host::buffer_name(doc).unwrap_or_default();
+        let text = host::text(doc).unwrap_or_default();
+        host::set_status(&format!("written:{name}:{}", text.trim_end()));
+        let _ = host::mark_saved(doc);
     }
 }
 impl exports::helix::plugin::background::Guest for TestPlugin {

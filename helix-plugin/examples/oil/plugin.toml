@@ -1,0 +1,27 @@
+name = "oil"
+version = "0.1.0"
+api = "0.3"
+description = "Edit directories like buffers (like oil.nvim): rename, move, copy, create and delete by editing text"
+permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands", "filesystem"]
+wasm = "plugin.wasm"
+
+# Default binding: only used where nothing else binds the key.
+[keys.normal]
+minus = "open-parent"
+
+# Only in oil's directory buffers, where they take precedence.
+[keys.buffer.normal]
+ret = "select"
+minus = "parent"
+"_" = "cwd"
+C-s = "select-vsplit"
+C-h = "select-hsplit"
+C-p = "preview"
+C-l = "refresh"
+C-c = "close"
+
+[keys.buffer.normal.g]
+"." = "toggle-hidden"
+s = "cycle-sort"
+c = "toggle-details"
+"?" = "help"

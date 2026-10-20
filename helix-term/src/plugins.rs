@@ -19,6 +19,7 @@
 //! Every plugin can use its own directory, `<data dir>/plugins/<name>/`.
 
 pub mod install;
+pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
 mod picker;
 mod popup;
@@ -28,7 +29,7 @@ mod prompt;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -66,6 +67,10 @@ runtime_local! {
     static WANTED: AtomicU32 = AtomicU32::new(0);
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+    /// Whether a plugin may read registers, so snapshots include them.
+    static WANTS_REGISTERS: AtomicBool = AtomicBool::new(false);
+    /// Completion requests waiting for a plugin's answer: `(plugin, id)`.
+    static COMPLETIONS: Mutex<Vec<(String, u32, tokio::sync::oneshot::Sender<Vec<PluginCompletion>>)>> = Mutex::new(Vec::new());
     /// Counts loads, so a slow background load can't replace a newer one.
     static GENERATION: AtomicUsize = AtomicUsize::new(0);
     /// The plugin directory and settings loaded last, to reload them.
@@ -84,10 +89,12 @@ fn event_bit(kind: EventKind) -> u32 {
         EventKind::FocusGained => 7,
         EventKind::FocusLost => 8,
         EventKind::EditorIdle => 9,
+        EventKind::Completion => 10,
+        EventKind::BufferWrite => 11,
     }
 }
 
-const EVENT_KINDS: [EventKind; 10] = [
+const EVENT_KINDS: [EventKind; 11] = [
     EventKind::DocumentOpen,
     EventKind::DocumentChange,
     EventKind::ModeSwitch,
@@ -98,6 +105,7 @@ const EVENT_KINDS: [EventKind; 10] = [
     EventKind::FocusGained,
     EventKind::FocusLost,
     EventKind::EditorIdle,
+    EventKind::Completion,
 ];
 
 /// The workspace root for the current working directory.
@@ -307,16 +315,18 @@ fn install(
     mut errors: Vec<anyhow::Error>,
 ) {
     let settings = LOADED.lock().as_ref().map(|(_, settings)| settings.clone());
-    let keys = host.as_ref().map_or(Ok(None), |host| {
+    let keys = host.as_ref().map_or(Ok((None, None)), |host| {
         plugin_keys(
             &host.info(),
             settings.as_ref().unwrap_or(&toml::Table::new()),
         )
     });
-    crate::keymap::set_plugin_keys(keys.unwrap_or_else(|err| {
+    let (keys, buffer_keys) = keys.unwrap_or_else(|err| {
         errors.push(err);
-        None
-    }));
+        (None, None)
+    });
+    crate::keymap::set_plugin_keys(keys);
+    crate::keymap::set_buffer_keys(buffer_keys);
     // The previous plugins' decorations go with them.
     for doc in editor.documents.values_mut() {
         if !doc.plugin_decorations.is_empty() {
@@ -332,6 +342,12 @@ fn install(
             .fold(0, |mask, bit| mask | bit)
     });
     WANTED.store(wanted, Ordering::Relaxed);
+    WANTS_REGISTERS.store(
+        host.as_ref().is_some_and(|host| host.wants_registers()),
+        Ordering::Relaxed,
+    );
+    clear_plugin_diagnostics(editor);
+    COMPLETIONS.lock().clear();
     *HOST.lock() = host;
 
     apply(editor, None, actions);
@@ -381,6 +397,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     }
     table.remove("allow-process");
     table.remove("allow-files");
+    table.remove("allow-dirs");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -388,18 +405,25 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             config,
             process: process_grant(settings, name)?,
             files: file_grant(settings, name)?,
+            dirs: allowed_dirs(settings, name)?,
         })
     })())
 }
+
+type Keys = HashMap<Mode, crate::keymap::KeyTrie>;
+/// Default bindings, and bindings for each plugin's own buffers.
+type PluginKeys = (Option<Keys>, Option<HashMap<String, Keys>>);
 
 /// The plugins' `[keys]`, as one keymap: each value is one of the plugin's
 /// commands, bound to `:plugin-run <plugin>/<command>`. `keys = false` in a
 /// plugin's `plugins.toml` table leaves its keys out. Earlier plugins (by
 /// directory name) win over later ones; the user's and Pure's keys over all.
+/// Also the bindings for the plugins' own buffers (`[keys.buffer]`), by
+/// plugin.
 fn plugin_keys(
     plugins: &[helix_plugin::PluginInfo],
     settings: &toml::Table,
-) -> anyhow::Result<Option<HashMap<Mode, crate::keymap::KeyTrie>>> {
+) -> anyhow::Result<PluginKeys> {
     fn translate(
         plugin: &helix_plugin::PluginInfo,
         value: &toml::Value,
@@ -429,10 +453,21 @@ fn plugin_keys(
         }
     }
     let mut all: Option<HashMap<Mode, crate::keymap::KeyTrie>> = None;
+    let mut buffers: HashMap<String, Keys> = HashMap::new();
     for plugin in plugins.iter().filter(|plugin| plugin.disabled.is_none()) {
         let Some(keys) = &plugin.keys else {
             continue;
         };
+        let mut keys = keys.clone();
+        // Buffer keys can't be turned off: they only apply in the plugin's
+        // own buffers.
+        if let Some(buffer) = keys.remove("buffer") {
+            let translated = translate(plugin, &buffer)?;
+            let keymap: Keys = translated.try_into().map_err(|err| {
+                anyhow::anyhow!("plugin '{}': invalid [keys.buffer]: {err}", plugin.name)
+            })?;
+            buffers.insert(plugin.name.clone(), keymap);
+        }
         let wanted = settings
             .get(&plugin.name)
             .and_then(|table| table.get("keys"))
@@ -441,7 +476,10 @@ fn plugin_keys(
         if !wanted {
             continue;
         }
-        let translated = translate(plugin, &toml::Value::Table(keys.clone()))?;
+        if keys.is_empty() {
+            continue;
+        }
+        let translated = translate(plugin, &toml::Value::Table(keys))?;
         let keymap: HashMap<Mode, crate::keymap::KeyTrie> = translated
             .try_into()
             .map_err(|err| anyhow::anyhow!("plugin '{}': invalid [keys]: {err}", plugin.name))?;
@@ -463,7 +501,7 @@ fn plugin_keys(
             }
         }
     }
-    Ok(all)
+    Ok((all, (!buffers.is_empty()).then_some(buffers)))
 }
 
 /// `allow-files` for plugin `name`: `"read"`, `"write"` or `false`.
@@ -477,6 +515,25 @@ fn file_grant(settings: &toml::Table, name: &str) -> anyhow::Result<FileGrant> {
         Some(toml::Value::String(grant)) if grant == "write" => Ok(FileGrant::Write),
         Some(_) => anyhow::bail!("[{name}] allow-files: expected \"read\", \"write\" or false"),
     }
+}
+
+/// `allow-dirs` for plugin `name`: directories besides the workspace that
+/// `allow-files` applies to (`~` is the home directory).
+fn allowed_dirs(settings: &toml::Table, name: &str) -> anyhow::Result<Vec<PathBuf>> {
+    let Some(value) = settings.get(name).and_then(|table| table.get("allow-dirs")) else {
+        return Ok(Vec::new());
+    };
+    let error = || anyhow::anyhow!("[{name}] allow-dirs: expected a list of absolute directories");
+    value
+        .as_array()
+        .ok_or_else(error)?
+        .iter()
+        .map(|dir| {
+            let dir = helix_stdx::path::expand_tilde(Path::new(dir.as_str().ok_or_else(error)?));
+            anyhow::ensure!(dir.is_absolute(), error());
+            Ok(helix_stdx::path::canonicalize(dir))
+        })
+        .collect()
 }
 
 /// `allow-process` for plugin `name`: `true`, `false` or a list of programs.
@@ -650,6 +707,10 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     language: doc.language_name().map(str::to_owned),
                     selection,
                     modified: doc.is_modified(),
+                    owner: doc
+                        .plugin_owner
+                        .clone()
+                        .zip(doc.name.as_deref().map(str::to_owned)),
                 },
             )
         })
@@ -661,6 +722,11 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
+        registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
+            editor.registers.stored().collect()
+        } else {
+            Default::default()
+        },
     }
 }
 
@@ -885,6 +951,135 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
                 helix_event::request_redraw();
             }
+            Action::OpenScratch {
+                text,
+                language,
+                action,
+                owner,
+            } => {
+                let action = editor_action(action);
+                let existing = owner.as_ref().and_then(|(plugin, name)| {
+                    editor
+                        .documents()
+                        .find(|doc| {
+                            doc.plugin_owner.as_deref() == Some(plugin)
+                                && doc.name.as_deref() == Some(name)
+                        })
+                        .map(|doc| doc.id())
+                });
+                let doc_id = match existing {
+                    Some(doc_id) => {
+                        editor.switch(doc_id, action);
+                        doc_id
+                    }
+                    None => {
+                        let doc_id = editor.new_file_with_text(action, &text);
+                        let loader = editor.syn_loader.load();
+                        let doc = editor.documents.get_mut(&doc_id).unwrap();
+                        if let Some(language) = language {
+                            if let Err(err) = doc.set_language_by_language_id(&language, &loader) {
+                                log::warn!("plugin buffer: {err}");
+                            }
+                        }
+                        if let Some((plugin, name)) = owner.clone() {
+                            doc.name = Some(name.into());
+                            doc.plugin_owner = Some(plugin);
+                        }
+                        doc_id
+                    }
+                };
+                // Tell the owner the id of its buffer.
+                if let Some((plugin, _)) = owner {
+                    let event = Event::DocumentOpen(plugin_doc_id(doc_id));
+                    later(move |editor, _| {
+                        let snapshot = snapshot(editor);
+                        let result =
+                            with_host(|host| host.dispatch_unsubscribed(&plugin, event, &snapshot));
+                        if let Some(result) = result.flatten() {
+                            report(editor, &plugin, result);
+                        }
+                    });
+                }
+            }
+            Action::CreatePath { path, directory } => {
+                if let Err(err) = editor.create_path(&path, directory) {
+                    editor.set_error(format!("Failed to create {}: {err}", path.display()));
+                }
+            }
+            Action::RenamePath { from, to } => {
+                // Buffers of files inside a renamed directory follow it too.
+                let inside: Vec<_> = editor
+                    .documents()
+                    .filter_map(|doc| {
+                        let rest = doc.path()?.strip_prefix(&from).ok()?;
+                        (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
+                    })
+                    .collect();
+                match editor.move_path(&from, &to) {
+                    Ok(()) => {
+                        for (doc, path) in inside {
+                            editor.set_doc_path(doc, &path);
+                        }
+                    }
+                    Err(err) => editor.set_error(format!(
+                        "Failed to move {} to {}: {err}",
+                        from.display(),
+                        to.display()
+                    )),
+                }
+            }
+            Action::DeletePath(path) => {
+                if let Err(err) = editor.delete_path(&path, true) {
+                    editor.set_error(format!("Failed to delete {}: {err}", path.display()));
+                }
+            }
+            Action::MarkSaved(doc) => {
+                if let Some(doc) = editor_doc_id(editor, doc) {
+                    let view = view_for(editor, doc);
+                    let doc = editor.documents.get_mut(&doc).unwrap();
+                    if let Some(view) = view {
+                        doc.append_changes_to_history(editor.tree.get_mut(view));
+                    }
+                    doc.reset_modified();
+                }
+            }
+            Action::SetRegister { name, values } => {
+                if let Err(err) = editor.registers.write(name, values) {
+                    editor.set_error(format!("plugin register {name}: {err}"));
+                }
+            }
+            Action::Diagnostics {
+                plugin,
+                doc,
+                diagnostics,
+            } => {
+                let Some(doc_id) = editor_doc_id(editor, doc) else {
+                    continue;
+                };
+                let text = editor.documents[&doc_id].text().clone();
+                let diagnostics = diagnostics
+                    .into_iter()
+                    .map(|d| to_lsp_diagnostic(&text, &plugin, d))
+                    .collect();
+                editor.set_plugin_diagnostics(doc_id, &plugin, diagnostics);
+                helix_event::request_redraw();
+            }
+            Action::SetTimer { plugin, id, delay } => {
+                tokio::spawn(async move {
+                    tokio::time::sleep(delay).await;
+                    deliver_async(plugin, Callback::Timer { id }).await;
+                });
+            }
+            Action::Completions { plugin, id, items } => {
+                let mut waiting = COMPLETIONS.lock();
+                if let Some(index) = waiting
+                    .iter()
+                    .position(|(owner, request, _)| *owner == plugin && *request == id)
+                {
+                    let (_, _, sender) = waiting.swap_remove(index);
+                    let _ = sender.send(items);
+                }
+            }
             Action::ShowPrompt { plugin, id, prompt } => {
                 ui.push(Box::new(move |editor, compositor| {
                     prompt::show(editor, compositor, plugin, id, prompt)
@@ -917,6 +1112,140 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
     APPLYING.fetch_sub(1, Ordering::Relaxed);
 }
 
+fn editor_action(action: helix_plugin::OpenAction) -> helix_view::editor::Action {
+    match action {
+        helix_plugin::OpenAction::Replace => helix_view::editor::Action::Replace,
+        helix_plugin::OpenAction::Hsplit => helix_view::editor::Action::HorizontalSplit,
+        helix_plugin::OpenAction::Vsplit => helix_view::editor::Action::VerticalSplit,
+    }
+}
+
+/// A plugin diagnostic as an LSP one, with UTF-32 (char) positions.
+fn to_lsp_diagnostic(
+    text: &helix_core::Rope,
+    plugin: &str,
+    diagnostic: helix_plugin::PluginDiagnostic,
+) -> helix_lsp::lsp::Diagnostic {
+    use helix_lsp::lsp;
+    use helix_plugin::DiagnosticSeverity as S;
+    let position = |char: usize| {
+        let line = text.char_to_line(char);
+        lsp::Position::new(line as u32, (char - text.line_to_char(line)) as u32)
+    };
+    lsp::Diagnostic {
+        range: lsp::Range::new(
+            position(diagnostic.range.start),
+            position(diagnostic.range.end),
+        ),
+        severity: Some(match diagnostic.severity {
+            S::Hint => lsp::DiagnosticSeverity::HINT,
+            S::Info => lsp::DiagnosticSeverity::INFORMATION,
+            S::Warning => lsp::DiagnosticSeverity::WARNING,
+            S::Error => lsp::DiagnosticSeverity::ERROR,
+        }),
+        code: diagnostic.code.map(lsp::NumberOrString::String),
+        source: Some(diagnostic.source.unwrap_or_else(|| plugin.to_string())),
+        message: diagnostic.message,
+        ..Default::default()
+    }
+}
+
+/// Drop every plugin's diagnostics (the plugins were reloaded).
+fn clear_plugin_diagnostics(editor: &mut Editor) {
+    let plugins: std::collections::BTreeSet<String> = editor
+        .diagnostics
+        .values()
+        .flatten()
+        .filter_map(|(_, provider)| match provider {
+            helix_core::diagnostic::DiagnosticProvider::Plugin { name } => Some(name.to_string()),
+            _ => None,
+        })
+        .chain(editor.documents().flat_map(|doc| {
+            doc.diagnostics().iter().filter_map(|d| match &d.provider {
+                helix_core::diagnostic::DiagnosticProvider::Plugin { name } => {
+                    Some(name.to_string())
+                }
+                _ => None,
+            })
+        }))
+        .collect();
+    for plugin in plugins {
+        editor.clear_plugin_diagnostics(&plugin);
+    }
+}
+
+/// `:write` on a plugin's buffer: the plugin handles it.
+pub fn write_buffer(editor: &mut Editor, jobs: &mut Jobs, doc: DocumentId) -> anyhow::Result<()> {
+    let Some(plugin) = editor
+        .documents
+        .get(&doc)
+        .and_then(|d| d.plugin_owner.clone())
+    else {
+        anyhow::bail!("not a plugin buffer");
+    };
+    let snapshot = snapshot(editor);
+    let actions = with_host(|host| host.buffer_write(&plugin, plugin_doc_id(doc), &snapshot))
+        .ok_or_else(|| anyhow::anyhow!("plugins aren't loaded"))?;
+    match actions {
+        Ok(actions) => {
+            apply(editor, Some(jobs), actions);
+            Ok(())
+        }
+        Err(err) => {
+            refresh_wanted();
+            Err(err)
+        }
+    }
+}
+
+/// Ask the completion-source plugins for completions at the primary cursor
+/// of the current document. Each answer arrives on its receiver (dropped
+/// when the plugin doesn't answer).
+pub fn request_completions(
+    editor: &mut Editor,
+) -> Vec<(u16, tokio::sync::oneshot::Receiver<Vec<PluginCompletion>>)> {
+    if !wants(EventKind::Completion) {
+        return Vec::new();
+    }
+    let (view, doc) = current_ref!(editor);
+    let position = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc.text().slice(..)) as u32;
+    let doc = plugin_doc_id(doc.id());
+    let snapshot = snapshot(editor);
+    let plugins = with_host(|host| {
+        let names = host
+            .plugins()
+            .iter()
+            .map(|p| p.name().to_owned())
+            .collect::<Vec<_>>();
+        host.subscribers(EventKind::Completion)
+            .into_iter()
+            .filter_map(|name| Some((names.iter().position(|n| *n == name)? as u16, name)))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    let mut receivers = Vec::new();
+    for (index, plugin) in plugins {
+        let Some((id, result)) =
+            with_host(|host| host.request_completion(&plugin, doc, position, &snapshot)).flatten()
+        else {
+            continue;
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        {
+            let mut waiting = COMPLETIONS.lock();
+            // Only the latest request per plugin is answered.
+            waiting.retain(|(owner, _, _)| *owner != plugin);
+            waiting.push((plugin.clone(), id, sender));
+        }
+        report(editor, &plugin, result);
+        receivers.push((index, receiver));
+    }
+    receivers
+}
+
 fn open_file_at(
     editor: &mut Editor,
     path: &Path,
@@ -924,11 +1253,7 @@ fn open_file_at(
     line: Option<u32>,
     column: Option<u32>,
 ) -> anyhow::Result<()> {
-    let action = match action {
-        helix_plugin::OpenAction::Replace => helix_view::editor::Action::Replace,
-        helix_plugin::OpenAction::Hsplit => helix_view::editor::Action::HorizontalSplit,
-        helix_plugin::OpenAction::Vsplit => helix_view::editor::Action::VerticalSplit,
-    };
+    let action = editor_action(action);
     let id = editor.open(&helix_stdx::path::canonicalize(path), action)?;
     let scrolloff = editor.config().scrolloff;
     let view = editor.tree.get_mut(editor.tree.focus);
@@ -1073,6 +1398,10 @@ fn refresh_wanted() {
     })
     .unwrap_or_default();
     WANTED.store(mask, Ordering::Relaxed);
+    WANTS_REGISTERS.store(
+        with_host(|host| host.wants_registers()).unwrap_or(false),
+        Ordering::Relaxed,
+    );
     for plugin in disabled {
         process::kill_plugin(&plugin);
     }
@@ -1113,6 +1442,17 @@ pub fn deliver_events(editor: &mut Editor) {
     };
     for event in events {
         deliver_event(editor, event);
+    }
+}
+
+/// Apply what a plugin call did, or show its error.
+fn report(editor: &mut Editor, _plugin: &str, result: anyhow::Result<Vec<Action>>) {
+    match result {
+        Ok(actions) => apply(editor, None, actions),
+        Err(error) => {
+            refresh_wanted();
+            editor.set_error(error.to_string());
+        }
     }
 }
 

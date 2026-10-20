@@ -284,6 +284,45 @@ runtime_local! {
     /// The keymap with plugin keys filled in, for the keymap (by address)
     /// and plugin keys it was made from.
     static FILLED: Mutex<Option<(usize, usize, Arc<HashMap<Mode, KeyTrie>>)>> = Mutex::new(None);
+    /// Bindings plugins set for their own buffers, by plugin (see
+    /// [`set_buffer_keys`]).
+    static BUFFER_KEYS: ArcSwapOption<HashMap<String, HashMap<Mode, KeyTrie>>> = ArcSwapOption::const_empty();
+    /// The last keymap with a plugin's buffer keys on top: `(keymap address,
+    /// buffer keys address, plugin, keymap)`.
+    static IN_BUFFER: Mutex<Option<(usize, usize, String, Arc<HashMap<Mode, KeyTrie>>)>> = Mutex::new(None);
+}
+
+/// Set the bindings plugins use in their own buffers (`open-buffer`). There
+/// they take precedence over every other binding; elsewhere they do nothing.
+pub fn set_buffer_keys(keys: Option<HashMap<String, HashMap<Mode, KeyTrie>>>) {
+    BUFFER_KEYS.store(keys.map(Arc::new));
+    *IN_BUFFER.lock() = None;
+}
+
+/// `keymaps` with `owner`'s buffer keys on top, if it has any.
+fn with_buffer_keys(
+    keymaps: &HashMap<Mode, KeyTrie>,
+    owner: &str,
+) -> Option<Arc<HashMap<Mode, KeyTrie>>> {
+    let all = BUFFER_KEYS.load_full()?;
+    let keys = all.get(owner)?;
+    let base = keymaps as *const _ as usize;
+    let all_ptr = Arc::as_ptr(&all) as usize;
+    let mut cached = IN_BUFFER.lock();
+    if let Some((b, k, plugin, map)) = &*cached {
+        if *b == base && *k == all_ptr && plugin == owner {
+            return Some(map.clone());
+        }
+    }
+    let mut map = keymaps.clone();
+    for (mode, trie) in keys {
+        if let (Some(KeyTrie::Node(node)), KeyTrie::Node(extra)) = (map.get_mut(mode), trie) {
+            node.merge(extra.clone());
+        }
+    }
+    let map = Arc::new(map);
+    *cached = Some((base, all_ptr, owner.to_string(), map.clone()));
+    Some(map)
 }
 
 /// Set the plugins' default bindings. They only bind keys that neither the
@@ -296,6 +335,7 @@ pub fn set_plugin_keys(keys: Option<HashMap<Mode, KeyTrie>>) {
 /// The keymap may have changed (config reload): fill plugin keys again.
 pub fn forget_filled_keymap() {
     *FILLED.lock() = None;
+    *IN_BUFFER.lock() = None;
 }
 
 /// `keymaps` with the plugin keys filled in, or `None` without plugin keys
@@ -365,10 +405,17 @@ impl Keymaps {
     /// key cancels pending keystrokes. If there are no pending keystrokes but a
     /// sticky node is in use, it will be cleared.
     pub fn get(&mut self, mode: Mode, key: KeyEvent) -> KeymapResult {
+        self.get_in(mode, key, None)
+    }
+
+    /// [`Self::get`] in a buffer of plugin `owner`, whose buffer keys apply.
+    pub fn get_in(&mut self, mode: Mode, key: KeyEvent, owner: Option<&str>) -> KeymapResult {
         // TODO: remove the sticky part and look up manually
         let base = self.map();
         let filled = with_plugin_keys(&base);
         let keymaps = filled.as_deref().unwrap_or(&base);
+        let in_buffer = owner.and_then(|owner| with_buffer_keys(keymaps, owner));
+        let keymaps = in_buffer.as_deref().unwrap_or(keymaps);
         let keymap = &keymaps[&mode];
 
         if key!(Esc) == key {

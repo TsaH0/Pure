@@ -1572,3 +1572,255 @@ async fn background_tasks_deliver_without_blocking_the_editor() -> anyhow::Resul
     assert_eq!(text(&app), "xa\n");
     Ok(())
 }
+
+fn app_with_v3_manifest(
+    permissions: &str,
+    extra: &str,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n{extra}"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_diagnostics_show_like_a_language_servers() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/diagnose<ret>").await;
+    let doc = helix_view::doc!(app.editor);
+    let diagnostics = doc.diagnostics();
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].message, "bad");
+    assert_eq!(diagnostics[0].range.start, 0);
+    assert_eq!(diagnostics[0].range.end, 1);
+    assert_eq!(diagnostics[0].source.as_deref(), Some("testplugin3"));
+    assert!(matches!(
+        &diagnostics[0].provider,
+        helix_core::diagnostic::DiagnosticProvider::Plugin { name } if &**name == "testplugin3"
+    ));
+    // Reloading drops them.
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert!(helix_view::doc!(app.editor).diagnostics().is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_timers_fire_later() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/timer 20<ret>").await;
+    let message = wait_for_status(&mut app, |message| message.starts_with("timer-fired:")).await;
+    assert!(message.starts_with("timer-fired:"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_buffers_are_written_by_their_plugin() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/buffer<ret>").await;
+    deliver_events(&mut app).await;
+    let doc = helix_view::doc!(app.editor);
+    assert_eq!(doc.display_name(), "test://buffer");
+    assert_eq!(doc.plugin_owner.as_deref(), Some("testplugin3"));
+    assert_eq!(doc.text().to_string(), "one\n");
+    assert!(!doc.is_modified());
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter()
+            .any(|line| line.starts_with("buffer-open:test://buffer:")),
+        "{log:?}"
+    );
+    keys(&mut app, "itwo<esc>").await;
+    assert!(helix_view::doc!(app.editor).is_modified());
+    keys(&mut app, ":w<ret>").await;
+    assert_eq!(status(&app).0, "written:test://buffer:twoone");
+    assert!(!helix_view::doc!(app.editor).is_modified());
+
+    // Opening it again shows the same buffer.
+    let id = helix_view::doc!(app.editor).id();
+    keys(
+        &mut app,
+        ":buffer-next<ret>:plugin-run testplugin3/buffer<ret>",
+    )
+    .await;
+    assert_eq!(helix_view::doc!(app.editor).id(), id);
+
+    // Scratch buffers are ordinary ones.
+    keys(&mut app, ":plugin-run testplugin3/scratch<ret>").await;
+    let doc = helix_view::doc!(app.editor);
+    assert_eq!(doc.text().to_string(), "scratch text\n");
+    assert!(doc.plugin_owner.is_none());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_buffer_keys_only_apply_in_its_buffers() -> anyhow::Result<()> {
+    let permissions = format!("{ALL}, \"registers\"");
+    let (mut app, _dir) = app_with_v3_manifest(
+        &permissions,
+        "[keys.buffer.normal]\nx = \"registers\"\n",
+        "",
+    );
+    // Elsewhere `x` keeps its binding (select the line).
+    keys(&mut app, "x").await;
+    assert_eq!(primary(&app), (0, 2));
+    assert!(app
+        .editor
+        .get_status()
+        .is_none_or(|(message, _)| !message.starts_with("registers")));
+
+    keys(&mut app, ":plugin-run testplugin3/buffer<ret>").await;
+    keys(&mut app, "x").await;
+    assert_eq!(status(&app).0, "registers:x,y");
+    // The register was written in the editor.
+    let values: Vec<String> = app
+        .editor
+        .registers
+        .read('a', &app.editor)
+        .unwrap()
+        .map(|value| value.into_owned())
+        .collect();
+    assert_eq!(values, ["x", "y"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_can_be_completion_sources() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "[testplugin3]\ncompletion = true\n");
+    // Typing asks the completion sources; ctrl-n takes the first item.
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-n><esc>").await;
+    let text = text(&app);
+    assert!(text.starts_with("alpha"), "{text:?}");
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|line| line.starts_with("completion:")),
+        "{log:?}"
+    );
+    Ok(())
+}
+
+/// Replace the whole text of the current document, as if typed.
+fn set_text(app: &mut Application, text: &str) {
+    let (view, doc) = helix_view::current!(app.editor);
+    let transaction = helix_core::Transaction::change(
+        doc.text(),
+        [(0, doc.text().len_chars(), Some(text.into()))].into_iter(),
+    );
+    doc.apply(&transaction, view.id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oil_example_edits_directories_as_buffers() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    std::fs::write(work.join("b.txt"), "b")?;
+    std::fs::create_dir(work.join("sub"))?;
+    std::fs::write(work.join("sub/inner.txt"), "inner")?;
+
+    let mut app = AppBuilder::new()
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    let a_txt = helix_view::doc!(app.editor).id();
+
+    // `-` opens the file's directory, cursor on the file.
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    let listing = text(&app);
+    let lines: Vec<&str> = listing.lines().collect();
+    assert_eq!(lines.len(), 3, "{listing}");
+    assert!(lines[0].ends_with(" sub/"), "{listing}");
+    assert!(
+        lines[1].ends_with(" a.txt") && lines[2].ends_with(" b.txt"),
+        "{listing}"
+    );
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc.text().slice(..));
+    assert_eq!(doc.text().char_to_line(cursor), 1, "cursor on a.txt");
+    assert!(
+        !doc.plugin_decorations.is_empty(),
+        "icons and names are drawn"
+    );
+
+    // Rename a.txt, delete b.txt, create new.txt and a directory.
+    let renamed = listing
+        .lines()
+        .map(|line| line.replace(" a.txt", " c.txt"))
+        .filter(|line| !line.ends_with(" b.txt"))
+        .chain(["new.txt".to_string(), "made/".to_string()])
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    set_text(&mut app, &renamed);
+    assert!(helix_view::doc!(app.editor).is_modified());
+    keys(&mut app, ":w<ret>").await;
+    // The changes, then the refresh a moment later (a timer).
+    deliver_events(&mut app).await;
+    deliver_events(&mut app).await;
+    assert!(!work.join("a.txt").exists());
+    assert_eq!(std::fs::read_to_string(work.join("c.txt"))?, "a");
+    assert!(!work.join("b.txt").exists());
+    assert!(work.join("new.txt").is_file());
+    assert!(work.join("made").is_dir());
+    // The buffer of a.txt followed the rename.
+    assert_eq!(
+        app.editor.documents[&a_txt].path().map(|p| p.to_path_buf()),
+        Some(work.join("c.txt"))
+    );
+    // The listing was read again and is saved.
+    let doc = helix_view::doc!(app.editor);
+    assert!(!doc.is_modified());
+    let listing = text(&app);
+    assert!(
+        listing.contains(" made/") && listing.contains(" new.txt"),
+        "{listing}"
+    );
+
+    // enter opens a directory, `-` goes back up.
+    keys(&mut app, "gg<ret>").await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.join("made").display()));
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    Ok(())
+}
