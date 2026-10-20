@@ -6,6 +6,12 @@ since been fixed.
 
 ## Status (2026-10-20, after the fixes)
 
+Follow-up verification of working-branch commit `4bd8f2e9` is in
+[`plugin-fix-verification.md`](plugin-fix-verification.md). The fixes are not
+all complete: oversized single preview expansions, cancelled background work
+and combining-text grep coordinates still have reproduced gaps. That report
+also distinguishes branch fixes from master and records the tests run.
+
 Each finding was checked against the code first; all were valid. What was
 done, and what is left on purpose:
 

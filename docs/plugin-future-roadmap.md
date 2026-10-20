@@ -19,8 +19,14 @@ findings before expanding the affected subsystem.
 
 ## Status (2026-10-20)
 
+See [`plugin-fix-verification.md`](plugin-fix-verification.md) for independent
+checks of `4bd8f2e9`. The imports and native snippet completion path work, but
+F00/F01 remain partial, including queued background cancellation and resource
+budgets. Host-side load-generation checks can be implemented internally; they
+do not all require new callback exports or API 0.5.
+
 The first delivery the roadmap recommends ("F00/F01, then F02 plus the
-narrow F06 snippet path") is done. All of it went into API 0.4 as
+narrow F06 snippet path") has an initial implementation. It went into API 0.4 as
 **imports only** (new `requests`, `revisions` and `snippets`
 interfaces), which the compatibility rule allows: no new exports, no
 changed records, so no 0.5 was needed yet. `testplugin3-v0.4.wasm`
