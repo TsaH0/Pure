@@ -1469,9 +1469,12 @@ pub fn starts_program(command: &str) -> bool {
     match command.strip_prefix(':') {
         Some(typed) => {
             let name = typed.split_whitespace().next().unwrap_or_default();
-            crate::commands::typed::TYPABLE_COMMAND_MAP
-                .get(name)
-                .is_some_and(|cmd| TYPED.contains(&cmd.name))
+            // Any command's arguments can start a shell while they are
+            // expanded (`:echo %sh{...}`).
+            typed.contains("%sh")
+                || crate::commands::typed::TYPABLE_COMMAND_MAP
+                    .get(name)
+                    .is_some_and(|cmd| TYPED.contains(&cmd.name))
         }
         None => STATIC.contains(&command.split_whitespace().next().unwrap_or_default()),
     }
@@ -1879,6 +1882,9 @@ mod tests {
             ":bang ls",
             "shell_pipe",
             " :grep x",
+            ":echo %sh{touch marker}",
+            ":open \"%sh(echo file)\"",
+            ":w %sh[x]",
         ] {
             assert!(starts_program(command), "{command}");
         }

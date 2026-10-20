@@ -84,7 +84,8 @@ f = ":plugin-run finder/files"
   - `open-files`: open files
   - `run-commands`: run editor commands (only from the plugin's own commands
     and callbacks). Commands that start programs (`:sh`, `:pipe`,
-    `:insert-output`, `!`, `:compile`, `:grep`, ...) also need the user's
+    `:insert-output`, `!`, `:compile`, `:grep`, ...) and commands with a
+    `%sh{...}` expansion also need the user's
     `allow-process = true`, since they can run anything.
   - `process`: run programs, see [Running programs](#running-programs). This
     one also needs the user's `allow-process` grant.
