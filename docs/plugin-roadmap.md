@@ -494,15 +494,15 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   clone). Failure restores items and clears new item/query/callback registries.
   Fresh SDK components test failed push, replacement and mixed updates; all
   original 0.2 compatibility tests still use frozen fixtures.
-- [ ] **Atomic queued picker replacement:** SDK item lists change before
-  queued UI effects run. Race Enter against a pending same-generation
-  `set-items`, ensuring that selection and guest data use the same list
-  revision. Also test UI actions across nested `run-command`; a scheduling
-  fix must preserve recursion limits and avoid idle wake-ups.
-- [ ] **Preview truncation label:** the panel title counts matched source
-  lines, so generated multi-line replacements can be truncated without a
-  "showing" label. Track displayed-row truncation separately, retaining the
-  preview's bounded work and leaving the document untouched.
+- [x] **Atomic queued picker replacement:** `set-items` is counted the
+  moment the plugin calls it (`plugins::picker::set_items_requested`) and
+  every row carries the revision of the list it came from. Enter on a row
+  from an older list reports a cancel ("choose again") instead of an index
+  into the plugin's new list. Nested `run-command` UI ordering is covered by
+  the existing ordered-UI tests; no new timers.
+- [x] **Preview truncation label:** the panel counts rows, not source
+  lines: "(showing N of M rows)", with `M+` when the row limit cut changes
+  off. Tests: `truncation_label_counts_rows`, `preview_counts_generated_rows`.
 - [x] **Bound chooser reads:** chooser reads check the opened descriptor is a
   regular file, use nonblocking open on Unix, cap raw output at 16 MiB and
   report actual truncation. Tests cover oversized files and replacement FIFOs.
@@ -514,7 +514,7 @@ Tasks in one batch touch the same code, so give each batch to one agent.
   (`OnCancel`, disarmed when the program runs) answers a plugin's request
   with an error when it is replaced by another program, dropped as stale, or
   the editor quits first. Test: `displaced_terminal_requests_are_answered`.
-- [ ] **Cancel blocked filesystem workers:** async timeouts stop the guest
+- [ ] **(Blocked upstream) Cancel blocked filesystem workers:** async timeouts stop the guest
   and let the editor reload/quit, but an OS FIFO open in Tokio's blocking
   pool can survive until the FIFO wakes. Track upstream WASI/cap-std support
   for opening nonblocking from the start; keep host shutdown nonblocking.

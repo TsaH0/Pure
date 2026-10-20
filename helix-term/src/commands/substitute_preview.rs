@@ -26,8 +26,10 @@ struct Preview {
     /// Char ranges of the matches in the document.
     matches: Vec<Range<usize>>,
     lines: Vec<Line>,
-    /// Lines with a match, including those not kept in `lines`.
-    total_lines: usize,
+    /// Panel rows computed (before the `MAX_LINES` cut), and whether some
+    /// changes weren't turned into rows at all.
+    total_rows: usize,
+    rows_incomplete: bool,
     title: String,
     error: bool,
 }
@@ -74,6 +76,27 @@ pub fn snapshot_line_numbers() -> Option<Vec<Option<usize>>> {
 
 pub fn clear() {
     PREVIEW.lock().take();
+}
+
+/// Rows computed for the panel and whether some changes got no rows. For
+/// tests.
+#[doc(hidden)]
+pub fn snapshot_rows() -> Option<(usize, bool)> {
+    PREVIEW
+        .lock()
+        .as_ref()
+        .map(|preview| (preview.total_rows, preview.rows_incomplete))
+}
+
+/// "(showing N of M rows)" when the panel shows fewer rows than there are.
+/// Rows, not source lines: a multi-line replacement takes several rows.
+fn truncation_label(visible: usize, total_rows: usize, incomplete: bool) -> Option<String> {
+    (visible < total_rows || incomplete).then(|| {
+        format!(
+            "(showing {visible} of {total_rows}{} rows) ",
+            if incomplete { "+" } else { "" }
+        )
+    })
 }
 
 /// The char ranges `:s` works on in `text` for `scope`: sorted and merged.
@@ -126,7 +149,8 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
             doc: doc.id(),
             matches: Vec::new(),
             lines: Vec::new(),
-            total_lines: 0,
+            total_rows: 0,
+            rows_incomplete: false,
             title: message,
             error: true,
         })
@@ -216,6 +240,8 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
         );
         i = j;
     }
+    let total_rows = lines.len();
+    let rows_incomplete = i < changes.len() || total_rows > MAX_LINES;
     lines.truncate(MAX_LINES);
 
     let plural = |n: usize| if n == 1 { "" } else { "s" };
@@ -234,7 +260,8 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
             .filter(|range| !range.is_empty())
             .collect(),
         lines,
-        total_lines: outcome.lines,
+        total_rows,
+        rows_incomplete,
         title,
         error: false,
     })
@@ -361,12 +388,12 @@ pub fn render(editor: &Editor, area: Rect, surface: &mut Surface) {
 
     let shown = (height - 2) as usize;
     let mut title = format!(" :s  {} ", preview.title);
-    if !preview.error && preview.total_lines > shown.min(preview.lines.len()) {
-        title.push_str(&format!(
-            "(showing {} of {}) ",
-            shown.min(preview.lines.len()),
-            preview.total_lines
-        ));
+    if !preview.error {
+        let visible = shown.min(preview.lines.len());
+        if let Some(label) = truncation_label(visible, preview.total_rows, preview.rows_incomplete)
+        {
+            title.push_str(&label);
+        }
     }
     let block = Block::bordered()
         .title(tui::text::Span::styled(title, title_style))
@@ -424,6 +451,21 @@ pub fn render(editor: &Editor, area: Rect, surface: &mut Surface) {
 
 #[cfg(test)]
 mod test {
+    #[test]
+    fn truncation_label_counts_rows() {
+        assert_eq!(super::truncation_label(5, 5, false), None);
+        // Generated rows cut off by the panel's height.
+        assert_eq!(
+            super::truncation_label(4, 12, false).as_deref(),
+            Some("(showing 4 of 12 rows) ")
+        );
+        // More changes than the row limit.
+        assert_eq!(
+            super::truncation_label(200, 200, true).as_deref(),
+            Some("(showing 200 of 200+ rows) ")
+        );
+    }
+
     use super::*;
 
     #[test]

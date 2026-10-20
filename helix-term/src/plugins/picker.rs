@@ -1,9 +1,13 @@
 //! Pickers shown by plugins (`show-picker`, `push-items`, `set-items`, live
 //! pickers).
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+
+use helix_event::runtime_local;
+use parking_lot::Mutex;
 
 use futures_util::future::{BoxFuture, FutureExt};
 use helix_plugin::{Callback, OpenAction, PickerItem, PickerPreview, PickerResult, PickerSpec};
@@ -19,6 +23,8 @@ use crate::ui::{self, picker::Injector, Picker, PickerColumn};
 pub struct Item {
     /// Index in the plugin's list (pushed items continue the count).
     index: u32,
+    /// Which of the plugin's `set-items` lists the row is from.
+    revision: u64,
     columns: Vec<String>,
     preview: Option<Preview>,
 }
@@ -36,11 +42,43 @@ pub struct Data {
     /// Items so far, to number pushed ones.
     len: AtomicU32,
     generation: Option<AtomicU64>,
+    /// The `set-items` list shown (see `REQUESTED`).
+    revision: AtomicU64,
 }
 
 type PluginPicker = Picker<Item, Data>;
 
-fn item(index: u32, item: PickerItem) -> Item {
+runtime_local! {
+    /// `set-items` calls per open picker, counted as soon as the plugin makes
+    /// them. The plugin's list changes then; the picker only when the queued
+    /// UI work runs. A row from an older list must not be chosen: its index
+    /// would mean another item to the plugin.
+    static REQUESTED: Mutex<BTreeMap<(String, u32), u64>> = Mutex::new(BTreeMap::new());
+}
+
+/// The plugin called `set-items` on picker `id`: the revision its new list is.
+pub fn set_items_requested(plugin: &str, id: u32) -> u64 {
+    let mut requested = REQUESTED.lock();
+    let revision = requested.entry((plugin.to_string(), id)).or_default();
+    *revision += 1;
+    *revision
+}
+
+/// Whether the plugin's list is still the one `item` came from.
+fn is_current(plugin: &str, id: u32, item: &Item) -> bool {
+    let requested = REQUESTED.lock();
+    requested
+        .get(&(plugin.to_string(), id))
+        .copied()
+        .unwrap_or(0)
+        == item.revision
+}
+
+fn forget(plugin: &str, id: u32) {
+    REQUESTED.lock().remove(&(plugin.to_string(), id));
+}
+
+fn item(index: u32, revision: u64, item: PickerItem) -> Item {
     let preview = item.preview.map(|preview| match preview {
         PickerPreview::File((path, lines)) => Preview::File(
             PathBuf::from(path),
@@ -50,6 +88,7 @@ fn item(index: u32, item: PickerItem) -> Item {
     });
     Item {
         index,
+        revision,
         columns: item.columns,
         preview,
     }
@@ -132,7 +171,7 @@ pub fn show(
         .items
         .into_iter()
         .enumerate()
-        .map(|(index, it)| item(index as u32, it))
+        .map(|(index, it)| item(index as u32, 0, it))
         .collect();
     let live = spec.live;
     let mut columns: Vec<_> = spec
@@ -154,6 +193,8 @@ pub fn show(
         id,
         len: AtomicU32::new(len),
         generation: generation.map(AtomicU64::new),
+        // Request ids are never reused: a new picker starts at revision 0.
+        revision: AtomicU64::new(0),
     };
     let on_accept = plugin.clone();
     let on_close = plugin.clone();
@@ -163,14 +204,19 @@ pub fn show(
         items,
         data,
         move |cx, item: &Item, action| {
+            let result = if is_current(&on_accept, id, item) {
+                PickerResult::Accepted((vec![item.index], open_action(action)))
+            } else {
+                cx.editor
+                    .set_error("The plugin was replacing the picker's items: choose again");
+                PickerResult::Cancelled
+            };
+            forget(&on_accept, id);
             super::deliver(
                 cx.editor,
                 cx.jobs,
                 &on_accept,
-                Callback::PickerDone {
-                    id,
-                    result: PickerResult::Accepted((vec![item.index], open_action(action))),
-                },
+                Callback::PickerDone { id, result },
             );
         },
     )
@@ -179,6 +225,7 @@ pub fn show(
         Preview::Text(text) => Some((ui::picker::PathOrId::Text(text), None)),
     })
     .with_on_close(move |cx| {
+        forget(&on_close, id);
         super::deliver(
             cx.editor,
             cx.jobs,
@@ -229,9 +276,10 @@ fn push(picker: &PluginPicker, items: Vec<PickerItem>) {
     // "running" for good.
     let injector = picker.injector();
     let len = &picker.editor_data().len;
+    let revision = picker.editor_data().revision.load(Ordering::Relaxed);
     for it in items {
         if injector
-            .push(item(len.fetch_add(1, Ordering::Relaxed), it))
+            .push(item(len.fetch_add(1, Ordering::Relaxed), revision, it))
             .is_err()
         {
             break;
@@ -260,9 +308,15 @@ pub fn set_items(
     plugin: &str,
     id: u32,
     generation: Option<u64>,
+    revision: u64,
     items: Vec<PickerItem>,
 ) {
     if let Some(picker) = find(compositor, plugin, id) {
+        // The plugin's list is this one now, even if it is a stale query's.
+        picker
+            .editor_data()
+            .revision
+            .store(revision, Ordering::Relaxed);
         if current_generation(picker) != generation {
             return;
         }
@@ -312,9 +366,10 @@ mod tests {
             "generation-test",
             123,
             Some(1),
+            1,
             vec![row()],
         );
-        set_items(&mut compositor, "generation-test", 123, Some(0), vec![]);
+        set_items(&mut compositor, "generation-test", 123, Some(0), 2, vec![]);
         push_items(
             &mut compositor,
             "generation-test",
@@ -330,5 +385,38 @@ mod tests {
                 .load(Ordering::Relaxed),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn row(revision: u64) -> Item {
+        Item {
+            index: 0,
+            revision,
+            columns: Vec::new(),
+            preview: None,
+        }
+    }
+
+    #[test]
+    fn rows_from_replaced_lists_are_not_chosen() {
+        let (plugin, id) = ("revisions-test", 7);
+        forget(plugin, id);
+        // Before any set-items: the initial rows are current.
+        assert!(is_current(plugin, id, &row(0)));
+        // The plugin replaced its list; the picker hasn't caught up yet.
+        let revision = set_items_requested(plugin, id);
+        assert_eq!(revision, 1);
+        assert!(!is_current(plugin, id, &row(0)));
+        // Rows of the new list (stamped when the queued update runs).
+        assert!(is_current(plugin, id, &row(1)));
+        assert_eq!(set_items_requested(plugin, id), 2);
+        assert!(!is_current(plugin, id, &row(1)));
+        // Closing the picker forgets it.
+        forget(plugin, id);
+        assert!(is_current(plugin, id, &row(0)));
     }
 }

@@ -673,9 +673,13 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 id,
                 items,
                 generation,
-            } => ui.push(Box::new(move |_, compositor| {
-                picker::set_items(compositor, &plugin, id, generation, items)
-            })),
+            } => {
+                // Now: the plugin's list already changed.
+                let revision = picker::set_items_requested(&plugin, id);
+                ui.push(Box::new(move |_, compositor| {
+                    picker::set_items(compositor, &plugin, id, generation, revision, items)
+                }))
+            }
             Action::Popup {
                 markdown,
                 centered,

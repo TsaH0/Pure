@@ -541,3 +541,32 @@ Validation: 39 editor library tests passed; formatting, warning-free workspace
 Clippy and a normal build passed. Tmux checks verified a valid chooser callback
 and cleanup, then a program replacing its chooser with a FIFO: error delivery,
 cleanup, terminal restoration and subsequent editing/saving all passed.
+
+## Pure without plugins vs vanilla Helix (2026-10-20)
+
+Owner's rule: with no plugins, Pure must be as fast as vanilla Helix.
+Measured with `docs/bench/vs-helix.py`: both release builds driven through
+a pty with identical input, alternating runs. Vanilla is `upstream/master`
+at `ba40e54`, Pure's merge base. Same config dir (no plugins, Rust grammar
+built, language server off), 120x40 terminal, 4 cores. File: a
+7,500-line Rust file (`helix-term/src/commands.rs`).
+
+| Median (min–max) | Vanilla Helix | Pure, no plugins |
+| --- | --- | --- |
+| Startup to first draw | 450 ms (432–482) | 447 ms (422–496) |
+| CPU, start then quit (15 runs) | 376 ms (359–411) | 378 ms (350–424) |
+| CPU, editing session (5 runs) | 22.21 s (22.10–22.40) | 22.16 s (22.09–22.98) |
+| Idle over 5 s: wake-ups, CPU | 0, 0 ms | 0, 0 ms |
+| Peak memory | 37.3 MiB | 38.5 MiB |
+| Binary | 33 MB | 57 MB |
+
+The editing session sends ~1,000 keys 3 ms apart: 400 `j`, a search with
+60 `n`, typing a line in insert mode, 200 `w`, `x` x40, `s` to split, undo,
+page up/down. All differences are within noise except memory (+1.2 MiB,
+Wasmtime's code and statics) and binary size. Build with
+`--no-default-features --features git` to drop both.
+
+Rerun: build both with `cargo build --release`, then
+`python3 docs/bench/vs-helix.py '{"helix": ["<hx>", "<runtime>"], "pure":
+["<pure>", "<runtime>"]}' start|work|idle <rounds>`. It expects `work/big.rs`
+and a `bench-cfg` config dir next to the script; see the paths at the top.
