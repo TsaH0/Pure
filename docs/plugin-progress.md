@@ -2,6 +2,7 @@
 
 Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 [`plugin-processes-and-pickers.md`](plugin-processes-and-pickers.md).
+Future capabilities: [`plugin-future-roadmap.md`](plugin-future-roadmap.md).
 
 ## Status (2026-10-20)
 
@@ -10,7 +11,9 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   gets new imports).
 - Still open: the Future TODOs in the roadmap (one item is blocked
   upstream), plus the 22 correctness/performance findings in
-  [`suggested-improvements.md`](suggested-improvements.md). Conceal is done
+  [`suggested-improvements.md`](suggested-improvements.md). Proposed API
+  extensions are tracked separately in
+  [`plugin-future-roadmap.md`](plugin-future-roadmap.md). Conceal is done
   (render-markdown.nvim's behaviour, the owner's choice); the review identifies
   additional invalidation and scaling work.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
@@ -630,8 +633,9 @@ with Neovim's ecosystem, these needed new API, now in API 0.3:
 Already possible before: pickers and finders (telescope), git and other
 tools through programs (`spawn`, `run-interactive`), popups and prompts,
 decorations (todo-comments, render-markdown), statusline segments, key
-bindings and commands, background work. Still impossible: see the table in
-the roadmap's M12 (panes and sidebars, embedded terminals, conceal, folds).
+bindings and commands, background work. Later work added the sidebar and
+conceal; see the current capability audit in
+[`plugin-future-roadmap.md`](plugin-future-roadmap.md) for the remaining limits.
 
 Design notes:
 
@@ -764,3 +768,24 @@ with auto-reload enabled and disabled; source inspection confirms the recurring
 timer exists in both cases. This is neither an exact wake-up count nor a release
 benchmark against vanilla Helix. The report proposes regression gates and
 measurements rather than extending historical parity claims to this revision.
+
+## Future plugin capabilities review (2026-10-20)
+
+Rechecked master `1268b872`, the 0.4 WIT, SDK/host/editor adapters and native
+syntax, completion/snippet, view, LSP, DAP, VCS, save and process boundaries.
+[`plugin-future-roadmap.md`](plugin-future-roadmap.md) records which plugin
+behaviors remain blocked or limited, the candidate APIs, delivery waves and
+performance/compatibility gates. It separates existing tool/text-buffer
+workarounds from native integration, and core designs from ABI additions.
+
+The proposed first delivery hardens relevant current findings, defines request
+and version contracts, adds revision-safe document work and reuses the native
+snippet engine. Later steps cover views, syntax/semantic services, file watches,
+persistent processes, richer panels, debugger/diff integration, folds and URI
+providers. New exports/record shapes would use a proposed next ABI with frozen
+0.4 fixtures and legacy support; no new APIs were implemented in this review.
+No benchmarks or guest artifacts changed. Source links and roadmap references
+were checked; implementation-specific tests and measurements remain explicit
+acceptance requirements, not completed validation.
+Workspace formatting and Clippy passed without warnings; runtime test suites
+were not repeated for this documentation-only follow-up.

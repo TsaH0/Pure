@@ -533,6 +533,11 @@ they need. Everything below is in API 0.3, with an example each.
 
 What plugins still can't do, and why:
 
+For the current capability audit and proposed next APIs, see
+[`plugin-future-roadmap.md`](plugin-future-roadmap.md). It distinguishes blocked
+native integration from workflows already possible through commands, external
+tools and owned buffers, and separates ABI work from core UI/layout designs.
+
 | Kind | Status |
 | --- | --- |
 | Sidebars, file trees, outlines (nvim-tree) | Done (API 0.4): `sidebar` interface, `examples/tree`. Other panes (bottom panels, floating windows with their own keys) still aren't. |
