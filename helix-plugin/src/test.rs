@@ -148,6 +148,10 @@ fn manifest_parsing() {
             .contains("unknown variant")
     );
     assert!(err("version = \"1\"\napi = \"0.1\"").contains("missing field"));
+    for wasm in ["../../victim.wasm", "/tmp/x.wasm", "dir/x.wasm", ".", ""] {
+        let source = format!("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nwasm = \"{wasm}\"");
+        assert!(err(&source).contains("wasm must be a file next to"), "{wasm}");
+    }
 }
 
 #[test]

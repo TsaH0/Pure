@@ -341,14 +341,21 @@ fn build_host(
     host.set_program_check(starts_program);
     let mut setting_errors = Vec::new();
     // Installed plugins whose component changed since aren't loaded.
-    let changed = match install::Lock::read(&lock_file(dir)) {
-        Ok(lock) => install::verify(dir, &lock),
+    // An unreadable lock can't tell which plugins were installed: load none.
+    let (changed, lock_broken) = match install::Lock::read(&lock_file(dir)) {
+        Ok(lock) => (install::verify(dir, &lock), false),
         Err(err) => {
-            setting_errors.push(err);
-            Vec::new()
+            setting_errors.push(anyhow::anyhow!(
+                "{err:#}: no plugins were loaded (fix or delete plugins.lock, then \
+                 :plugin-reload)"
+            ));
+            (Vec::new(), true)
         }
     };
     let (actions, mut errors) = host.load_all(dir, |name| {
+        if lock_broken {
+            return None;
+        }
         if let Some((_, reason)) = changed.iter().find(|(changed, _)| changed == name) {
             setting_errors.push(anyhow::anyhow!("{reason}"));
             return None;
@@ -1891,6 +1898,26 @@ mod tests {
         for command in [":write", ":echo hi", "goto_line_end", ":plugin-run x/y", ""] {
             assert!(!starts_program(command), "{command}");
         }
+    }
+
+    #[test]
+    fn an_unreadable_lock_loads_no_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("plugins");
+        let todos = Path::new(env!("CARGO_MANIFEST_DIR")).join("../helix-plugin/examples/todos");
+        std::fs::create_dir_all(dir.join("todos")).unwrap();
+        for file in ["plugin.toml", "plugin.wasm"] {
+            std::fs::copy(todos.join(file), dir.join("todos").join(file)).unwrap();
+        }
+        std::fs::write(lock_file(&dir), "not = [valid").unwrap();
+        let (host, _, errors) = build_host(&dir, &toml::Table::new());
+        assert!(host.unwrap().plugins().is_empty());
+        assert!(
+            errors
+                .iter()
+                .any(|err| format!("{err:#}").contains("no plugins were loaded")),
+            "{errors:?}"
+        );
     }
 
     #[test]

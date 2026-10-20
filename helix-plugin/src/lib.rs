@@ -326,6 +326,19 @@ impl Manifest {
                 manifest.api
             );
         }
+        // Checked before anything joins it to a directory: a file next to
+        // plugin.toml, never `../x` or an absolute path.
+        let mut components = manifest.wasm.components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
+            bail!(
+                "plugin '{}': wasm must be a file next to plugin.toml, not {}",
+                manifest.name,
+                manifest.wasm.display()
+            );
+        }
         Ok(manifest)
     }
 }
