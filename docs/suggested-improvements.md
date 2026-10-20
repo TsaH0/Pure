@@ -544,6 +544,9 @@ clear outcomes; examples/templates and API references agree with tested behavior
 
 ## Remaining architectural capabilities
 
+The follow-up capability audit and proposed API delivery waves are in
+[`plugin-future-roadmap.md`](plugin-future-roadmap.md).
+
 These are proposals, not regressions or authorization to start large UI changes:
 
 | Capability | Why it matters | Suggested boundary |
