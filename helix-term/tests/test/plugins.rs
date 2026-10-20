@@ -1981,6 +1981,39 @@ async fn directory_handler_opens_directories_with_a_plugin() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_reload_during_the_startup_load_opens_the_waiting_directory() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    let mut config = test_config();
+    config.editor.directory_handler = Some("oil/open".into());
+    let mut app = AppBuilder::new().with_config(config).build().unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    // `pure <dir>` while plugins load in the background: the directory waits.
+    helix_term::plugins::start_loading_for_tests();
+    assert!(helix_term::plugins::open_directory(&app.editor, work.clone()));
+    // A manual reload replaces that load (whose result is then dropped).
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "").await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let work = helix_stdx::path::canonicalize(root.path());

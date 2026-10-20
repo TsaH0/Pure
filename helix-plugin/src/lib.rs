@@ -2363,26 +2363,27 @@ impl PluginHost {
             }
         }
         // Compiling (on a cold cache) is the slow part: do it in parallel,
-        // then load in order.
+        // a few at a time, then load in order.
         let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
-        let components: Vec<_> = std::thread::scope(|scope| {
-            let compiling: Vec<_> = enabled
-                .iter()
-                .map(|(dir, manifest, _)| {
-                    scope.spawn(move || {
-                        compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
+        let mut components = Vec::with_capacity(enabled.len());
+        for batch in enabled.chunks(threads) {
+            std::thread::scope(|scope| {
+                let compiling: Vec<_> = batch
+                    .iter()
+                    .map(|(dir, manifest, _)| {
+                        scope.spawn(move || {
+                            compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+                        })
                     })
-                })
-                .collect();
-            compiling
-                .into_iter()
-                .map(|handle| {
+                    .collect();
+                components.extend(compiling.into_iter().map(|handle| {
                     handle
                         .join()
                         .unwrap_or_else(|_| Err(anyhow!("compiling the plugin panicked")))
-                })
-                .collect()
-        });
+                }));
+            });
+        }
         for ((dir, manifest, settings), component) in enabled.into_iter().zip(components) {
             match self.load_compiled(&dir, manifest, settings, component) {
                 Ok(init_actions) => actions.extend(init_actions),

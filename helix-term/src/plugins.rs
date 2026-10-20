@@ -260,7 +260,7 @@ pub fn load(editor: &mut Editor) {
 /// documents opened in the meantime. Without plugins this costs nothing.
 pub fn load_in_background() {
     let dir = plugin_dir();
-    if !has_plugins(&dir) {
+    if !has_plugins(&dir, &toml::Table::new()) {
         return;
     }
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
@@ -291,6 +291,13 @@ pub fn load_in_background() {
     });
 }
 
+/// Pretend a background load started (for tests).
+#[doc(hidden)]
+pub fn start_loading_for_tests() {
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    LOADING.store(true, Ordering::Relaxed);
+}
+
 /// Complete a background load only if it is still the newest request.
 fn install_background(
     editor: &mut Editor,
@@ -309,6 +316,11 @@ fn install_background(
     for doc in open {
         queue(Event::DocumentOpen(plugin_doc_id(doc)));
     }
+    finish_loading(editor);
+}
+
+/// Plugins are loaded: open the directory that waited for them.
+fn finish_loading(editor: &Editor) {
     LOADING.store(false, Ordering::Relaxed);
     if let Some(dir) = PENDING_DIRECTORY.lock().take() {
         if let Some(handler) = editor.config().directory_handler.clone() {
@@ -353,12 +365,18 @@ fn open_file_picker(editor: &mut Editor, compositor: &mut Compositor, dir: PathB
     compositor.push(Box::new(crate::ui::overlay::overlaid(picker)));
 }
 
-/// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).
-fn has_plugins(dir: &Path) -> bool {
+/// Whether `dir` has a plugin that isn't turned off in `settings` (an
+/// unreadable manifest counts, so its error is shown).
+fn has_plugins(dir: &Path, settings: &toml::Table) -> bool {
     std::fs::read_dir(dir).is_ok_and(|entries| {
-        entries
-            .filter_map(Result::ok)
-            .any(|entry| entry.path().join("plugin.toml").is_file())
+        entries.filter_map(Result::ok).any(|entry| {
+            let manifest = entry.path().join("plugin.toml");
+            manifest.is_file()
+                && std::fs::read_to_string(&manifest)
+                    .ok()
+                    .and_then(|source| helix_plugin::Manifest::parse(&source).ok())
+                    .is_none_or(|manifest| plugin_settings(settings, &manifest.name).is_some())
+        })
     })
 }
 
@@ -367,7 +385,7 @@ fn build_host(
     dir: &Path,
     settings: &toml::Table,
 ) -> (Option<PluginHost>, Vec<Action>, Vec<anyhow::Error>) {
-    if !has_plugins(dir) {
+    if !has_plugins(dir, settings) {
         return (None, Vec::new(), Vec::new());
     }
     let mut host = match PluginHost::new(Some(helix_loader::cache_dir().join("plugins"))) {
@@ -485,6 +503,10 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
     let (host, actions, errors) = build_host(dir, settings);
     install(editor, host, actions, errors);
+    // This replaces a background load still running: it won't finish it.
+    if LOADING.load(Ordering::Relaxed) {
+        finish_loading(editor);
+    }
 }
 
 /// Like [`load_from`] with the settings given as TOML source.
