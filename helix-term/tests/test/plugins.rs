@@ -2117,6 +2117,65 @@ async fn file_operations_never_replace_or_follow_into_existing_files() -> anyhow
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn oil_example_swaps_names_and_fills_new_directories() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    std::fs::write(work.join("b.txt"), "b")?;
+    std::fs::write(work.join("c.txt"), "c")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    // a.txt ↔ b.txt, and c.txt into a new directory twice over (moved and
+    // copied there).
+    let listing = text(&app);
+    let id = |name: &str| {
+        listing
+            .lines()
+            .find(|line| line.ends_with(&format!(" {name}")))
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap()
+            .to_string()
+    };
+    let edited = format!(
+        "{} b.txt\n{} a.txt\n{} new/c.txt\n{} new/c2.txt\n",
+        id("a.txt"),
+        id("b.txt"),
+        id("c.txt"),
+        id("c.txt")
+    );
+    set_text(&mut app, &edited);
+    keys(&mut app, ":w<ret>").await;
+    deliver_events(&mut app).await;
+    deliver_events(&mut app).await;
+    assert_eq!(std::fs::read_to_string(work.join("a.txt"))?, "b");
+    assert_eq!(std::fs::read_to_string(work.join("b.txt"))?, "a");
+    assert_eq!(std::fs::read_to_string(work.join("new/c.txt"))?, "c");
+    assert_eq!(std::fs::read_to_string(work.join("new/c2.txt"))?, "c");
+    assert!(!work.join("c.txt").exists());
+    assert!(!work.join(".oil-swap-a.txt").exists());
+    assert!(!helix_view::doc!(app.editor).is_modified(), "{:?}", app.editor.get_status());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn oil_example_can_delete_to_the_trash() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let work = helix_stdx::path::canonicalize(root.path());
