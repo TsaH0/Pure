@@ -322,13 +322,19 @@ the hook first and keep it generic.
   `plugins::register_hooks` and an export.
   - Done: save, close and selection change in API 0.2; post-command,
     focus and idle in API 0.3 (M10.4).
-- [ ] **M6.2 Default key bindings from plugins.** `[keys]` in `plugin.toml`,
+- [x] **M6.2 Default key bindings from plugins.** `[keys]` in `plugin.toml`,
   merged *under* the user's config (the user always wins) and listed in
   `:plugin-list`. Turn off per plugin with `keys = false` in `plugins.toml`.
-- [ ] **M6.3 Plugin commands as first-class commands.** Optional:
+- [x] **M6.3 Plugin commands as first-class commands.** Optional:
   `MappableCommand` support so `space t = "@todo/toggle"` works and plugin
   commands show up in the command palette with their docs. Only if it stays a
   small upstream diff; `:plugin-run` already works for bindings.
+  - Done: M6.2 binds only *free* keys (neither the user's config nor Pure's
+    defaults), not just "under the user's config", so the owner's bindings
+    never change: a cached fill-only layer in `keymap.rs`
+    (`set_plugin_keys`), one atomic load per key when no plugin has keys.
+    M6.3 uses `:plugin/command` (works at the prompt, in bindings, with
+    completion and in the palette); `@` already means macros.
 
 ## M7. Long-running work
 
@@ -571,6 +577,13 @@ Small, self-contained; each one is a good single task.
     second one. Reload plugins with `load_with_settings` on the same app
     instead;
   - key notation: `<gt>` / `<lt>` for `>` / `<`.
+  - the file picker (`space f`) panics in in-editor tests ("no reactor
+    running"): its scanner thread calls `request_redraw`, which the
+    integration build's `runtime_local` can't reach off the runtime. Pick a
+    key without a background thread in tests;
+  - a queued terminal program (`run-interactive`) stops
+    `event_loop_until_idle` before it processes jobs: use
+    `Application::drop_queued_program` in tests.
 - **Pickers:** don't keep an `Injector` around (the picker shows
   "(running)" while one lives); get one from the picker when needed. The
   picker needs at least one filtering column.

@@ -285,8 +285,19 @@ fn install(
     editor: &mut Editor,
     host: Option<PluginHost>,
     actions: Vec<Action>,
-    errors: Vec<anyhow::Error>,
+    mut errors: Vec<anyhow::Error>,
 ) {
+    let settings = LOADED.lock().as_ref().map(|(_, settings)| settings.clone());
+    let keys = host.as_ref().map_or(Ok(None), |host| {
+        plugin_keys(
+            &host.info(),
+            settings.as_ref().unwrap_or(&toml::Table::new()),
+        )
+    });
+    crate::keymap::set_plugin_keys(keys.unwrap_or_else(|err| {
+        errors.push(err);
+        None
+    }));
     // The previous plugins' decorations go with them.
     for doc in editor.documents.values_mut() {
         if !doc.plugin_decorations.is_empty() {
@@ -351,6 +362,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     }
     table.remove("allow-process");
     table.remove("allow-files");
+    table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
         Ok(PluginSettings {
@@ -359,6 +371,80 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             files: file_grant(settings, name)?,
         })
     })())
+}
+
+/// The plugins' `[keys]`, as one keymap: each value is one of the plugin's
+/// commands, bound to `:plugin-run <plugin>/<command>`. `keys = false` in a
+/// plugin's `plugins.toml` table leaves its keys out. Earlier plugins (by
+/// directory name) win over later ones; the user's and Pure's keys over all.
+fn plugin_keys(
+    plugins: &[helix_plugin::PluginInfo],
+    settings: &toml::Table,
+) -> anyhow::Result<Option<HashMap<Mode, crate::keymap::KeyTrie>>> {
+    fn translate(
+        plugin: &helix_plugin::PluginInfo,
+        value: &toml::Value,
+    ) -> anyhow::Result<toml::Value> {
+        match value {
+            toml::Value::String(command) => {
+                anyhow::ensure!(
+                    plugin.commands.iter().any(|c| &c.name == command),
+                    "plugin '{}': [keys] names '{command}', which is not one of its commands",
+                    plugin.name
+                );
+                Ok(toml::Value::String(format!(
+                    ":plugin-run {}/{command}",
+                    plugin.name
+                )))
+            }
+            toml::Value::Table(table) => Ok(toml::Value::Table(
+                table
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), translate(plugin, value)?)))
+                    .collect::<anyhow::Result<_>>()?,
+            )),
+            _ => anyhow::bail!(
+                "plugin '{}': [keys] values must be command names or tables",
+                plugin.name
+            ),
+        }
+    }
+    let mut all: Option<HashMap<Mode, crate::keymap::KeyTrie>> = None;
+    for plugin in plugins.iter().filter(|plugin| plugin.disabled.is_none()) {
+        let Some(keys) = &plugin.keys else {
+            continue;
+        };
+        let wanted = settings
+            .get(&plugin.name)
+            .and_then(|table| table.get("keys"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
+        if !wanted {
+            continue;
+        }
+        let translated = translate(plugin, &toml::Value::Table(keys.clone()))?;
+        let keymap: HashMap<Mode, crate::keymap::KeyTrie> = translated
+            .try_into()
+            .map_err(|err| anyhow::anyhow!("plugin '{}': invalid [keys]: {err}", plugin.name))?;
+        match &mut all {
+            None => all = Some(keymap),
+            Some(all) => {
+                for (mode, trie) in keymap {
+                    match (all.get_mut(&mode), trie) {
+                        (
+                            Some(crate::keymap::KeyTrie::Node(node)),
+                            crate::keymap::KeyTrie::Node(extra),
+                        ) => node.fill(extra),
+                        (None, trie) => {
+                            all.insert(mode, trie);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(all)
 }
 
 /// `allow-files` for plugin `name`: `"read"`, `"write"` or `false`.
@@ -429,6 +515,17 @@ pub fn directory_changed(editor: &mut Editor) {
     if let (true, Some((dir, settings))) = (stale, loaded) {
         load_from(editor, &dir, &settings);
     }
+}
+
+/// `(plugin/command, doc)` of all plugin commands, for the command palette.
+pub fn commands_with_docs() -> Vec<(String, String)> {
+    with_host(|host| {
+        host.commands()
+            .into_iter()
+            .map(|(plugin, command)| (format!("{plugin}/{}", command.name), command.doc))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// How many plugins are loaded.
@@ -1036,6 +1133,34 @@ pub fn describe() -> String {
             .contains(&helix_plugin::Permission::Filesystem)
         {
             out.push_str(&format!("files: {}\n", plugin.files));
+        }
+        if let Some(keys) = &plugin.keys {
+            let mut bound = Vec::new();
+            fn walk(prefix: &str, table: &toml::Table, out: &mut Vec<String>) {
+                for (key, value) in table {
+                    let keys = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix} {key}")
+                    };
+                    match value {
+                        toml::Value::Table(table) => walk(&keys, table, out),
+                        value => out.push(format!("`{keys}` {}", value.as_str().unwrap_or("?"))),
+                    }
+                }
+            }
+            for (mode, table) in keys {
+                let Some(table) = table.as_table() else {
+                    continue;
+                };
+                let prefix = if mode == "normal" {
+                    String::new()
+                } else {
+                    format!("({mode})")
+                };
+                walk(&prefix, table, &mut bound);
+            }
+            out.push_str(&format!("keys (if free): {}\n", bound.join(", ")));
         }
         for command in &plugin.commands {
             out.push_str(&format!(

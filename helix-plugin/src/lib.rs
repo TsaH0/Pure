@@ -197,6 +197,10 @@ pub struct Manifest {
     /// The component, relative to the plugin's directory.
     #[serde(default = "default_wasm")]
     pub wasm: PathBuf,
+    /// Default key bindings, like `config.toml`'s `[keys]`, whose values are
+    /// the plugin's command names. They only bind keys nothing else binds.
+    #[serde(default)]
+    pub keys: Option<toml::Table>,
 }
 
 fn default_wasm() -> PathBuf {
@@ -1276,6 +1280,8 @@ pub struct PluginInfo {
     pub disabled: Option<String>,
     pub process: ProcessGrant,
     pub files: FileGrant,
+    /// `[keys]` from `plugin.toml`.
+    pub keys: Option<toml::Table>,
 }
 
 /// Loads and runs plugins.
@@ -1414,6 +1420,7 @@ impl PluginHost {
                 disabled: plugin.disabled.clone(),
                 process: plugin.store.data().process.clone(),
                 files: plugin.store.data().files,
+                keys: plugin.manifest.keys.clone(),
             })
             .collect()
     }

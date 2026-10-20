@@ -6,11 +6,13 @@ pub use default::default;
 
 use arc_swap::{
     access::{DynAccess, DynGuard},
-    ArcSwap,
+    ArcSwap, ArcSwapOption,
 };
+use helix_event::runtime_local;
 use helix_view::{document::Mode, info::Info, input::KeyEvent};
 use indexmap::IndexMap;
 use macros::key;
+use parking_lot::Mutex;
 use serde::Deserialize;
 use std::{
     borrow::Cow,
@@ -51,6 +53,20 @@ impl KeyTrieNode {
                 }
             }
             self.map.insert(key, trie);
+        }
+    }
+
+    /// Add `other`'s keys where `self` binds nothing: unlike `merge`, existing
+    /// bindings always win (for plugins' default bindings).
+    pub fn fill(&mut self, mut other: Self) {
+        for (key, trie) in std::mem::take(&mut other.map) {
+            match (self.map.get_mut(&key), trie) {
+                (None, trie) => {
+                    self.map.insert(key, trie);
+                }
+                (Some(KeyTrie::Node(node)), KeyTrie::Node(other)) => node.fill(other),
+                _ => {}
+            }
         }
     }
 
@@ -261,6 +277,50 @@ pub enum KeymapResult {
 /// A map of command names to keybinds that will execute the command.
 pub type ReverseKeymap = HashMap<String, Vec<Vec<KeyEvent>>>;
 
+runtime_local! {
+    /// Plugins' default bindings, below the user's and Pure's (see
+    /// [`set_plugin_keys`]).
+    static PLUGIN_KEYS: ArcSwapOption<HashMap<Mode, KeyTrie>> = ArcSwapOption::const_empty();
+    /// The keymap with plugin keys filled in, for the keymap (by address)
+    /// and plugin keys it was made from.
+    static FILLED: Mutex<Option<(usize, usize, Arc<HashMap<Mode, KeyTrie>>)>> = Mutex::new(None);
+}
+
+/// Set the plugins' default bindings. They only bind keys that neither the
+/// user's config nor the default keymap bind.
+pub fn set_plugin_keys(keys: Option<HashMap<Mode, KeyTrie>>) {
+    PLUGIN_KEYS.store(keys.map(Arc::new));
+    *FILLED.lock() = None;
+}
+
+/// The keymap may have changed (config reload): fill plugin keys again.
+pub fn forget_filled_keymap() {
+    *FILLED.lock() = None;
+}
+
+/// `keymaps` with the plugin keys filled in, or `None` without plugin keys
+/// (the usual case: one atomic load).
+fn with_plugin_keys(keymaps: &HashMap<Mode, KeyTrie>) -> Option<Arc<HashMap<Mode, KeyTrie>>> {
+    let plugin = PLUGIN_KEYS.load_full()?;
+    let base = keymaps as *const _ as usize;
+    let plugin_ptr = Arc::as_ptr(&plugin) as usize;
+    let mut filled = FILLED.lock();
+    if let Some((b, p, map)) = &*filled {
+        if *b == base && *p == plugin_ptr {
+            return Some(map.clone());
+        }
+    }
+    let mut map = keymaps.clone();
+    for (mode, trie) in plugin.iter() {
+        if let (Some(KeyTrie::Node(node)), KeyTrie::Node(extra)) = (map.get_mut(mode), trie) {
+            node.fill(extra.clone());
+        }
+    }
+    let map = Arc::new(map);
+    *filled = Some((base, plugin_ptr, map.clone()));
+    Some(map)
+}
+
 pub struct Keymaps {
     pub map: Box<dyn DynAccess<HashMap<Mode, KeyTrie>>>,
     /// Stores pending keys waiting for the next key. This is relative to a
@@ -306,7 +366,9 @@ impl Keymaps {
     /// sticky node is in use, it will be cleared.
     pub fn get(&mut self, mode: Mode, key: KeyEvent) -> KeymapResult {
         // TODO: remove the sticky part and look up manually
-        let keymaps = &*self.map();
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
         let keymap = &keymaps[&mode];
 
         if key!(Esc) == key {

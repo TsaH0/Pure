@@ -387,6 +387,8 @@ impl Application {
 
     pub fn handle_config_events(&mut self, config_event: ConfigEvent) {
         let old_editor_config = self.editor.config();
+        // The keymap may change: refill plugin keys on the next key.
+        crate::keymap::forget_filled_keymap();
 
         match config_event {
             ConfigEvent::Refresh => self.refresh_config(),

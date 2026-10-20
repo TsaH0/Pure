@@ -1455,3 +1455,79 @@ async fn plugins_decorate_documents() -> anyhow::Result<()> {
     assert!(app.editor.plugin_statusline.is_empty());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_keys_only_fill_free_keys() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("todos");
+    std::fs::create_dir(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("examples/todos/plugin.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    let manifest = std::fs::read_to_string(helix_plugin_dir().join("examples/todos/plugin.toml"))?;
+    // `space h` is already bound (select references): the plugin can't take it.
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("{manifest}h = \"list\"\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+
+    // A free key: the plugin's command runs.
+    keys(&mut app, "<space>T").await;
+    assert_eq!(status(&app).0, "No TODO, FIXME or NOTE here");
+    app.editor.set_status("");
+    keys(&mut app, "<space>h").await;
+    assert_ne!(
+        app.editor
+            .get_status()
+            .map(|(s, _)| s.to_string())
+            .as_deref(),
+        Some("No TODO, FIXME or NOTE here"),
+        "space h must keep its own command"
+    );
+    assert!(helix_term::plugins::describe().contains("`space T` list"));
+
+    // `keys = false`: none of its keys.
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[todos]\nkeys = false\n",
+    )?;
+    app.editor.set_status("");
+    keys(&mut app, "<space>T").await;
+    assert_ne!(
+        app.editor
+            .get_status()
+            .map(|(s, _)| s.to_string())
+            .as_deref(),
+        Some("No TODO, FIXME or NOTE here")
+    );
+
+    // Keys must name the plugin's own commands.
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("{manifest}x = \"nope\"\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert_error(&app, "not one of its commands");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_commands_run_as_colon_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_plugins("#[a|]#", ALL, "");
+    // `:plugin/command args` at the prompt, like `:plugin-run`.
+    keys(&mut app, ":text-tools/upper<ret>").await;
+    assert_eq!(text(&app), "A");
+    // And as a key binding.
+    let command: helix_term::commands::MappableCommand = ":text-tools/lower".parse()?;
+    assert_eq!(command.name(), "plugin-run");
+    keys(&mut app, ":no-such/plugin<ret>").await;
+    assert_error(&app, "no plugin named 'no-such'");
+    Ok(())
+}

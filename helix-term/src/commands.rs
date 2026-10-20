@@ -667,6 +667,15 @@ impl std::str::FromStr for MappableCommand {
         if let Some(suffix) = s.strip_prefix(':') {
             let (name, args, _) = command_line::split(suffix);
             ensure!(!name.is_empty(), "Expected typable command name");
+            // `:plugin/command`: plugins load after the keymap, so any such
+            // name is accepted here and checked when it runs.
+            if name.contains('/') && !typed::TYPABLE_COMMAND_MAP.contains_key(name) {
+                return Ok(MappableCommand::Typable {
+                    name: "plugin-run".to_owned(),
+                    doc: format!(":{suffix}"),
+                    args: format!("{name} {args}").trim_end().to_owned(),
+                });
+            }
             typed::TYPABLE_COMMAND_MAP
                 .get(name)
                 .map(|cmd| {
@@ -3691,18 +3700,36 @@ pub fn command_palette(cx: &mut Context) {
                 [&cx.editor.mode]
                 .reverse_map();
 
-            let commands = MappableCommand::STATIC_COMMAND_LIST.iter().cloned().chain(
-                typed::TYPABLE_COMMAND_LIST
+            let plugin_commands = crate::plugins::commands_with_docs();
+            let commands =
+                MappableCommand::STATIC_COMMAND_LIST
                     .iter()
-                    .map(|cmd| MappableCommand::Typable {
-                        name: cmd.name.to_owned(),
-                        args: String::new(),
-                        doc: cmd.doc.to_owned(),
-                    }),
-            );
+                    .cloned()
+                    .chain(
+                        typed::TYPABLE_COMMAND_LIST
+                            .iter()
+                            .map(|cmd| MappableCommand::Typable {
+                                name: cmd.name.to_owned(),
+                                args: String::new(),
+                                doc: cmd.doc.to_owned(),
+                            }),
+                    )
+                    // Plugin commands, with their docs.
+                    .chain(plugin_commands.into_iter().map(|(name, doc)| {
+                        MappableCommand::Typable {
+                            name: "plugin-run".to_owned(),
+                            args: name,
+                            doc,
+                        }
+                    }));
 
             let columns = [
                 ui::PickerColumn::new("name", |item, _| match item {
+                    MappableCommand::Typable { name, args, .. }
+                        if name == "plugin-run" && !args.is_empty() =>
+                    {
+                        format!(":{args}").into()
+                    }
                     MappableCommand::Typable { name, .. } => format!(":{name}").into(),
                     MappableCommand::Static { name, .. } => (*name).into(),
                     MappableCommand::Macro { .. } => {

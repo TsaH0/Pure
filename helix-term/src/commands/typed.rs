@@ -4714,6 +4714,11 @@ fn execute_command_line(
 
     match typed::TYPABLE_COMMAND_MAP.get(command) {
         Some(cmd) => execute_command(cx, cmd, rest, event),
+        // `:plugin/command args` runs a plugin command.
+        None if command.contains('/') => {
+            let cmd = TYPABLE_COMMAND_MAP.get("plugin-run").unwrap();
+            execute_command(cx, cmd, &format!("{command} {rest}"), event)
+        }
         None if event == PromptEvent::Validate => Err(anyhow!("no such command: '{command}'")),
         None => Ok(()),
     }
@@ -4846,13 +4851,17 @@ fn complete_command_line(editor: &Editor, input: &str) -> Vec<ui::prompt::Comple
     let (command, rest, complete_command) = command_line::split(input);
 
     if complete_command {
+        let plugin_commands = crate::plugins::command_names();
         fuzzy_match(
             input,
-            TYPABLE_COMMAND_LIST.iter().map(|command| command.name),
+            TYPABLE_COMMAND_LIST
+                .iter()
+                .map(|command| command.name)
+                .chain(plugin_commands.iter().map(String::as_str)),
             false,
         )
         .into_iter()
-        .map(|(name, _)| (0.., name.into()))
+        .map(|(name, _)| (0.., name.to_string().into()))
         .collect()
     } else {
         TYPABLE_COMMAND_MAP

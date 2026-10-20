@@ -37,6 +37,10 @@ pub fn command_names() -> Vec<String> {
     Vec::new()
 }
 
+pub fn commands_with_docs() -> Vec<(String, String)> {
+    Vec::new()
+}
+
 pub fn plugin_names() -> Vec<String> {
     Vec::new()
 }

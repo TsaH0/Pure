@@ -414,3 +414,18 @@ decorations::set_statusline("count", "3 todos")?;
 - At most 100,000 decorations per layer. Reloading plugins clears them.
 
 See `examples/todos`.
+
+## Default key bindings
+
+A plugin can suggest bindings in `plugin.toml`, in the same shape as
+`config.toml`'s `[keys]`; values are the plugin's own command names:
+
+```toml
+[keys.normal.space]
+T = "list"          # runs :todos/list
+```
+
+They only fill keys nothing else binds (neither the user's config nor Pure's
+defaults), so they never replace a binding. Users turn them off with
+`keys = false` in the plugin's `plugins.toml` table. Plugin commands also
+run as `:<plugin>/<command>` and appear in the command palette.

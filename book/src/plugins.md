@@ -32,14 +32,15 @@ Ready-made examples are in
 
 ## Using plugins
 
-Run a plugin's command with `:plugin-run <plugin>/<command> [args]`, or bind
-it:
+Run a plugin's command with `:<plugin>/<command> [args]` (or
+`:plugin-run <plugin>/<command> [args]`); plugin commands are also in the
+command palette (`space ?`) with their docs. Bind them like any command:
 
 ```toml
 # ~/.config/helix/config.toml
 [keys.normal.space]
-e = ":plugin-run yazi/open"
-"/" = ":plugin-run finder/grep"
+e = ":yazi/open"
+"/" = ":finder/grep"
 ```
 
 | Command | What it does |
@@ -63,6 +64,12 @@ gutters = ["diagnostics", "plugins", "line-numbers", "spacer", "diff"]
 [editor.statusline]
 right = ["plugins", "diagnostics", "selections", "position"]
 ```
+
+Plugins can come with default key bindings (`[keys]` in their
+`plugin.toml`, e.g. `todos` binds `space T`). They only use keys that
+neither your config nor Pure binds, so they never change a binding you
+have; `:plugin-list` shows them. Turn a plugin's keys off with
+`keys = false` in its `plugins.toml` table.
 
 ## Settings and permissions
 
