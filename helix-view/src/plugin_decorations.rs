@@ -765,7 +765,10 @@ mod test {
             let mut decorations = PluginDecorations::default();
             decorations.set_conceals(
                 "md/c".into(),
-                vec![(2..4, String::new(), "s".into()), (5..7, String::new(), "s".into())],
+                vec![
+                    (2..4, String::new(), "s".into()),
+                    (5..7, String::new(), "s".into()),
+                ],
                 text.len_chars(),
             );
             decorations
@@ -777,7 +780,10 @@ mod test {
         assert_eq!(conceals(&decorations), [(5, 7)]);
         // Typing right before or right after a range keeps it.
         let mut decorations = set();
-        let edit = Transaction::change(&text, [(2, 2, Some("x".into())), (7, 7, Some("y".into()))].into_iter());
+        let edit = Transaction::change(
+            &text,
+            [(2, 2, Some("x".into())), (7, 7, Some("y".into()))].into_iter(),
+        );
         decorations.map(edit.changes(), text.len_chars() + 2);
         assert_eq!(conceals(&decorations), [(3, 5), (6, 8)]);
         // Deleting into a range from outside drops it.
@@ -791,7 +797,9 @@ mod test {
     fn batched_mapping_matches_mapping_each_position() {
         let mut seed: u64 = 7;
         let mut next = |n: usize| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) as usize % n.max(1)
         };
         for _ in 0..200 {
@@ -806,12 +814,18 @@ mod test {
             let mut decorations = PluginDecorations::default();
             decorations.set_highlights(
                 "p/h".into(),
-                ranges.iter().map(|r| (r.clone(), "s".to_string())).collect(),
+                ranges
+                    .iter()
+                    .map(|r| (r.clone(), "s".to_string()))
+                    .collect(),
                 text.len_chars(),
             );
             decorations.set_overlays(
                 "p/o".into(),
-                ranges.iter().map(|r| (r.start, "*".to_string(), "s".to_string())).collect(),
+                ranges
+                    .iter()
+                    .map(|r| (r.start, "*".to_string(), "s".to_string()))
+                    .collect(),
                 text.len_chars(),
             );
             let mut edits: Vec<(usize, usize, Option<helix_core::Tendril>)> = Vec::new();
@@ -822,7 +836,11 @@ mod test {
                 if pos + len > 200 {
                     break;
                 }
-                let insert = if next(2) == 0 { Some("ab".into()) } else { None };
+                let insert = if next(2) == 0 {
+                    Some("ab".into())
+                } else {
+                    None
+                };
                 edits.push((pos, pos + len, insert));
                 pos += len + 1;
             }
@@ -857,7 +875,11 @@ mod test {
             let overlays: Vec<_> = decorations
                 .overlays
                 .get("p/o")
-                .map(|g| g.iter().flat_map(|(_, o)| o.iter().map(|o| o.char_idx)).collect())
+                .map(|g| {
+                    g.iter()
+                        .flat_map(|(_, o)| o.iter().map(|o| o.char_idx))
+                        .collect()
+                })
                 .unwrap_or_default();
             assert_eq!(overlays, expected_overlays);
         }

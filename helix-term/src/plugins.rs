@@ -841,6 +841,7 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     language: doc.language_name().map(str::to_owned),
                     selection,
                     modified: doc.is_modified(),
+                    revision: doc.version().max(0) as u64,
                     owner: doc
                         .plugin_owner
                         .clone()
@@ -1268,6 +1269,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 });
                 TIMERS.lock().push((owner, id, task.abort_handle()));
             }
+            Action::CancelFiles { plugin, id } => file_ops::cancel(plugin, id),
             Action::CancelTimer { plugin, id } => {
                 TIMERS.lock().retain(|(owner, timer, task)| {
                     let cancelled = (owner, *timer) == (&plugin, id);
@@ -1414,11 +1416,28 @@ mod file_ops {
 
     /// Batches run one at a time, so two can't race on the same paths.
     static BATCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    /// Batches cancelled by their plugin: `(plugin, id)`.
+    static CANCELLED: parking_lot::Mutex<Vec<(String, u32)>> = parking_lot::Mutex::new(Vec::new());
+
+    /// Skip what batch `id` hasn't started yet.
+    pub fn cancel(plugin: String, id: u32) {
+        CANCELLED.lock().push((plugin, id));
+    }
 
     pub async fn run(plugin: String, id: u32, ops: Vec<FileOp>) {
         let _turn = BATCH.lock().await;
+        let cancelled = || {
+            CANCELLED
+                .lock()
+                .iter()
+                .any(|(owner, batch)| *owner == plugin && *batch == id)
+        };
         let mut results = Vec::with_capacity(ops.len());
         for op in ops {
+            if cancelled() {
+                results.push(Err("cancelled".to_string()));
+                continue;
+            }
             if results.iter().any(Result::is_err) {
                 results.push(Err("skipped after an earlier failure".to_string()));
                 continue;
@@ -1433,6 +1452,9 @@ mod file_ops {
                 Err(err) => Err(err),
             });
         }
+        CANCELLED
+            .lock()
+            .retain(|(owner, batch)| !(*owner == plugin && *batch == id));
         super::deliver_async(plugin, Callback::FilesDone { id, results }).await;
     }
 

@@ -93,9 +93,7 @@ async fn special_files_are_not_read() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("pipe");
     std::fs::write(&path, "one\n")?;
-    let mut app = helpers::AppBuilder::new()
-        .with_file(&path, None)
-        .build()?;
+    let mut app = helpers::AppBuilder::new().with_file(&path, None).build()?;
     // Replaced by a FIFO nobody writes to: opening it would block.
     std::fs::remove_file(&path)?;
     assert!(std::process::Command::new("mkfifo")

@@ -389,6 +389,7 @@ macro_rules! world_adapters {
                         kind: item.kind,
                         documentation: item.documentation,
                         replace_from: item.replace_from.map(|from| from as usize),
+                        snippet: false,
                     })
                     .collect();
                 State::complete(self, id, items)

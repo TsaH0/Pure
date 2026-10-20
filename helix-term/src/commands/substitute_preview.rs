@@ -184,7 +184,11 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
     let mut i = 0;
     let changes = &outcome.changes;
     // Only changes whose replacement was computed can be shown.
-    let shown = if replacing { outcome.expanded } else { changes.len() };
+    let shown = if replacing {
+        outcome.expanded
+    } else {
+        changes.len()
+    };
     while i < shown && lines.len() < MAX_LINES {
         // A hunk: whole lines covering a run of changes that share lines.
         let first_line = text.char_to_line(changes[i].0);

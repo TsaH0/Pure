@@ -10,6 +10,9 @@ pub struct CompletionItem {
     /// Containing Markdown
     pub documentation: Option<String>,
     pub provider: CompletionProvider,
+    /// Inserted as a snippet with tab stops instead of `transaction`:
+    /// `(snippet, chars before the cursor it replaces)`.
+    pub snippet: Option<(String, usize)>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]

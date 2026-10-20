@@ -3025,7 +3025,10 @@ async fn capped_output(mut command: tokio::process::Command) -> std::io::Result<
         let _ = child.start_kill();
         stdout.truncate(MAX_GREP_OUTPUT as usize);
         // Drop the last, possibly partial, line.
-        let end = stdout.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let end = stdout
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
         stdout.truncate(end);
     }
     let stderr = stderr.await.unwrap_or_default();

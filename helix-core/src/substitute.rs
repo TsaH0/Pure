@@ -829,7 +829,10 @@ mod test {
             .filter_map(|(_, _, r)| r.as_ref().map(|r| r.len()))
             .sum();
         assert_eq!(built, 1 << 20);
-        assert_eq!(&limited.changes[..limited.expanded], &full.changes[..limited.expanded]);
+        assert_eq!(
+            &limited.changes[..limited.expanded],
+            &full.changes[..limited.expanded]
+        );
     }
 
     #[test]

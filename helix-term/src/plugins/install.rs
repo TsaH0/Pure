@@ -172,11 +172,9 @@ pub fn stage(plugins: &Path, source: &str) -> anyhow::Result<Staged> {
     };
     std::fs::create_dir_all(&staged.dir)?;
     if is_git(source) {
-        let output = git(
-            Command::new("git")
-                .args(["clone", "--depth", "1", "--quiet", "--", source])
-                .arg(&fetched),
-        )?;
+        let output = git(Command::new("git")
+            .args(["clone", "--depth", "1", "--quiet", "--", source])
+            .arg(&fetched))?;
         if !output.status.success() {
             bail!(
                 "git clone failed: {}",
@@ -396,7 +394,9 @@ pub fn install_command(editor: &mut Editor, source: String) {
                     ""
                 }
             );
-            confirm(compositor, question, move |_| commit_and_reload(staged, "Installed"));
+            confirm(compositor, question, move |_| {
+                commit_and_reload(staged, "Installed")
+            });
         })
         .await;
     });
@@ -622,7 +622,10 @@ mod test {
         .unwrap();
         let plugins = root.path().join("a/b/plugins");
         let err = stage(&plugins, source.to_str().unwrap()).unwrap_err();
-        assert!(format!("{err:#}").contains("wasm must be a file next to"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("wasm must be a file next to"),
+            "{err:#}"
+        );
         assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
     }
 
@@ -644,7 +647,10 @@ mod test {
         }
         let err = commit(&plugins, &lock, staged).unwrap_err();
         assert!(format!("{err:#}").contains("directory"), "{err:#}");
-        assert_eq!(std::fs::read(plugins.join("todos/plugin.wasm")).unwrap(), before);
+        assert_eq!(
+            std::fs::read(plugins.join("todos/plugin.wasm")).unwrap(),
+            before
+        );
         assert!(plugins.join("todos/plugin.toml").is_file());
         let left: Vec<_> = std::fs::read_dir(&plugins)
             .unwrap()

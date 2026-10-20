@@ -193,6 +193,13 @@ impl Completion {
                             );
                             doc.apply_temporary(&transaction, view.id)
                         }
+                        CompletionItem::Other(core::CompletionItem {
+                            snippet: Some((snippet, replaced)),
+                            ..
+                        }) => match snippet_transaction(doc, view.id, snippet, *replaced) {
+                            Some((transaction, _)) => doc.apply_temporary(&transaction, view.id),
+                            None => false,
+                        },
                         CompletionItem::Other(core::CompletionItem { transaction, .. }) => {
                             doc.apply_temporary(transaction, view.id)
                         }
@@ -245,6 +252,15 @@ impl Completion {
                                 snippet,
                             )
                         }
+                        CompletionItem::Other(core::CompletionItem {
+                            snippet: Some((snippet, replaced)),
+                            transaction,
+                            ..
+                        }) => match snippet_transaction(doc, view.id, &snippet, replaced) {
+                            Some((transaction, snippet)) => (transaction, None, Some(snippet)),
+                            // Not a valid snippet: insert it as text.
+                            None => (transaction, None, None),
+                        },
                         CompletionItem::Other(core::CompletionItem { transaction, .. }) => {
                             (transaction, None, None)
                         }
@@ -654,6 +670,29 @@ fn lsp_item_to_transaction(
         );
         (transaction, None)
     }
+}
+
+/// A snippet completion (from a plugin) replacing `replaced` chars before
+/// the cursor, through the same snippet engine as a language server's.
+fn snippet_transaction(
+    doc: &mut Document,
+    view_id: ViewId,
+    snippet: &str,
+    replaced: usize,
+) -> Option<(Transaction, RenderedSnippet)> {
+    let Ok(snippet) = Snippet::parse(snippet) else {
+        log::error!("Failed to parse snippet: {snippet:?}");
+        return None;
+    };
+    let selection = doc.selection(view_id).clone();
+    Some(util::generate_transaction_from_snippet(
+        doc.text(),
+        &selection,
+        Some((-(replaced as i128), 0)),
+        false,
+        snippet,
+        &mut doc.snippet_ctx(),
+    ))
 }
 
 fn completion_changes(transaction: &Transaction, trigger_offset: usize) -> Vec<Change> {

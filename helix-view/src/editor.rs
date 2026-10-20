@@ -1803,7 +1803,12 @@ impl Editor {
         self.move_path_with(old_path, new_path, false)
     }
 
-    fn move_path_with(&mut self, old_path: &Path, new_path: &Path, replace: bool) -> io::Result<()> {
+    fn move_path_with(
+        &mut self,
+        old_path: &Path,
+        new_path: &Path,
+        replace: bool,
+    ) -> io::Result<()> {
         let new_path = canonicalize(new_path);
         if !replace && fs::symlink_metadata(&new_path).is_ok() {
             return Err(io::Error::new(

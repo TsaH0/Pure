@@ -265,7 +265,13 @@ pub struct PluginCompletion {
     pub kind: Option<String>,
     pub documentation: Option<String>,
     pub replace_from: Option<usize>,
+    /// `insert` (or `label`) is a snippet with tab stops (API 0.4
+    /// `snippets.complete`).
+    pub snippet: bool,
 }
+
+/// Optional features, for `requests.capabilities`.
+pub const CAPABILITIES: &[&str] = &["cancel-request", "revisions", "snippet-completions"];
 
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
@@ -365,6 +371,8 @@ pub struct DocumentSnapshot {
     pub modified: bool,
     /// `(plugin, name)` for a plugin's own buffer (`open-buffer`).
     pub owner: Option<(String, String)>,
+    /// Changes with every change to the text.
+    pub revision: u64,
 }
 
 /// The editor state a plugin call can read.
@@ -555,7 +563,15 @@ pub enum Action {
         delay: Duration,
     },
     /// Stop timer `id` started by an earlier call.
-    CancelTimer { plugin: String, id: u32 },
+    CancelTimer {
+        plugin: String,
+        id: u32,
+    },
+    /// Skip the operations of files.apply batch `id` that haven't started.
+    CancelFiles {
+        plugin: String,
+        id: u32,
+    },
     /// The answer to completion request `id`
     /// ([`PluginHost::request_completion`]).
     Completions {
@@ -954,8 +970,10 @@ impl State {
         if transaction.changes().is_empty() {
             return Ok(());
         }
-        // Later reads in this call see the edit.
+        // Later reads in this call see the edit (and its revision: the
+        // editor counts one per transaction too).
         transaction.apply(&mut document.text);
+        document.revision += 1;
         if let Some(selection) = document.selection.take() {
             document.selection = Some(selection.map(transaction.changes()));
         }
@@ -1725,10 +1743,9 @@ impl State {
         if self.pending.get(&id) == Some(&PendingKind::Timer) {
             self.pending.remove(&id);
             // Set in this same call: never start it. Otherwise stop it.
-            let queued = self
-                .actions
-                .iter()
-                .position(|action| matches!(action, Action::SetTimer { id: set, .. } if *set == id));
+            let queued = self.actions.iter().position(
+                |action| matches!(action, Action::SetTimer { id: set, .. } if *set == id),
+            );
             match queued {
                 Some(index) => {
                     self.actions.remove(index);
@@ -1739,6 +1756,54 @@ impl State {
                 }),
             }
         }
+    }
+
+    fn document_revision(&mut self, doc: DocumentId) -> Result<u64, String> {
+        self.need(Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.revision)
+    }
+
+    fn apply_edits_at(
+        &mut self,
+        doc: DocumentId,
+        revision: u64,
+        edits: Vec<types::Edit>,
+    ) -> Result<(), String> {
+        self.need(Permission::EditBuffers)?;
+        let current = self.document(doc)?.revision;
+        if current != revision {
+            return Err(format!(
+                "document {doc} changed: it is at revision {current}, not {revision}"
+            ));
+        }
+        self.apply_edits(doc, edits)
+    }
+
+    /// `requests.cancel`: stop request `id`, whatever it is; its callback
+    /// is never called.
+    fn cancel_request(&mut self, id: u32) {
+        let plugin = self.plugin.clone();
+        match self.pending.get(&id).copied() {
+            Some(PendingKind::Timer) => return self.cancel_timer(id),
+            Some(PendingKind::Process) => {
+                self.kill(id);
+                self.streaming.remove(&id);
+            }
+            Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
+            Some(PendingKind::Completion) => self.actions.push(Action::Completions {
+                plugin,
+                id,
+                items: Vec::new(),
+            }),
+            Some(PendingKind::Popup) => self.close_popup(id),
+            Some(PendingKind::Picker) => {
+                self.picker_items.remove(&id);
+                self.picker_generations.remove(&id);
+            }
+            Some(PendingKind::Prompt | PendingKind::Background) => {}
+            None => return,
+        }
+        self.pending.remove(&id);
     }
 
     fn complete(&mut self, id: u32, items: Vec<PluginCompletion>) -> Result<(), String> {
@@ -2167,6 +2232,33 @@ impl Plugin {
     }
 }
 
+/// Say what an instantiation error means: a component built for a newer
+/// Pure (an import this one lacks) or for another API version.
+fn explain_start_error(name: &str, api: &str, err: anyhow::Error) -> anyhow::Error {
+    let message = format!("{err:#}");
+    let quoted = |after: &str| {
+        let rest = &message[message.find(after)? + after.len()..];
+        let start = rest.find('`')? + 1;
+        let end = start + rest[start..].find('`')?;
+        Some(rest[start..end].to_string())
+    };
+    if message.contains("a matching implementation was not found in the linker") {
+        if let Some(import) = quoted("component imports") {
+            return anyhow!(
+                "plugin '{name}' needs a newer Pure: it uses `{import}`, which this Pure \
+                 doesn't have (update Pure, or use a version of the plugin for this one)"
+            );
+        }
+    }
+    if message.contains("no exported instance named `helix:plugin/") {
+        return anyhow!(
+            "plugin '{name}': plugin.toml says api = \"{api}\", but its component was built \
+             for another API version"
+        );
+    }
+    err.context(format!("failed to start plugin '{name}'"))
+}
+
 /// Information about a plugin, for listing.
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -2580,7 +2672,7 @@ impl PluginHost {
                 }
             })
         })
-        .with_context(|| format!("failed to start plugin '{name}'"))?;
+        .map_err(|err| explain_start_error(&name, &manifest.api, err))?;
         drop(busy);
 
         let mut plugin = Plugin {

@@ -495,6 +495,26 @@ replaces an unanswered one. Always answer, even with an empty list.
 start of the word before the cursor). The editor filters items by what the
 user typed. See `examples/emoji`.
 
+### Snippets, revisions, cancelling (added to API 0.4)
+
+Imports only, so 0.4 plugins built before still load; a plugin using them
+needs a Pure that has them (`editor::capabilities()` lists
+`"cancel-request"`, `"revisions"`, `"snippet-completions"`; on an older
+Pure such a plugin fails to load with "needs a newer Pure").
+
+- `completion::complete_snippets(id, &items)`: like `complete`, but
+  `insert` (or `label`) is an LSP-style snippet (`$1`, `${2:x}`, `${3|a,b|}`,
+  `$0`), expanded by the editor's snippet engine with tab stops. Snippet
+  variables (`${TM_FILENAME}`) are not resolved. See `examples/snippets`.
+- `editor::revision(doc) -> u64` (needs `read-buffers`) and
+  `editor::apply_edits_at(doc, revision, &edits)` (needs `edit-buffers`):
+  apply only if the text is unchanged since `revision`. Always use this
+  for edits computed asynchronously (background tasks, programs, timers).
+  See `api-demo`'s `sort`.
+- `editor::cancel(id)`: stop any request and drop its callback (timer,
+  program, background task, file batch, completion, popup; pickers and
+  prompts stay open but their answer is ignored).
+
 ### Timers (`editor::set_timer`)
 
 `set_timer(ms, || -> Result<(), String>)` runs the closure once. Set

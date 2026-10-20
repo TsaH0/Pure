@@ -17,6 +17,27 @@ correctness/performance findings, and
 rules. The work here must preserve those rules and resolve the relevant review
 findings before expanding the affected subsystem.
 
+## Status (2026-10-20)
+
+The first delivery the roadmap recommends ("F00/F01, then F02 plus the
+narrow F06 snippet path") is done. All of it went into API 0.4 as
+**imports only** (new `requests`, `revisions` and `snippets`
+interfaces), which the compatibility rule allows: no new exports, no
+changed records, so no 0.5 was needed yet. `testplugin3-v0.4.wasm`
+freezes a 0.4 component built before the additions and is tested to
+keep loading.
+
+| Item | Done | Still open |
+| --- | --- | --- |
+| F00 | The 22 review findings: see the status table in [`suggested-improvements.md`](suggested-improvements.md) | What that table lists as left |
+| F01 | `requests.capabilities`; `requests.cancel` for every request kind (callback dropped; timers aborted, programs killed, file batches skip what hasn't started, completions answered empty, popups closed); clear errors for "needs a newer Pure" and "built for another API version" | Request status/progress, typed errors, load-generation ids: they need new exports, so 0.5 |
+| F02 | `revisions.revision` (Helix's document version, counting the plugin's own edits within a call) and `revisions.apply-edits-at` (refused when the text changed); trial: `api-demo`'s background `sort` | `changes-since` deltas, origin-tagged change subscriptions, multi-document conditional edits |
+| F06 | `snippets.complete`: plugin completions inserted through the native snippet engine (tab stops, placeholders, choices); trial: `examples/snippets` | Snippet variables (the editor doesn't resolve them yet), inline suggestions (ghost text, partial acceptance) |
+
+Next in the roadmap's order: F03 (views/viewport), F05 (syntax trees),
+F07 (LSP services), F09 (watches). F04, F10 and later touch UI and
+process architecture and need the owner's review first.
+
 ## What already works
 
 The [0.4 WIT](../helix-plugin/wit/v0.4/helix-plugin.wit) is the contract, with
