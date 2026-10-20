@@ -1384,8 +1384,8 @@ pub struct Editor {
     /// Statusline text from plugins, by `plugin/segment` (the `plugins`
     /// statusline element).
     pub plugin_statusline: BTreeMap<String, String>,
-    /// A plugin's sidebar, left of the views (Pure).
-    pub sidebar: Option<crate::sidebar::Sidebar>,
+    /// Plugin panels, at most one per dock (Pure).
+    pub panels: Vec<crate::sidebar::Sidebar>,
 
     pub exit_code: i32,
 
@@ -1536,9 +1536,53 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             plugin_statusline: BTreeMap::new(),
-            sidebar: None,
+            panels: Vec::new(),
             workspace_trust,
             disk_change_warned: HashMap::new(),
+        }
+    }
+
+    /// The panel at `dock`.
+    pub fn panel(&self, dock: crate::sidebar::Dock) -> Option<&crate::sidebar::Sidebar> {
+        self.panels.iter().find(|panel| panel.dock == dock)
+    }
+
+    pub fn panel_mut(
+        &mut self,
+        dock: crate::sidebar::Dock,
+    ) -> Option<&mut crate::sidebar::Sidebar> {
+        self.panels.iter_mut().find(|panel| panel.dock == dock)
+    }
+
+    /// Show `panel`, replacing the one at its dock. A focused panel takes
+    /// the focus from the others.
+    pub fn set_panel(&mut self, panel: crate::sidebar::Sidebar) {
+        if panel.focused {
+            self.panels
+                .iter_mut()
+                .for_each(|other| other.focused = false);
+        }
+        self.panels.retain(|other| other.dock != panel.dock);
+        self.panels.push(panel);
+    }
+
+    pub fn close_panel(&mut self, dock: crate::sidebar::Dock) {
+        self.panels.retain(|panel| panel.dock != dock);
+    }
+
+    /// The panel that has the keys.
+    pub fn focused_panel_mut(&mut self) -> Option<&mut crate::sidebar::Sidebar> {
+        self.panels.iter_mut().find(|panel| panel.focused)
+    }
+
+    /// Give `dock`'s panel the keys (or take them back).
+    pub fn focus_panel(&mut self, dock: crate::sidebar::Dock, focused: bool) {
+        for panel in &mut self.panels {
+            if panel.dock == dock {
+                panel.focused = focused;
+            } else if focused {
+                panel.focused = false;
+            }
         }
     }
 

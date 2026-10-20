@@ -226,6 +226,27 @@ pub mod sidebar {
     }
 }
 
+/// Panels docked left, right or below the views (added to API 0.4 later;
+/// the sidebar is the left one): one per dock, items made with
+/// [`sidebar::item`] and [`sidebar::on_enter`].
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+pub mod panels {
+    pub use crate::bindings::helix::plugin::panels::*;
+    pub use crate::sidebar::{item, on_enter, SidebarItem};
+
+    /// A panel at `dock` titled `title`: `size` is its columns (left,
+    /// right) or rows (bottom).
+    pub fn panel(dock: Dock, title: &str, items: Vec<SidebarItem>, size: u32) -> Panel {
+        Panel {
+            dock,
+            title: title.into(),
+            items,
+            size,
+            selected: None,
+        }
+    }
+}
+
 /// Completion sources (API 0.3): subscribe to `EventKind::Completion`,
 /// implement [`Plugin::on_completion`] and answer with [`complete`].
 #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]

@@ -1311,6 +1311,75 @@ fn app_with_example(name: &str, settings: &str) -> (Application, tempfile::TempD
     (app, dir)
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn competitest_example_judges_testcases_in_a_bottom_panel() -> anyhow::Result<()> {
+    if std::process::Command::new("g++")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no compiler here
+    }
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let source = work.join("sol.cpp");
+    std::fs::write(
+        &source,
+        "#include <iostream>\nint main(){long a,b;std::cin>>a>>b;if(a<0)for(;;);std::cout<<a+b<<\"\\n\";}\n",
+    )?;
+    for (n, input, output) in [(0, "1 2", "3"), (1, "2 2", "5"), (2, "-1 0", "0")] {
+        std::fs::write(work.join(format!("sol_input{n}.txt")), input)?;
+        std::fs::write(work.join(format!("sol_output{n}.txt")), output)?;
+    }
+    let mut app = AppBuilder::new().with_file(&source, None).build().unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("competitest");
+    std::fs::create_dir(&plugin)?;
+    for name in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/competitest").join(name),
+            plugin.join(name),
+        )?;
+    }
+    let settings = format!(
+        "[competitest]\nallow-process = true\nallow-files = \"write\"\nallow-dirs = [{:?}]\ntimeout = 700\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, ":plugin-run competitest/run<ret>").await;
+    let mut status = String::new();
+    for _ in 0..10 {
+        status = wait_for_status(&mut app, |s| s.contains("passed") || s.contains("failed")).await;
+        if status.contains("passed") || status.contains("failed") {
+            break;
+        }
+    }
+    assert_eq!(status, "CompetiTest: 1/3 passed");
+    let panel = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Bottom)
+        .expect("a bottom panel");
+    assert_eq!(panel.title, "CompetiTest: sol.cpp  1/3 passed");
+    let rows: Vec<&str> = panel.items.iter().map(|i| i.text.as_str()).collect();
+    assert!(
+        rows[0].starts_with("TC 0") && rows[0].contains("accepted"),
+        "{rows:?}"
+    );
+    assert!(rows[1].contains("wrong answer"), "{rows:?}");
+    assert!(rows[2].contains("time limit"), "{rows:?}");
+    // The panel takes the keys; enter on a testcase shows what it got.
+    keys(&mut app, ":panel-focus bottom<ret>j<ret>").await;
+    deliver_events(&mut app).await;
+    let shown = text(&app);
+    assert!(shown.starts_with("Testcase 1: ✘  wrong answer"), "{shown}");
+    assert!(
+        shown.contains("── Expected ──\n5\n── Got ──\n4\n"),
+        "{shown}"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn api_demo_sorts_in_the_background_at_a_revision() -> anyhow::Result<()> {
     let (mut app, _dir) = app_with_example("api-demo", "");
@@ -2349,8 +2418,7 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
     keys(&mut app, ":tree/toggle<ret>").await;
     let sidebar = app
         .editor
-        .sidebar
-        .as_ref()
+        .panel(helix_view::sidebar::Dock::Left)
         .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
     assert_eq!(sidebar.owner, "tree");
     assert!(sidebar.focused);
@@ -2361,16 +2429,32 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
     assert!(view.area.x >= 12, "{:?}", view.area);
 
     // Keys move the selection while the sidebar has them; esc gives them back.
-    let before = app.editor.sidebar.as_ref().unwrap().selected;
+    let before = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap()
+        .selected;
     keys(&mut app, "k").await;
-    let after = app.editor.sidebar.as_ref().unwrap().selected;
+    let after = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap()
+        .selected;
     assert_eq!(after, before.saturating_sub(1));
     keys(&mut app, "<esc>").await;
-    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+    assert!(
+        !app.editor
+            .panel(helix_view::sidebar::Dock::Left)
+            .unwrap()
+            .focused
+    );
 
     // Enter on a file opens it and gives the keys to the editor.
     keys(&mut app, ":tree/focus<ret>").await;
-    let sidebar = app.editor.sidebar.as_mut().unwrap();
+    let sidebar = app
+        .editor
+        .panel_mut(helix_view::sidebar::Dock::Left)
+        .unwrap();
     let (index, path) = sidebar
         .items
         .iter()
@@ -2388,10 +2472,18 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
             .map(|p| p.display().to_string()),
         Some(path)
     );
-    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+    assert!(
+        !app.editor
+            .panel(helix_view::sidebar::Dock::Left)
+            .unwrap()
+            .focused
+    );
 
     keys(&mut app, ":tree/toggle<ret>").await;
-    assert!(app.editor.sidebar.is_none(), "toggled off");
+    assert!(
+        app.editor.panel(helix_view::sidebar::Dock::Left).is_none(),
+        "toggled off"
+    );
     Ok(())
 }
 

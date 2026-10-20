@@ -462,6 +462,13 @@ pub mod completers {
             .collect()
     }
 
+    pub fn panel_dock(_editor: &Editor, input: &str) -> Vec<Completion> {
+        fuzzy_match(input, ["left", "right", "bottom"], false)
+            .into_iter()
+            .map(|(name, _)| ((0..), name.into()))
+            .collect()
+    }
+
     pub fn plugin_name(_editor: &Editor, input: &str) -> Vec<Completion> {
         fuzzy_match(input, crate::plugins::plugin_names(), false)
             .into_iter()

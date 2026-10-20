@@ -118,13 +118,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     editor
         .plugin_statusline
         .retain(|key, _| !key.starts_with(&prefix));
-    if editor
-        .sidebar
-        .as_ref()
-        .is_some_and(|sidebar| sidebar.owner == plugin)
-    {
-        editor.sidebar = None;
-    }
+    editor.panels.retain(|panel| panel.owner != plugin);
     helix_event::request_redraw();
 }
 
@@ -462,7 +456,7 @@ fn install(
         }
     }
     editor.plugin_statusline.clear();
-    editor.sidebar = None;
+    editor.panels.clear();
     abort_timers(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -857,14 +851,16 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
-        sidebar: editor
-            .sidebar
-            .as_ref()
-            .map(|sidebar| helix_plugin::SidebarSnapshot {
-                owner: sidebar.owner.clone(),
-                selected: sidebar.selected as u32,
-                focused: sidebar.focused,
-            }),
+        panels: editor
+            .panels
+            .iter()
+            .map(|panel| helix_plugin::SidebarSnapshot {
+                dock: plugin_dock(panel.dock),
+                owner: panel.owner.clone(),
+                selected: panel.selected as u32,
+                focused: panel.focused,
+            })
+            .collect(),
         registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
             editor.registers.stored().collect()
         } else {
@@ -1181,6 +1177,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             }
             Action::ShowSidebar {
                 plugin,
+                dock,
                 title,
                 items,
                 width,
@@ -1195,16 +1192,18 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                         command: item.command,
                     })
                     .collect();
-                // The same plugin's sidebar keeps its scroll, focus and
+                // The same plugin's panel keeps its scroll, focus and
                 // (unless told otherwise) selection.
-                let (scroll, focused, previous) = match &editor.sidebar {
+                let dock = view_dock(dock);
+                let (scroll, focused, previous) = match editor.panel(dock) {
                     Some(old) if old.owner == plugin => (old.scroll, old.focused, old.selected),
                     _ => (0, false, 0),
                 };
                 let selected = selected
                     .unwrap_or(previous)
                     .min(items.len().saturating_sub(1));
-                editor.sidebar = Some(helix_view::sidebar::Sidebar {
+                editor.set_panel(helix_view::sidebar::Sidebar {
+                    dock,
                     owner: plugin,
                     title,
                     items,
@@ -1215,15 +1214,21 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 });
                 helix_event::request_redraw();
             }
-            Action::CloseSidebar { plugin } => {
-                if editor.sidebar.as_ref().is_some_and(|s| s.owner == plugin) {
-                    editor.sidebar = None;
+            Action::CloseSidebar { plugin, dock } => {
+                let dock = view_dock(dock);
+                if editor.panel(dock).is_some_and(|s| s.owner == plugin) {
+                    editor.close_panel(dock);
                     helix_event::request_redraw();
                 }
             }
-            Action::FocusSidebar { plugin, focused } => {
-                if let Some(sidebar) = editor.sidebar.as_mut().filter(|s| s.owner == plugin) {
-                    sidebar.focused = focused;
+            Action::FocusSidebar {
+                plugin,
+                dock,
+                focused,
+            } => {
+                let dock = view_dock(dock);
+                if editor.panel(dock).is_some_and(|s| s.owner == plugin) {
+                    editor.focus_panel(dock, focused);
                     helix_event::request_redraw();
                 }
             }
@@ -1319,6 +1324,22 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
         });
     }
     APPLYING.fetch_sub(1, Ordering::Relaxed);
+}
+
+fn view_dock(dock: helix_plugin::Dock) -> helix_view::sidebar::Dock {
+    match dock {
+        helix_plugin::Dock::Left => helix_view::sidebar::Dock::Left,
+        helix_plugin::Dock::Right => helix_view::sidebar::Dock::Right,
+        helix_plugin::Dock::Bottom => helix_view::sidebar::Dock::Bottom,
+    }
+}
+
+fn plugin_dock(dock: helix_view::sidebar::Dock) -> helix_plugin::Dock {
+    match dock {
+        helix_view::sidebar::Dock::Left => helix_plugin::Dock::Left,
+        helix_view::sidebar::Dock::Right => helix_plugin::Dock::Right,
+        helix_view::sidebar::Dock::Bottom => helix_plugin::Dock::Bottom,
+    }
 }
 
 fn editor_action(action: helix_plugin::OpenAction) -> helix_view::editor::Action {
