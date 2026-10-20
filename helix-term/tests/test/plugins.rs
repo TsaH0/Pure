@@ -2036,3 +2036,30 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
     assert!(app.editor.sidebar.is_none(), "toggled off");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_commands_that_start_programs_need_allow_process() -> anyhow::Result<()> {
+    // Without `allow-process = true`, `:sh` from a plugin is refused.
+    let (mut app, _dir) = app_with_plugins("#[a|]#", ALL, "");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo hi<ret>").await;
+    assert_error(&app, "allow-process = true");
+    // Ordinary commands still work.
+    keys(&mut app, ":plugin-run testplugin/run :echo fine<ret>").await;
+    assert_eq!(status(&app).0, "fine");
+
+    // A list of programs isn't enough: `:sh` runs anything.
+    let (mut app, _dir) =
+        app_with_plugins("#[a|]#", ALL, "[testplugin]\nallow-process = [\"echo\"]\n");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo hi<ret>").await;
+    assert_error(&app, "allow-process = true");
+
+    let (mut app, _dir) = app_with_plugins("#[a|]#", ALL, "[testplugin]\nallow-process = true\n");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo granted<ret>").await;
+    deliver_events(&mut app).await;
+    // It ran (its output is in a popup), not refused.
+    assert!(app
+        .editor
+        .get_status()
+        .is_none_or(|(message, _)| !message.contains("allow-process")));
+    Ok(())
+}

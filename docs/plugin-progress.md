@@ -22,8 +22,13 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 
 - ~~Per-program prompt~~: decided no; `allow-process` is the only gate.
 - ~~Should a plugin's `run-command` that starts a program also need the
-  `allow-process` grant?~~ Being implemented: only the commands that start
-  programs are gated (see the roadmap's Future TODOs).
+  `allow-process` grant?~~ Done: commands that start programs (`:sh`,
+  `:pipe`, `:pipe-to`, `:insert-output`, `:append-output`,
+  `:run-interactive`, `:run-and-wait`/`!`, `:compile`, `:grep` and the
+  matching static commands; aliases resolve) need `allow-process = true`
+  (a list of programs isn't enough). The editor tells the host which
+  commands those are (`PluginHost::set_program_check`,
+  `plugins::starts_program`).
 - The M5–M8 and file-manager proposals that were here were reviewed and
   implemented (M5 decorations, M6 bindings and commands, M7 background
   tasks, M8 distribution, M12 plugin buffers and file operations).

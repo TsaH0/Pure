@@ -757,6 +757,7 @@ struct State {
     roots: Vec<PathBuf>,
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
+    starts_program: Option<fn(&str) -> bool>,
     /// The latest `log` lines, for `:plugin-log`.
     log: std::collections::VecDeque<String>,
 }
@@ -790,6 +791,7 @@ impl State {
             files: FileGrant::None,
             roots: Vec::new(),
             data_dir: None,
+            starts_program: None,
             log: Default::default(),
         }
     }
@@ -987,6 +989,16 @@ impl State {
         }
         if command.trim().is_empty() {
             return Err("empty command".into());
+        }
+        // A command can run any program (`:sh`): only with every program
+        // allowed.
+        if self.starts_program.is_some_and(|starts| starts(&command))
+            && self.process != ProcessGrant::Any
+        {
+            return Err(format!(
+                "'{}' runs programs: it needs allow-process = true in plugins.toml",
+                command.trim()
+            ));
         }
         self.actions.push(Action::RunCommand(command));
         Ok(())
@@ -2053,6 +2065,9 @@ pub struct PluginHost {
     workspace: Option<PathBuf>,
     /// Plugins get `<data_root>/<name>` as their own directory.
     data_root: Option<PathBuf>,
+    /// Whether an editor command starts a program (see
+    /// [`PluginHost::set_program_check`]).
+    starts_program: Option<fn(&str) -> bool>,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
 }
@@ -2153,6 +2168,7 @@ impl PluginHost {
             cache_dir,
             workspace: None,
             data_root: None,
+            starts_program: None,
             ticker,
             runtime,
         })
@@ -2195,6 +2211,13 @@ impl PluginHost {
     pub fn set_dirs(&mut self, workspace: Option<PathBuf>, data_root: Option<PathBuf>) {
         self.workspace = workspace;
         self.data_root = data_root;
+    }
+
+    /// Tell which editor commands start programs (`:sh`, `:pipe`, ...): a
+    /// plugin runs those (`run-command`) only with `allow-process = true`.
+    /// Applies to plugins loaded afterwards.
+    pub fn set_program_check(&mut self, starts_program: fn(&str) -> bool) {
+        self.starts_program = Some(starts_program);
     }
 
     /// The workspace plugins with `allow-files` were given (see `set_dirs`).
@@ -2383,6 +2406,7 @@ impl PluginHost {
                 .cloned()
                 .collect(),
             data_dir,
+            starts_program: self.starts_program,
             log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);

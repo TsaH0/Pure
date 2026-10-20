@@ -151,6 +151,9 @@ allow-dirs = ["~"]               # more directories than the workspace
 Plugins with the `registers` permission can read your registers (never the
 clipboard) and write them.
 
+A plugin that runs editor commands can only run those that start programs
+(`:sh`, `:pipe`, `!`, ...) with `allow-process = true`.
+
 A plugin that crashes, takes too long (2 s for a command) or uses too much
 memory (256 MiB) is disabled until `:plugin-reload`; the editor keeps
 running.

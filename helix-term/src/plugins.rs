@@ -338,6 +338,7 @@ fn build_host(
         file_workspace(),
         Some(helix_loader::data_dir().join("plugins")),
     );
+    host.set_program_check(starts_program);
     let mut setting_errors = Vec::new();
     // Installed plugins whose component changed since aren't loaded.
     let changed = match install::Lock::read(&lock_file(dir)) {
@@ -1426,6 +1427,42 @@ mod file_ops {
     }
 }
 
+/// Whether running `command` (`:name args` or a static command) starts a
+/// program: plugins need `allow-process = true` for those.
+pub fn starts_program(command: &str) -> bool {
+    // Typable commands by canonical name (aliases resolve), static by name.
+    const TYPED: &[&str] = &[
+        "run-shell-command",
+        "pipe",
+        "pipe-to",
+        "insert-output",
+        "append-output",
+        "run-interactive",
+        "run-and-wait",
+        "compile",
+        "grep",
+    ];
+    const STATIC: &[&str] = &[
+        "shell_pipe",
+        "shell_pipe_to",
+        "shell_insert_output",
+        "shell_append_output",
+        "shell_keep_pipe",
+        "run_and_wait",
+        "compile",
+    ];
+    let command = command.trim();
+    match command.strip_prefix(':') {
+        Some(typed) => {
+            let name = typed.split_whitespace().next().unwrap_or_default();
+            crate::commands::typed::TYPABLE_COMMAND_MAP
+                .get(name)
+                .is_some_and(|cmd| TYPED.contains(&cmd.name))
+        }
+        None => STATIC.contains(&command.split_whitespace().next().unwrap_or_default()),
+    }
+}
+
 /// `:write` on a plugin's buffer: the plugin handles it.
 pub fn write_buffer(editor: &mut Editor, jobs: &mut Jobs, doc: DocumentId) -> anyhow::Result<()> {
     let Some(plugin) = editor
@@ -1816,6 +1853,25 @@ pub fn wants(kind: EventKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_that_start_programs() {
+        for command in [
+            ":sh ls",
+            ":run-shell-command ls",
+            ":pipe sort",
+            ":| sort",
+            ":insert-output date",
+            ":bang ls",
+            "shell_pipe",
+            " :grep x",
+        ] {
+            assert!(starts_program(command), "{command}");
+        }
+        for command in [":write", ":echo hi", "goto_line_end", ":plugin-run x/y", ""] {
+            assert!(!starts_program(command), "{command}");
+        }
+    }
 
     #[test]
     fn file_grants_require_a_project_outside_home_config_and_data() {
