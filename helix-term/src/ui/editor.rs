@@ -44,6 +44,8 @@ pub struct EditorView {
     spinners: ProgressSpinners,
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
+    /// Where a plugin's sidebar was drawn last, for mouse clicks.
+    sidebar_area: Option<Rect>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ impl EditorView {
             completion: None,
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
+            sidebar_area: None,
         }
     }
 
@@ -1622,6 +1625,16 @@ impl Component for EditorView {
                 cx.editor.reset_idle_timer();
                 canonicalize_key(&mut key);
 
+                // A focused sidebar takes its keys.
+                if cx.editor.sidebar.as_ref().is_some_and(|s| s.focused)
+                    && self.pseudo_pending.is_empty()
+                {
+                    let rows = self.sidebar_area.map_or(0, |a| a.height as usize);
+                    if crate::ui::sidebar::handle_key(cx.editor, cx.jobs, key, rows) {
+                        return EventResult::Consumed(None);
+                    }
+                }
+
                 // clear status
                 cx.editor.status_msg = None;
 
@@ -1723,7 +1736,20 @@ impl Component for EditorView {
                 EventResult::Consumed(callback)
             }
 
-            Event::Mouse(event) => self.handle_mouse_event(event, &mut cx),
+            Event::Mouse(event) => {
+                if let Some(area) = self.sidebar_area {
+                    if crate::ui::sidebar::handle_mouse(cx.editor, cx.jobs, event, area) {
+                        return EventResult::Consumed(None);
+                    }
+                }
+                // A click elsewhere gives the editor its keys back.
+                if matches!(event.kind, MouseEventKind::Down(_)) {
+                    if let Some(sidebar) = cx.editor.sidebar.as_mut() {
+                        sidebar.focused = false;
+                    }
+                }
+                self.handle_mouse_event(event, &mut cx)
+            }
             Event::IdleTimeout => self.handle_idle_timeout(&mut cx),
             Event::FocusGained => {
                 self.terminal_focused = true;
@@ -1766,6 +1792,13 @@ impl Component for EditorView {
             editor_area = editor_area.clip_top(1);
         }
 
+        // A plugin's sidebar takes columns on the left.
+        let sidebar_area = crate::ui::sidebar::area(cx.editor, editor_area);
+        if let Some(sidebar) = sidebar_area {
+            editor_area = editor_area.clip_left(sidebar.width);
+        }
+        self.sidebar_area = sidebar_area;
+
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
 
@@ -1776,6 +1809,10 @@ impl Component for EditorView {
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
             self.render_view(cx.editor, doc, view, area, surface, is_focused);
+        }
+
+        if let Some(area) = sidebar_area {
+            crate::ui::sidebar::render(cx.editor, area, surface);
         }
 
         if let Some(area) = Self::splash_area(cx.editor) {

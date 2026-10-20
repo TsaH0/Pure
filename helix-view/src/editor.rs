@@ -1335,6 +1335,8 @@ pub struct Editor {
     /// Statusline text from plugins, by `plugin/segment` (the `plugins`
     /// statusline element).
     pub plugin_statusline: BTreeMap<String, String>,
+    /// A plugin's sidebar, left of the views (Pure).
+    pub sidebar: Option<crate::sidebar::Sidebar>,
 
     pub exit_code: i32,
 
@@ -1482,6 +1484,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             plugin_statusline: BTreeMap::new(),
+            sidebar: None,
             workspace_trust,
         }
     }

@@ -390,6 +390,7 @@ fn install(
         }
     }
     editor.plugin_statusline.clear();
+    editor.sidebar = None;
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -778,6 +779,14 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
+        sidebar: editor
+            .sidebar
+            .as_ref()
+            .map(|sidebar| helix_plugin::SidebarSnapshot {
+                owner: sidebar.owner.clone(),
+                selected: sidebar.selected as u32,
+                focused: sidebar.focused,
+            }),
         registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
             editor.registers.stored().collect()
         } else {
@@ -1076,6 +1085,54 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             Action::DeletePath(path) => {
                 if let Err(err) = editor.delete_path(&path, true) {
                     editor.set_error(format!("Failed to delete {}: {err}", path.display()));
+                }
+            }
+            Action::ShowSidebar {
+                plugin,
+                title,
+                items,
+                width,
+                selected,
+            } => {
+                let items: Vec<_> = items
+                    .into_iter()
+                    .map(|item| helix_view::sidebar::SidebarItem {
+                        text: item.text,
+                        scope: item.scope,
+                        depth: item.depth,
+                        command: item.command,
+                    })
+                    .collect();
+                // The same plugin's sidebar keeps its scroll, focus and
+                // (unless told otherwise) selection.
+                let (scroll, focused, previous) = match &editor.sidebar {
+                    Some(old) if old.owner == plugin => (old.scroll, old.focused, old.selected),
+                    _ => (0, false, 0),
+                };
+                let selected = selected
+                    .unwrap_or(previous)
+                    .min(items.len().saturating_sub(1));
+                editor.sidebar = Some(helix_view::sidebar::Sidebar {
+                    owner: plugin,
+                    title,
+                    items,
+                    width,
+                    selected,
+                    scroll,
+                    focused,
+                });
+                helix_event::request_redraw();
+            }
+            Action::CloseSidebar { plugin } => {
+                if editor.sidebar.as_ref().is_some_and(|s| s.owner == plugin) {
+                    editor.sidebar = None;
+                    helix_event::request_redraw();
+                }
+            }
+            Action::FocusSidebar { plugin, focused } => {
+                if let Some(sidebar) = editor.sidebar.as_mut().filter(|s| s.owner == plugin) {
+                    sidebar.focused = focused;
+                    helix_event::request_redraw();
                 }
             }
             Action::MarkSaved(doc) => {

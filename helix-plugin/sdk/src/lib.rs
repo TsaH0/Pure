@@ -180,6 +180,32 @@ pub mod files {
     pub use crate::requests::apply_files as apply;
 }
 
+/// A sidebar left of the editor (API 0.4): a file tree, an outline...
+/// Items run the plugin's commands on enter.
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+pub mod sidebar {
+    pub use crate::bindings::helix::plugin::sidebar::*;
+
+    /// An item showing `text` in theme `scope` (empty: plain), indented by
+    /// `depth`.
+    pub fn item(text: impl Into<String>, scope: &str, depth: u32) -> SidebarItem {
+        SidebarItem {
+            text: text.into(),
+            scope: scope.into(),
+            depth,
+            command: None,
+            args: Vec::new(),
+        }
+    }
+
+    /// Run the plugin's `command` with `args` when the item is chosen.
+    pub fn on_enter(mut item: SidebarItem, command: &str, args: Vec<String>) -> SidebarItem {
+        item.command = Some(command.into());
+        item.args = args;
+        item
+    }
+}
+
 /// Completion sources (API 0.3): subscribe to `EventKind::Completion`,
 /// implement [`Plugin::on_completion`] and answer with [`complete`].
 #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]

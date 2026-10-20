@@ -467,6 +467,40 @@ interface completion {
   complete: func(id: request-id, items: list<completion-item>) -> result<_, string>;
 }
 
+/// A sidebar on the left of the editor: a file tree, an outline, a list of
+/// tests... One is shown at a time; the plugin that showed it last owns it.
+/// When it has the keys, j/k (or the arrows, ctrl-d/ctrl-u, g/G) move,
+/// enter (or l, or a click) runs the selected item's command, esc or tab
+/// give the editor the keys back, and q closes it.
+interface sidebar {
+  record sidebar-item {
+    text: string,
+    /// A theme scope, e.g. `ui.text.directory`; empty for plain text.
+    scope: string,
+    /// Indentation (tree depth), two columns each.
+    depth: u32,
+    /// One of the plugin's commands, run with `args` on enter.
+    command: option<string>,
+    args: list<string>,
+  }
+  record sidebar-view {
+    title: string,
+    items: list<sidebar-item>,
+    /// Columns, 12 to 80 (at most half the window).
+    width: u32,
+    /// The item to select; none keeps the selection.
+    selected: option<u32>,
+  }
+  /// Show or update this plugin's sidebar. At most 100,000 items.
+  show: func(view: sidebar-view) -> result<_, string>;
+  /// Close this plugin's sidebar.
+  close: func();
+  /// Give the sidebar the keys (true) or give them back to the editor.
+  focus: func(focused: bool);
+  /// The selected item of this plugin's sidebar, if it is shown.
+  selected: func() -> option<u32>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -477,6 +511,7 @@ world helix-plugin {
   import timers;
   import completion;
   import files;
+  import sidebar;
   export plugin;
   export callbacks;
   export events;

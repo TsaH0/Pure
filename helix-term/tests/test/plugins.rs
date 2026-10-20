@@ -1961,3 +1961,78 @@ async fn oil_example_can_delete_to_the_trash() -> anyhow::Result<()> {
     assert!(!helix_view::doc!(app.editor).is_modified());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::create_dir(work.join("src"))?;
+    std::fs::write(work.join("src/main.rs"), "fn main() {}\n")?;
+    std::fs::write(work.join("README.md"), "hi\n")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("README.md"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("tree");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/tree").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[tree]\nallow-files = \"read\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    // The tree shows the workspace (the repository, in tests).
+    keys(&mut app, ":tree/toggle<ret>").await;
+    let sidebar = app
+        .editor
+        .sidebar
+        .as_ref()
+        .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
+    assert_eq!(sidebar.owner, "tree");
+    assert!(sidebar.focused);
+    assert!(!sidebar.items.is_empty());
+
+    // The view got narrower to make room.
+    let view = helix_view::view!(app.editor);
+    assert!(view.area.x >= 12, "{:?}", view.area);
+
+    // Keys move the selection while the sidebar has them; esc gives them back.
+    let before = app.editor.sidebar.as_ref().unwrap().selected;
+    keys(&mut app, "k").await;
+    let after = app.editor.sidebar.as_ref().unwrap().selected;
+    assert_eq!(after, before.saturating_sub(1));
+    keys(&mut app, "<esc>").await;
+    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+
+    // Enter on a file opens it and gives the keys to the editor.
+    keys(&mut app, ":tree/focus<ret>").await;
+    let sidebar = app.editor.sidebar.as_mut().unwrap();
+    let (index, path) = sidebar
+        .items
+        .iter()
+        .enumerate()
+        .find_map(|(i, item)| match &item.command {
+            Some((command, args)) if command == "open" => Some((i, args[0].clone())),
+            _ => None,
+        })
+        .expect("a file in the tree");
+    sidebar.selected = index;
+    keys(&mut app, "<ret>").await;
+    assert_eq!(
+        helix_view::doc!(app.editor)
+            .path()
+            .map(|p| p.display().to_string()),
+        Some(path)
+    );
+    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+
+    keys(&mut app, ":tree/toggle<ret>").await;
+    assert!(app.editor.sidebar.is_none(), "toggled off");
+    Ok(())
+}

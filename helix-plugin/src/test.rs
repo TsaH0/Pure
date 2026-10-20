@@ -81,6 +81,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         cwd: PathBuf::from("/work/src"),
         config_dir: PathBuf::from("/config"),
         registers: BTreeMap::new(),
+        sidebar: None,
     }
 }
 

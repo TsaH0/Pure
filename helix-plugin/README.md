@@ -57,6 +57,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
+| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"` |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
@@ -542,6 +543,29 @@ callback is a callback: it can open UI and run commands. See
   mappings); elsewhere they do nothing.
 
 `examples/oil` uses all of them: a directory as an editable buffer.
+
+## Sidebar (API 0.4)
+
+`helix_plugin_api::sidebar` shows a list on the left of the editor: a file
+tree, an outline, test results. Items have a theme scope, an indentation
+and a command: enter (or `l`, or a click) runs one of the plugin's commands
+with the item's arguments.
+
+```rust,ignore
+use helix_plugin_api::sidebar::{self, item, on_enter, SidebarView};
+
+let file = on_enter(item("  main.rs", "", 1), "open", vec!["/work/src/main.rs".into()]);
+sidebar::show(&SidebarView { title: " work/".into(), items: vec![file], width: 32, selected: None })?;
+sidebar::focus(true); // give it the keys
+```
+
+One sidebar is shown at a time (the plugin that showed it last owns it);
+showing it again updates it and keeps its scroll and selection. With the
+keys, `j`/`k`, the arrows, `ctrl-d`/`ctrl-u` and `g`/`G` move, `esc` or
+`tab` hand the keys back, `q` closes it; a click in the editor gives the
+editor the keys. `sidebar::selected()` tells which item is selected.
+Nothing is drawn or checked while no sidebar is shown. See
+`examples/tree`.
 
 ## Registers (API 0.3)
 

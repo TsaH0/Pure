@@ -45,3 +45,31 @@ impl files::Host for State {
         State::apply_files(self, ops)
     }
 }
+
+impl v0_4::helix::plugin::sidebar::Host for State {
+    fn show(
+        &mut self,
+        view: v0_4::helix::plugin::sidebar::SidebarView,
+    ) -> std::result::Result<(), String> {
+        let items = view
+            .items
+            .into_iter()
+            .map(|item| crate::SidebarItem {
+                text: item.text,
+                scope: item.scope,
+                depth: item.depth.min(u16::MAX as u32) as u16,
+                command: item.command.map(|command| (command, item.args)),
+            })
+            .collect();
+        State::show_sidebar(self, view.title, items, view.width, view.selected)
+    }
+    fn close(&mut self) {
+        State::close_sidebar(self)
+    }
+    fn focus(&mut self, focused: bool) {
+        State::focus_sidebar(self, focused)
+    }
+    fn selected(&mut self) -> Option<u32> {
+        State::sidebar_selected(self)
+    }
+}

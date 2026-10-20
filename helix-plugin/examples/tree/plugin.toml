@@ -1,0 +1,10 @@
+name = "tree"
+version = "0.1.0"
+api = "0.4"
+description = "A file tree in a sidebar, like nvim-tree"
+permissions = ["read-buffers", "open-files", "filesystem"]
+wasm = "plugin.wasm"
+
+# Default binding: only used where nothing else binds the key.
+[keys.normal.space]
+B = "toggle"

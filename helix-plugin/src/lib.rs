@@ -215,6 +215,26 @@ pub struct PluginDiagnostic {
     pub source: Option<String>,
 }
 
+/// One row of a plugin's sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarItem {
+    pub text: String,
+    pub scope: String,
+    pub depth: u16,
+    pub command: Option<(String, Vec<String>)>,
+}
+
+/// Most items in a sidebar.
+pub const MAX_SIDEBAR_ITEMS: usize = 100_000;
+
+/// The sidebar as a plugin call sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarSnapshot {
+    pub owner: String,
+    pub selected: u32,
+    pub focused: bool,
+}
+
 /// A file operation of `files.apply` (API 0.4); paths are checked against
 /// the plugin's grant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,6 +359,8 @@ pub struct Snapshot {
     /// Register contents, only filled in when a plugin has the `registers`
     /// permission ([`PluginHost::wants_registers`]); no clipboard.
     pub registers: BTreeMap<char, Vec<String>>,
+    /// The sidebar, if one is shown.
+    pub sidebar: Option<SidebarSnapshot>,
 }
 
 impl Default for Snapshot {
@@ -351,6 +373,7 @@ impl Default for Snapshot {
             cwd: PathBuf::new(),
             config_dir: PathBuf::new(),
             registers: BTreeMap::new(),
+            sidebar: None,
         }
     }
 }
@@ -462,6 +485,21 @@ pub enum Action {
     },
     /// Mark a plugin's buffer as saved.
     MarkSaved(DocumentId),
+    /// Show or update `plugin`'s sidebar; `selected: None` keeps it.
+    ShowSidebar {
+        plugin: String,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u16,
+        selected: Option<usize>,
+    },
+    CloseSidebar {
+        plugin: String,
+    },
+    FocusSidebar {
+        plugin: String,
+        focused: bool,
+    },
     /// File operations through the editor (language servers and buffers
     /// follow). Paths are absolute and checked against the plugin's grant.
     CreatePath {
@@ -1468,6 +1506,67 @@ impl State {
             .filter(|root| root.is_dir())
             .map(|root| root.to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn show_sidebar(
+        &mut self,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u32,
+        selected: Option<u32>,
+    ) -> Result<(), String> {
+        if self.context == CallContext::Init {
+            return Err("the sidebar can't be shown from init".into());
+        }
+        if items.len() > MAX_SIDEBAR_ITEMS {
+            return Err(format!(
+                "a sidebar can have at most {MAX_SIDEBAR_ITEMS} items"
+            ));
+        }
+        let one_line = |text: String| -> String {
+            text.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect()
+        };
+        let items = items
+            .into_iter()
+            .map(|item| SidebarItem {
+                text: one_line(item.text),
+                ..item
+            })
+            .collect();
+        let width = width.clamp(12, 80) as u16;
+        self.snapshot.sidebar = Some(SidebarSnapshot {
+            owner: self.plugin.clone(),
+            selected: selected.unwrap_or(0),
+            focused: false,
+        });
+        self.actions.push(Action::ShowSidebar {
+            plugin: self.plugin.clone(),
+            title: one_line(title),
+            items,
+            width,
+            selected: selected.map(|s| s as usize),
+        });
+        Ok(())
+    }
+
+    fn close_sidebar(&mut self) {
+        self.actions.push(Action::CloseSidebar {
+            plugin: self.plugin.clone(),
+        });
+    }
+
+    fn focus_sidebar(&mut self, focused: bool) {
+        self.actions.push(Action::FocusSidebar {
+            plugin: self.plugin.clone(),
+            focused,
+        });
+    }
+
+    fn sidebar_selected(&self) -> Option<u32> {
+        let sidebar = self.snapshot.sidebar.as_ref()?;
+        (sidebar.owner == self.plugin).then_some(sidebar.selected)
     }
 
     fn buffer_name(&self, doc: DocumentId) -> Option<String> {

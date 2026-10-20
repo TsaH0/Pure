@@ -535,7 +535,7 @@ What plugins still can't do, and why:
 
 | Kind | Status |
 | --- | --- |
-| Sidebars, file trees, panels (nvim-tree, outline, undotree panes) | Not possible: Helix has no plugin-defined views or panes. Pickers, popups and plugin buffers in splits cover most uses. |
+| Sidebars, file trees, outlines (nvim-tree) | Done (API 0.4): `sidebar` interface, `examples/tree`. Other panes (bottom panels, floating windows with their own keys) still aren't. |
 | Embedded terminals (toggleterm) | Not possible: no terminal emulator in Helix. `run-interactive` hands over the whole terminal instead. |
 | Conceal (hide `**`, link URLs) | TODO below: needs `DocumentFormatter` support. |
 | Folding | Not possible: Helix has no folds. |
@@ -624,6 +624,11 @@ Small, self-contained; each one is a good single task.
   backticks, link URLs). Needs `helix-core`'s `DocumentFormatter` to skip
   graphemes; cursor movement over hidden text must still work. Larger than
   other decorations: design with the owner first.
+- [x] **Sidebar (API 0.4):** `sidebar.show/close/focus/selected`. One
+  sidebar (`Editor::sidebar`, `helix_view::sidebar`) left of the views; the
+  editor area shrinks only while it's shown. Items run the owner's commands
+  (no new export). Keys while focused: j/k, arrows, ctrl-d/u, g/G, enter/l,
+  esc/tab, q; mouse clicks and the wheel. `examples/tree` (nvim-tree like).
 - [x] **Full-line backgrounds:** `decorations.set-line-backgrounds` (added
   to 0.3 and 0.4: an import). Stored at line starts and mapped through
   edits; `render_view` looks up only the visible lines and paints the text

@@ -43,6 +43,7 @@ Ready-made examples are in
 | `emoji` | Completes `:name` to emoji in the completion menu |
 | `pomodoro` | A pomodoro timer in the statusline; `start`, `stop` |
 | `yank-history` | `list`: pick an earlier yank to paste |
+| `tree` | A file tree in a sidebar, like nvim-tree: `space B` shows it; `enter` opens files and folders |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences); `toggle` |
@@ -98,7 +99,9 @@ have; `:plugin-list` shows them. Turn a plugin's keys off with
 Besides commands, pickers, popups and prompts, plugins can show
 **diagnostics** (like a language server: gutter, `]d`, `space d`), be
 **completion sources** (items join the completion menu), run **timers**,
-open **scratch buffers** and buffers they own (`:w` goes to the plugin, as
+show a **sidebar** (a file tree, an outline: `j`/`k` and `enter`
+in it, `esc` back to the editor, `q` closes it), open **scratch buffers**
+and buffers they own (`:w` goes to the plugin, as
 in `oil`), use **registers**, and rename, create or delete files through
 the editor so open buffers follow. Inside a plugin's own buffer its
 `[keys.buffer]` bindings apply; nowhere else.
