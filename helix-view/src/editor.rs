@@ -363,6 +363,8 @@ pub struct Config {
     /// the command line or to `:open`, e.g. `oil/open`, instead of the file
     /// picker. It gets the directory as its argument.
     pub directory_handler: Option<String>,
+    /// How the command line (and other prompts) look.
+    pub cmdline: CmdlineConfig,
     /// `true` if helix should automatically add a line comment token if you're currently in a comment
     /// and press `enter`.
     pub continue_comments: bool,
@@ -1166,6 +1168,42 @@ pub enum PopupBorderConfig {
     Menu,
 }
 
+/// Where prompts (`:`, `/`, ...) are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CmdlineStyle {
+    /// On the last line, completions above it (Helix's).
+    #[default]
+    Bottom,
+    /// A box in the middle of the screen, completions in a list below the
+    /// input (like noice.nvim).
+    Popup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CmdlineConfig {
+    pub style: CmdlineStyle,
+    /// Width of the popup, in percent of the screen.
+    pub popup_width: u16,
+    /// Most completion rows the popup shows.
+    pub popup_rows: u16,
+    /// Show what commands do (and their category and aliases) next to the
+    /// completions, in the popup.
+    pub descriptions: bool,
+}
+
+impl Default for CmdlineConfig {
+    fn default() -> Self {
+        Self {
+            style: CmdlineStyle::Bottom,
+            popup_width: 70,
+            popup_rows: 15,
+            descriptions: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WordCompletion {
@@ -1232,6 +1270,7 @@ impl Default for Config {
             text_width: 80,
             completion_replace: false,
             directory_handler: None,
+            cmdline: CmdlineConfig::default(),
             continue_comments: true,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),

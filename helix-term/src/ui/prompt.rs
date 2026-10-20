@@ -28,6 +28,10 @@ type CompletionFn = Box<dyn FnMut(&Editor, &str) -> Vec<Completion>>;
 type CallbackFn = Box<dyn FnMut(&mut Context, &str, PromptEvent)>;
 pub type DocFn = Box<dyn Fn(&str) -> Option<Cow<str>>>;
 
+/// What a completion is, for the popup command line's list: `(category,
+/// description, aliases)`.
+pub type DescribeFn = Box<dyn Fn(&str) -> Option<(Cow<'static, str>, Cow<'static, str>, String)>>;
+
 pub struct Prompt {
     prompt: Cow<'static, str>,
     line: String,
@@ -45,6 +49,8 @@ pub struct Prompt {
     completion_fn: CompletionFn,
     callback_fn: CallbackFn,
     pub doc_fn: DocFn,
+    /// Describes completions in the popup command line (`editor.cmdline`).
+    pub describe_fn: Option<DescribeFn>,
     next_char_handler: Option<PromptCharHandler>,
     language: Option<(&'static str, Arc<ArcSwap<syntax::Loader>>)>,
 }
@@ -101,6 +107,7 @@ impl Prompt {
             completion_fn: Box::new(completion_fn),
             callback_fn: Box::new(callback_fn),
             doc_fn: Box::new(|_| None),
+            describe_fn: None,
             next_char_handler: None,
             language: None,
         }
@@ -402,11 +409,13 @@ const BASE_WIDTH: u16 = 30;
 
 impl Prompt {
     pub fn render_prompt(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        if cx.editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup {
+            return self.render_popup(area, surface, cx);
+        }
         let theme = &cx.editor.theme;
         let prompt_color = theme.get("ui.text");
         let completion_color = theme.get("ui.menu");
         let selected_color = theme.get("ui.menu.selected");
-        let suggestion_color = theme.get("ui.text.inactive");
         let background = theme.get("ui.background");
         // completion
 
@@ -519,7 +528,192 @@ impl Prompt {
             .clip_left(self.prompt.len() as u16)
             .clip_top(line)
             .clip_right(2);
+        self.render_input(surface, cx);
+    }
 
+    /// The popup command line: a box in the middle with the input, then the
+    /// completions as a list (with what they do), like noice.nvim.
+    fn render_popup(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        let config = cx.editor.config().cmdline;
+        let theme = &cx.editor.theme;
+        let popup = theme
+            .try_get("ui.cmdline.popup")
+            .unwrap_or_else(|| theme.get("ui.popup"));
+        let border = theme
+            .try_get("ui.cmdline.border")
+            .unwrap_or_else(|| theme.get("ui.window"));
+        let title_style = theme
+            .try_get("ui.cmdline.title")
+            .unwrap_or_else(|| theme.get("ui.text.focus"));
+        let selected_style = theme.get("ui.menu.selected");
+        let category_style = theme.get("ui.text.inactive");
+        let name_style = theme.get("ui.text");
+        let doc_style = theme.get("ui.text.inactive");
+        let prompt_style = theme.get("ui.text.focus");
+
+        let width = ((area.width as u32 * config.popup_width.clamp(20, 100) as u32) / 100) as u16;
+        let width = width
+            .max(area.width.min(40))
+            .min(area.width.saturating_sub(2));
+        let rows = (self.completion.len() as u16)
+            .min(config.popup_rows)
+            .min(area.height.saturating_sub(8));
+        let height = 3 + if rows > 0 { rows + 1 } else { 0 };
+        let x = area.x + (area.width - width) / 2;
+        let y = area.y + (area.height / 5).min(area.height.saturating_sub(height + 1));
+        let frame = Rect::new(x, y, width, height.min(area.height));
+
+        let title = match self.prompt.trim() {
+            ":" => " Command".to_string(),
+            "/" | "?" => " Search".to_string(),
+            other => format!(" {}", other.trim_end_matches(':')),
+        };
+        let hints = if rows > 0 {
+            " · ↑/↓ select · Tab complete "
+        } else {
+            " "
+        };
+        surface.clear_with(frame, popup);
+        Block::bordered()
+            .border_style(border)
+            .title(tui::text::Spans::from(vec![
+                Span::styled(title, title_style),
+                Span::styled(hints, border),
+            ]))
+            .render(frame, surface);
+        let inner = frame.inner(Margin::all(1));
+
+        // The input line.
+        let prompt = if self.prompt.is_empty() {
+            "> "
+        } else {
+            &*self.prompt
+        };
+        surface.set_string(inner.x + 1, inner.y, prompt, prompt_style);
+        self.line_area = Rect::new(
+            inner.x + 1 + prompt.width() as u16,
+            inner.y,
+            inner.width.saturating_sub(2 + prompt.width() as u16),
+            1,
+        );
+
+        // The completions, one per row.
+        if rows > 0 {
+            let separator = inner.y + 1;
+            for col in frame.left()..frame.right() {
+                let symbol = if col == frame.left() {
+                    "├"
+                } else if col == frame.right() - 1 {
+                    "┤"
+                } else {
+                    "─"
+                };
+                surface[(col, separator)]
+                    .set_symbol(symbol)
+                    .set_style(border);
+            }
+            let list = Rect::new(inner.x, separator + 1, inner.width, rows);
+            let offset = self
+                .selection
+                .map(|selection| selection / rows as usize * rows as usize)
+                .unwrap_or_default();
+            let described: Vec<_> = self
+                .completion
+                .iter()
+                .skip(offset)
+                .take(rows as usize)
+                .map(|(_, completion)| {
+                    let describe = self.describe_fn.as_ref().filter(|_| config.descriptions);
+                    let description = describe.and_then(|describe| describe(&completion.content));
+                    (completion, description)
+                })
+                .collect();
+            let category_width = described
+                .iter()
+                .filter_map(|(_, d)| d.as_ref().map(|(c, ..)| c.width()))
+                .max()
+                .map_or(0, |w| w + 3);
+            let name_width = described
+                .iter()
+                .map(|(c, _)| c.content.width() + 1)
+                .max()
+                .unwrap_or(0)
+                .min(list.width as usize / 2);
+            for (row, (completion, description)) in described.iter().enumerate() {
+                let y = list.y + row as u16;
+                let index = offset + row;
+                let selected = Some(index) == self.selection;
+                let mut col = list.x;
+                let marker = if selected { "▸ " } else { "  " };
+                surface.set_string(col, y, marker, border);
+                col += 2;
+                let end = list.right();
+                if let Some((category, doc, aliases)) = description {
+                    if category_width > 0 {
+                        surface.set_stringn(
+                            col,
+                            y,
+                            &format!("[{category:<w$}]", w = category_width - 3),
+                            (end - col) as usize,
+                            category_style,
+                        );
+                        col += category_width as u16;
+                    }
+                    let prefix = if self.prompt.trim() == ":" { ":" } else { "" };
+                    surface.set_stringn(
+                        col,
+                        y,
+                        &format!("{prefix}{}", completion.content),
+                        (end.saturating_sub(col)) as usize,
+                        name_style.patch(completion.style),
+                    );
+                    col = (col + name_width as u16 + 2).min(end);
+                    let mut text = doc.lines().next().unwrap_or_default().to_string();
+                    if !aliases.is_empty() {
+                        text.push_str(&format!("  aliases: {aliases}"));
+                    }
+                    surface.set_stringn(col, y, &text, end.saturating_sub(col) as usize, doc_style);
+                } else {
+                    surface.set_stringn(
+                        col,
+                        y,
+                        &completion.content,
+                        end.saturating_sub(col) as usize,
+                        name_style.patch(completion.style),
+                    );
+                }
+                if selected {
+                    surface.set_style(Rect::new(list.x, y, list.width, 1), selected_style);
+                }
+            }
+        }
+
+        // The current command's documentation, under the box.
+        if !config.descriptions || rows == 0 {
+            if let Some(doc) = (self.doc_fn)(&self.line) {
+                let mut text = ui::Text::new(doc.to_string());
+                let (_, doc_height) = ui::text::required_size(&text.contents, width - 4);
+                let doc_area =
+                    area.intersection(Rect::new(x, frame.bottom(), width, doc_height + 2));
+                if doc_area.height > 2 {
+                    let help = theme.get("ui.help");
+                    surface.clear_with(doc_area, help);
+                    let block = Block::bordered().border_style(help);
+                    let inner = block.inner(doc_area).inner(Margin::horizontal(1));
+                    block.render(doc_area, surface);
+                    text.render(inner, surface, cx);
+                }
+            }
+        }
+
+        self.render_input(surface, cx);
+    }
+
+    /// The text typed so far, in `self.line_area`.
+    fn render_input(&mut self, surface: &mut Surface, cx: &mut Context) {
+        let theme = &cx.editor.theme;
+        let prompt_color = theme.get("ui.text");
+        let suggestion_color = theme.get("ui.text.inactive");
         if self.line.is_empty() {
             self.anchor = 0;
             // Show the most recently entered value as a suggestion.
@@ -770,9 +964,14 @@ impl Component for Prompt {
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
-        let area = area
-            .clip_left(self.prompt.len() as u16)
-            .clip_right(if self.prompt.is_empty() { 2 } else { 0 });
+        let popup = editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup;
+        let area = if popup {
+            // Where `render_popup` put the input.
+            self.line_area.with_height(1)
+        } else {
+            area.clip_left(self.prompt.len() as u16)
+                .clip_right(if self.prompt.is_empty() { 2 } else { 0 })
+        };
 
         let mut col = area.left() as usize + self.line[self.anchor..self.cursor].width();
 

@@ -74,6 +74,27 @@
 
 [^3]: In most cases, you also need to enable the `auto-format` setting under `languages.toml`. You can find the reasoning [here](https://github.com/helix-editor/helix/discussions/9043#discussioncomment-7811497).
 
+### `[editor.cmdline]` Section
+
+How the command line (`:`) and other prompts (search, prompts of commands
+and plugins) look.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim | `"bottom"` |
+| `popup-width` | Width of the popup in percent of the screen | `70` |
+| `popup-rows` | Most completions the popup lists | `15` |
+| `descriptions` | In the popup, show each command's category, what it does and its aliases (plugin commands too) | `true` |
+
+```toml
+[editor.cmdline]
+style = "popup"
+```
+
+Its colors come from `ui.cmdline.popup`, `ui.cmdline.border` and
+`ui.cmdline.title` (falling back to `ui.popup`, `ui.window` and
+`ui.text.focus`), and the selected row from `ui.menu.selected`.
+
 ### `[editor.clipboard-provider]` Section
 
 Pure can be configured either to use a builtin clipboard configuration or to use

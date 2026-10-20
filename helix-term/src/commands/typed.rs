@@ -4862,6 +4862,7 @@ fn command_mode_with(cx: &mut Context, line: String) {
         },
     );
     prompt.doc_fn = Box::new(command_line_doc);
+    prompt.describe_fn = Some(Box::new(describe_command));
     if !line.is_empty() {
         prompt.set_line(line, cx.editor);
     }
@@ -4869,6 +4870,137 @@ fn command_mode_with(cx: &mut Context, line: String) {
     // Calculate initial completion
     prompt.recalculate_completion(cx.editor);
     cx.push_layer(Box::new(prompt));
+}
+
+/// What a command does, for the popup command line: `(category, doc,
+/// aliases)`. Plugin commands (`plugin/command`) too.
+fn describe_command(name: &str) -> Option<(Cow<'static, str>, Cow<'static, str>, String)> {
+    if let Some(command) = TYPABLE_COMMAND_MAP.get(name) {
+        return Some((
+            Cow::Borrowed(command_category(command.name)),
+            Cow::Borrowed(command.doc),
+            command.aliases.join(", "),
+        ));
+    }
+    let (plugin, _) = name.split_once('/')?;
+    crate::plugins::commands_with_docs()
+        .into_iter()
+        .find(|(command, _)| command == name)
+        .map(|(_, doc)| {
+            (
+                Cow::Owned(format!("Plugin {plugin}")),
+                Cow::Owned(doc),
+                String::new(),
+            )
+        })
+}
+
+/// A category for a typable command, for the popup command line.
+fn command_category(name: &str) -> &'static str {
+    let has = |prefixes: &[&str]| prefixes.iter().any(|p| name.starts_with(p));
+    if has(&["plugin-"]) {
+        "Plugins"
+    } else if has(&[
+        "lsp-",
+        "format",
+        "language",
+        "tree-sitter",
+        "indent-style",
+        "line-ending",
+        "encoding",
+        "reflow",
+        "sort",
+        "get-character-info",
+        "yank-diagnostic",
+    ]) {
+        "Language"
+    } else if has(&["debug-"]) {
+        "Debug"
+    } else if has(&["git", "reset-diff-change", "diff"]) {
+        "Git"
+    } else if has(&["grep", "s/", "substitute", "global-search"]) {
+        "Search"
+    } else if has(&["c", "quickfix"])
+        && name.len() <= 9
+        && !has(&[
+            "cd",
+            "change",
+            "clear",
+            "clipboard",
+            "compile",
+            "config",
+            "character",
+        ])
+    {
+        "Quickfix"
+    } else if has(&["vsplit", "hsplit", "redraw", "earlier", "later"]) {
+        "View"
+    } else if has(&[
+        "config",
+        "set-option",
+        "toggle-option",
+        "get-option",
+        "theme",
+        "refresh-config",
+        "open-config",
+        "open-log",
+        "open-workspace-config",
+        "trust",
+        "untrust",
+        "exclude-workspace",
+    ]) {
+        "Configuration"
+    } else if has(&[
+        "sh",
+        "pipe",
+        "run-",
+        "insert-output",
+        "append-output",
+        "compile",
+        "echo",
+    ]) {
+        "Shell"
+    } else if has(&[
+        "quit",
+        "exit",
+        "cquit",
+        "tutor",
+        "help",
+        "noop",
+        "show-clipboard",
+        "redraw",
+    ]) {
+        "Editor"
+    } else if has(&[
+        "clipboard",
+        "yank",
+        "paste",
+        "replace-selections",
+        "clear-register",
+        "set-register",
+        "primary-clipboard",
+    ]) {
+        "Registers"
+    } else if has(&[
+        "buffer",
+        "write",
+        "open",
+        "new",
+        "read",
+        "reload",
+        "update",
+        "cd",
+        "pwd",
+        "move",
+        "change-current",
+        "show-directory",
+        "push-directory",
+        "pop-directory",
+    ]) {
+        "File"
+    } else {
+        "Other"
+    }
 }
 
 fn command_line_doc(input: &str) -> Option<Cow<'_, str>> {
@@ -5297,4 +5429,28 @@ fn exclude_workspace(
     cx.editor.workspace_trust.exclude(&workspace);
     cx.editor.config_events.0.send(ConfigEvent::Refresh)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod cmdline_tests {
+    use super::*;
+
+    #[test]
+    fn commands_are_described_with_a_category() {
+        let (category, doc, aliases) = describe_command("write").unwrap();
+        assert_eq!(category, "File");
+        assert!(!doc.is_empty());
+        assert!(aliases.contains('w'));
+        assert_eq!(describe_command("lsp-restart").unwrap().0, "Language");
+        assert_eq!(describe_command("vsplit").unwrap().0, "View");
+        assert_eq!(describe_command("quit").unwrap().0, "Editor");
+        assert_eq!(describe_command("cnext").unwrap().0, "Quickfix");
+        assert_eq!(describe_command("cd").unwrap().0, "File");
+        assert_eq!(describe_command("plugin-list").unwrap().0, "Plugins");
+        assert!(describe_command("src/main.rs").is_none());
+        // Every command gets some category.
+        for command in TYPABLE_COMMAND_LIST {
+            assert!(!command_category(command.name).is_empty());
+        }
+    }
 }
