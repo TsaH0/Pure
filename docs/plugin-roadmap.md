@@ -314,6 +314,10 @@ the hook first and keep it generic.
     only when non-empty; `plugins` gutter and statusline element (opt-in).
     One `plugins` statusline element shows all segments, instead of one
     element per segment. Example: `examples/todos`.
+  - Later: overlays (`set-overlays`, chars drawn over the text) and
+    `set-raw-on-cursor-line(doc, layer, raw)` (the layer is hidden on the
+    primary cursor's line; the editor tracks the cursor, so plugins need no
+    selection events). Example: `examples/markdown`.
 
 ## M6. Events and key bindings
 

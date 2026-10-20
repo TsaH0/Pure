@@ -69,8 +69,10 @@ e = ":yazi/open"
 ## Decorations
 
 Plugins (API 0.3) can highlight text, add virtual text and set gutter signs
-and statusline text; the `todos` example does all four. Signs and statusline
-text only show where you ask for them:
+and statusline text; the `todos` example does all four. They can also draw
+characters over the text, shown as plain text on the cursor's line while you
+edit it; the `markdown` example renders Markdown that way. Signs and
+statusline text only show where you ask for them:
 
 ```toml
 # ~/.config/helix/config.toml

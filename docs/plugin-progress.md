@@ -586,7 +586,7 @@ edits and dropped with their char).
 | Full-width rules | Yes (overlay + end-of-line virtual text) |
 | Tables with box borders | Yes (`│`, `├──┼──┤`) |
 | Code blocks with the language | Yes (fence rule, label, block highlight) |
-| Raw text on the cursor line (anti-conceal) | Yes (selection-change events) |
+| Raw text on the cursor line (anti-conceal) | Yes (`set-raw-on-cursor-line`: the editor follows the cursor, no events) |
 | Toggle | Yes (`markdown/toggle`, `space M`) |
 | Hiding `**`, backticks, link URLs (conceal) | **No**: Helix can't draw fewer chars than there are |
 | Heading backgrounds across the whole window | Partly: highlight covers the text only |
@@ -594,3 +594,32 @@ edits and dropped with their char).
 Gaps that would need editor work: conceal (a new kind of text annotation in
 `helix-core`'s document formatter) and full-line backgrounds. Both are
 possible but larger upstream diffs; logged as TODOs.
+
+## Overhead with plugins loaded (2026-10-20)
+
+Same harness and builds as above; the third column loads five plugins: yazi
+(file manager), finder, todos, markdown and text-tools.
+
+| Median (min–max) | Vanilla | Pure, none | Pure, 5 plugins |
+| --- | --- | --- | --- |
+| big.rs: startup | 461 ms | 456 ms | 443 ms |
+| big.rs: CPU, start then quit | 384 ms | 385 ms | 408 ms |
+| big.rs: CPU, editing session | 22.15 s | 22.05 s | 22.49 s |
+| big.md (6,732 lines): startup | 131 ms | 131 ms | 131 ms |
+| big.md: CPU, start then quit | 57 ms | 58 ms | 84 ms |
+| big.md: CPU, editing session | 726 ms | 722 ms | 1115 ms |
+| Idle over 5 s (both files) | 0 wake-ups | 0 wake-ups | 0 wake-ups |
+| Peak memory, big.md | 25.2 MiB | 29.3 MiB | 44.1 MiB |
+
+- Startup to first draw is unchanged: plugins load after the first frame.
+- What the plugins cost is what they asked for. On big.rs that is the todos
+  scan per edit (+2%). On big.md it is markdown re-rendering 6,732 lines on
+  each of ~260 edits (~1.5 ms per edit, under one frame).
+- Markdown first cost 1,846 ms there: it re-rendered on every cursor move
+  (15.7 ms each). Fixed by a faster renderer (no per-char allocations) and
+  by `set-raw-on-cursor-line`, which moves "show the cursor's line raw" into
+  the editor, so cursor moves cost the plugin nothing.
+- Memory: ~3 MiB per loaded plugin (its Wasm instance and compiled code).
+- TODO: incremental rendering for markdown (re-render only changed lines)
+  would cut the per-edit cost on very large files.
+
