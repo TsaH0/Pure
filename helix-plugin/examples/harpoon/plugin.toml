@@ -1,0 +1,19 @@
+name = "harpoon"
+version = "0.1.0"
+api = "0.4"
+description = "Mark the files you work on and jump to them, like harpoon"
+permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands"]
+wasm = "plugin.wasm"
+
+# Default bindings: only used where nothing else binds the key.
+[keys.normal.space]
+"+" = "add"
+"=" = "menu"
+"1" = "go-1"
+"2" = "go-2"
+"3" = "go-3"
+"4" = "go-4"
+
+# In the menu buffer.
+[keys.buffer.normal]
+ret = "select"

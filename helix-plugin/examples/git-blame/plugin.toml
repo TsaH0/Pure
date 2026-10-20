@@ -1,0 +1,10 @@
+name = "git-blame"
+version = "0.1.0"
+api = "0.4"
+description = "Who changed the cursor's line, when and why, at its end, like git-blame.nvim"
+permissions = ["read-buffers", "process"]
+wasm = "plugin.wasm"
+
+# It runs git (plugins.toml):
+# [git-blame]
+# allow-process = ["git"]
