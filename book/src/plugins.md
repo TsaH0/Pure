@@ -46,7 +46,7 @@ Ready-made examples are in
 | `tree` | A file tree in a sidebar, like nvim-tree: `space B` shows it; `enter` opens files and folders |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
-| `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences); `toggle` |
+| `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
 ## Using plugins
 
@@ -75,8 +75,11 @@ e = ":oil/open"
 
 Plugins (API 0.3 and later) can highlight text, add virtual text and set gutter signs
 and statusline text; the `todos` example does all four. They can also draw
-characters over the text, shown as plain text on the cursor's line while you
-edit it; the `markdown` example renders Markdown that way. Signs and
+characters over the text and hide markup (`**`, link URLs), shown as plain
+text on the cursor's line and while inserting or selecting, like
+render-markdown.nvim; the `markdown` example renders Markdown that way.
+Hidden text is still in the document: motions, search and edits see it.
+Signs and
 statusline text only show where you ask for them:
 
 ```toml

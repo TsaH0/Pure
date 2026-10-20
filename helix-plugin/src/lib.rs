@@ -180,8 +180,13 @@ pub enum Decorations {
     Signs(Vec<(usize, String, String)>),
     /// `(char position of the line start, theme scope)`.
     LineBackgrounds(Vec<(usize, String)>),
+    /// `(char range within one line, replacement grapheme or empty, theme
+    /// scope)`, sorted, not overlapping.
+    Conceals(Vec<(std::ops::Range<usize>, String, String)>),
     /// Not a replacement: whether the layer is hidden on the cursor's line.
     RawOnCursorLine(bool),
+    /// Not a replacement: the modes the layer is drawn in (empty: all).
+    RenderModes(Vec<Mode>),
 }
 
 /// Most background tasks a plugin may have at once, and their default time
@@ -1708,6 +1713,60 @@ impl State {
     ) -> Result<(), String> {
         self.need_layer(doc, &layer, 0)?;
         self.decorate(doc, layer, Decorations::RawOnCursorLine(raw));
+        Ok(())
+    }
+
+    fn set_conceals(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        conceals: Vec<(u32, u32, String, String)>,
+    ) -> Result<(), String> {
+        use helix_core::graphemes::{ensure_grapheme_boundary_next, ensure_grapheme_boundary_prev};
+        use helix_core::unicode::segmentation::UnicodeSegmentation;
+
+        let len = self.need_layer(doc, &layer, conceals.len())?;
+        let text = self.document(doc)?.text.slice(..);
+        let mut checked = Vec::with_capacity(conceals.len());
+        for (from, to, replacement, scope) in conceals {
+            let (from, to) = (from as usize, to as usize);
+            if from > to || to > len {
+                return Err(format!(
+                    "invalid range {from}..{to} for a document of {len} chars"
+                ));
+            }
+            // Whole graphemes, never past the end of the line.
+            let from = ensure_grapheme_boundary_prev(text, from);
+            let line = text.char_to_line(from);
+            let line_end = helix_core::line_ending::line_end_char_index(&text, line);
+            let to = ensure_grapheme_boundary_next(text, to).min(line_end);
+            if from >= to {
+                continue;
+            }
+            let replacement = replacement.graphemes(true).next().unwrap_or("").to_string();
+            checked.push((from..to, replacement, scope));
+        }
+        checked.sort_by_key(|(range, ..)| (range.start, range.end));
+        let mut end = 0;
+        checked.retain(|(range, ..)| {
+            let keep = range.start >= end;
+            if keep {
+                end = range.end;
+            }
+            keep
+        });
+        self.decorate(doc, layer, Decorations::Conceals(checked));
+        Ok(())
+    }
+
+    fn set_render_modes(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        modes: Vec<Mode>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, 0)?;
+        self.decorate(doc, layer, Decorations::RenderModes(modes));
         Ok(())
     }
 

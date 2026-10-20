@@ -983,8 +983,22 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     helix_plugin::Decorations::LineBackgrounds(lines) => {
                         store.set_line_backgrounds(layer, lines, len)
                     }
+                    helix_plugin::Decorations::Conceals(conceals) => {
+                        store.set_conceals(layer, conceals, len)
+                    }
                     helix_plugin::Decorations::RawOnCursorLine(raw) => {
                         store.set_raw_on_cursor_line(layer, raw)
+                    }
+                    helix_plugin::Decorations::RenderModes(modes) => {
+                        let modes: Vec<_> = modes
+                            .into_iter()
+                            .map(|mode| match mode {
+                                helix_plugin::Mode::Normal => helix_view::document::Mode::Normal,
+                                helix_plugin::Mode::Insert => helix_view::document::Mode::Insert,
+                                helix_plugin::Mode::Select => helix_view::document::Mode::Select,
+                            })
+                            .collect();
+                        store.set_render_modes(layer, &modes)
                     }
                 }
                 helix_event::request_redraw();

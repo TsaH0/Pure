@@ -95,7 +95,11 @@ impl Display for Grapheme<'_> {
 
 #[must_use]
 pub fn grapheme_width(g: &str) -> usize {
-    if g.as_bytes()[0] <= 127 {
+    // Empty graphemes only come from concealed text that is hidden entirely.
+    let Some(&first_byte) = g.as_bytes().first() else {
+        return 0;
+    };
+    if first_byte <= 127 {
         // Fast-path ascii.
         // Point 1: theoretically, ascii control characters should have zero
         // width, but in our case we actually want them to have width: if they

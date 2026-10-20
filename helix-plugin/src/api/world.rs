@@ -302,6 +302,35 @@ macro_rules! world_adapters {
             ) -> std::result::Result<(), String> {
                 State::set_raw_on_cursor_line(self, doc, layer, raw)
             }
+            fn set_conceals(
+                &mut self,
+                doc: DocumentId,
+                layer: String,
+                conceals: Vec<decorations::Conceal>,
+            ) -> std::result::Result<(), String> {
+                let conceals = conceals
+                    .into_iter()
+                    .map(|c| (c.from, c.to, c.replacement, c.scope))
+                    .collect();
+                State::set_conceals(self, doc, layer, conceals)
+            }
+            fn set_render_modes(
+                &mut self,
+                doc: DocumentId,
+                layer: String,
+                modes: Vec<$w::helix::plugin::types::Mode>,
+            ) -> std::result::Result<(), String> {
+                use $w::helix::plugin::types::Mode as M;
+                let modes = modes
+                    .into_iter()
+                    .map(|mode| match mode {
+                        M::Normal => Mode::Normal,
+                        M::Insert => Mode::Insert,
+                        M::Select => Mode::Select,
+                    })
+                    .collect();
+                State::set_render_modes(self, doc, layer, modes)
+            }
             fn set_statusline(
                 &mut self,
                 segment: String,

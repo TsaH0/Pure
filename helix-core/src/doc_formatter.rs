@@ -24,7 +24,7 @@ use helix_stdx::rope::{RopeGraphemes, RopeSliceExt};
 use crate::graphemes::{Grapheme, GraphemeStr};
 use crate::syntax::Highlight;
 use crate::text_annotations::TextAnnotations;
-use crate::{Position, RopeSlice};
+use crate::{LineEnding, Position, RopeSlice};
 
 #[derive(Debug, Clone, Copy)]
 pub enum GraphemeSource {
@@ -265,13 +265,39 @@ impl<'t> DocumentFormatter<'t> {
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
 
-                let overlay = self.annotations.overlay_at(char_pos);
-                let grapheme = match overlay {
-                    Some((overlay, _)) => overlay.grapheme.as_str().into(),
-                    None => Cow::from(grapheme).into(),
-                };
+                if let Some(conceal) = self
+                    .annotations
+                    .conceal_at(char_pos)
+                    .filter(|_| LineEnding::from_rope_slice(&grapheme).is_none())
+                {
+                    // Swallow the hidden graphemes (never a line break) and
+                    // show them as one grapheme: the replacement, or nothing.
+                    let mut end = char_pos + codepoints as usize;
+                    while end < conceal.end {
+                        let mut rest = self.graphemes.clone();
+                        match rest.next() {
+                            Some(next) if LineEnding::from_rope_slice(&next).is_none() => {
+                                end += next.len_chars();
+                                self.graphemes = rest;
+                            }
+                            _ => break,
+                        }
+                    }
+                    self.annotations.skip_concealed(end);
+                    let codepoints = (end - char_pos) as u32;
+                    (
+                        conceal.replacement.as_str().into(),
+                        GraphemeSource::Document { codepoints },
+                    )
+                } else {
+                    let overlay = self.annotations.overlay_at(char_pos);
+                    let grapheme = match overlay {
+                        Some((overlay, _)) => overlay.grapheme.as_str().into(),
+                        None => Cow::from(grapheme).into(),
+                    };
 
-                (grapheme, GraphemeSource::Document { codepoints })
+                    (grapheme, GraphemeSource::Document { codepoints })
+                }
             } else {
                 if self.exhausted {
                     return None;

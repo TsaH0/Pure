@@ -7,8 +7,9 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 
 - Done: M0–M12. API 0.1 and 0.2 are frozen (compatibility fixtures in
   `helix-plugin/tests/fixtures`); API 0.3 is the current one.
-- Still open: the Future TODOs in the roadmap (conceal needs the owner's
-  approval of a design first; one item is blocked upstream).
+- Still open: the Future TODOs in the roadmap (one item is blocked
+  upstream). Conceal is done (render-markdown.nvim's behaviour, the owner's
+  choice).
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
   `helix-plugin/examples/` (`text-tools`, `finder`, `api-demo`, `todos`,
@@ -574,7 +575,7 @@ edits and dropped with their char).
 | Code blocks with the language | Yes (fence rule, label, block highlight) |
 | Raw text on the cursor line (anti-conceal) | Yes (`set-raw-on-cursor-line`: the editor follows the cursor, no events) |
 | Toggle | Yes (`markdown/toggle`, `space M`) |
-| Hiding `**`, backticks, link URLs (conceal) | **No**: Helix can't draw fewer chars than there are |
+| Hiding `**`, backticks, link URLs (conceal) | **No** at the time; done later (see "Conceal" below) |
 | Heading backgrounds across the whole window | Partly: highlight covers the text only |
 
 Gaps that would need editor work: conceal (a new kind of text annotation in
@@ -688,3 +689,42 @@ Pure 23.7–28.9 s, Pure with plugins 23.0–25.2 s): within noise.
   the previous build, shared and reclaimable, not allocations). Building
   with `--no-default-features --features git` drops Wasmtime entirely.
   With 10 plugins: +22 MiB (about 2 MiB per plugin instance).
+
+## Conceal (2026-10-20)
+
+The owner's decision on the open questions: "whatever render-markdown.nvim
+does". So:
+
+| Question | render-markdown.nvim | Pure |
+| --- | --- | --- |
+| Raw text: cursor line or cursor only? | the whole cursor line (`anti_conceal`) | the whole primary cursor line (`set-raw-on-cursor-line`) |
+| Lines with other selections raw too? | no (one cursor) | no: only the primary's line |
+| Insert mode? | not rendered (`render_modes = n, c, t`) | not rendered in insert or select (`set-render-modes [normal]`, per layer) |
+| Mouse click on hidden text? | hidden text has no cell | the same; a click on a replacement lands at the range's start |
+
+- `helix-core`: `text_annotations::Conceal` and `add_conceals`; the
+  formatter's `advance_grapheme` swallows a concealed range (never a line
+  break) into one grapheme drawn as the replacement (or nothing: width 0),
+  and moves inline annotations and overlays past it. Position mapping
+  (cursor, scrolling, mouse, soft wrap) goes through the formatter, so it
+  follows. Tests: rendering, positions, annotations inside hidden text, soft
+  wrap, `pos -> screen -> pos` round trips.
+- `helix-view`: a `conceals` layer in `PluginDecorations` (mapped through
+  edits; hidden text that is edited shows again), per-layer render modes,
+  and the mode the document was last drawn in (set by the renderer, so
+  motions between frames match the screen; per document, so parallel
+  editors in tests don't share it).
+- API: `decorations.set-conceals` and `set-render-modes` in 0.3 and 0.4
+  (imports only: frozen components still link). The host widens ranges to
+  whole graphemes, cuts them at the line's end, keeps one grapheme of the
+  replacement and drops overlaps.
+- `examples/markdown` hides `**`/`__`, `*`/`_`, `~~`, backticks and link
+  URLs (`[text](url)` shows `text`, `![alt](url)` shows `▣alt`), renders
+  only in normal mode, and keeps its incremental rendering (the property
+  test covers the new layers).
+- Checked in a terminal (pty + pyte): the cursor line is raw, the others
+  concealed; `i` shows everything raw; `esc` renders again.
+- No cost without plugins: an empty `PluginDecorations` is skipped as
+  before; the formatter checks an empty conceal list per document grapheme
+  (a loop over zero layers).
+

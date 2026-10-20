@@ -137,6 +137,17 @@ pub mod decorations {
         }
     }
 
+    /// Hide chars `from..to` (within one line), drawing `replacement`
+    /// instead: empty, or one grapheme such as `…`.
+    pub fn conceal(from: u32, to: u32, replacement: &str, scope: &str) -> Conceal {
+        Conceal {
+            from,
+            to,
+            replacement: replacement.into(),
+            scope: scope.into(),
+        }
+    }
+
     /// A one-character sign on a 0-based line.
     pub fn sign(line: u32, text: impl Into<String>, scope: &str) -> Sign {
         Sign {

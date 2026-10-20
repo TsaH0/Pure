@@ -1490,6 +1490,95 @@ async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Resu
     Ok(())
 }
 
+/// Line `line` of the focused document as drawn: with the view's
+/// annotations (conceals, overlays, virtual text) applied.
+fn shown_line(app: &Application, line: usize) -> String {
+    use helix_core::doc_formatter::{DocumentFormatter, TextFormat};
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let annotations = view.text_annotations(doc, Some(&app.editor.theme));
+    let text = doc.text().slice(..);
+    let start = text.line_to_char(line);
+    let format = TextFormat {
+        viewport_width: 200,
+        ..TextFormat::default()
+    };
+    let mut shown = String::new();
+    for grapheme in DocumentFormatter::new_at_prev_checkpoint(text, &format, &annotations, start) {
+        if grapheme.line_idx != line || grapheme.raw == helix_core::graphemes::Grapheme::Newline {
+            break;
+        }
+        shown.push_str(&grapheme.raw.to_string());
+    }
+    shown
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_example_conceals_markup_like_render_markdown() -> anyhow::Result<()> {
+    use helix_view::document::Mode;
+    let file = tempfile::Builder::new().suffix(".md").tempfile()?;
+    std::fs::write(
+        file.path(),
+        "a **b** `c`\nsee [docs](https://x.y/z) now\n- *it*\n",
+    )?;
+    let mut app = AppBuilder::new()
+        .with_file(file.path(), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("markdown");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/markdown").join(file),
+            plugin.join(file),
+        )?;
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, "ia<esc>u").await;
+    deliver_events(&mut app).await;
+    // What the renderer does each frame.
+    let set_mode = |app: &Application, mode| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .set_render_mode(mode)
+    };
+    set_mode(&app, Mode::Normal);
+
+    // The primary cursor's line is raw; the others are rendered.
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    assert_eq!(shown_line(&app, 1), "see docs now");
+    assert_eq!(shown_line(&app, 2), "• it");
+
+    // Moving the cursor moves the raw line; the plugin is not involved.
+    keys(&mut app, "j").await;
+    assert_eq!(shown_line(&app, 0), "a b c");
+    assert_eq!(shown_line(&app, 1), "see [docs](https://x.y/z) now");
+
+    // Other selections don't reveal their lines: `C` adds a selection on
+    // line 2 and makes it primary, so line 1 is rendered again.
+    keys(&mut app, "C").await;
+    assert_eq!(
+        helix_view::doc!(app.editor)
+            .selection(app.editor.tree.focus)
+            .len(),
+        2
+    );
+    assert_eq!(shown_line(&app, 1), "see docs now");
+    assert_eq!(shown_line(&app, 2), "- *it*");
+    keys(&mut app, ",").await;
+
+    // Nothing is rendered while inserting or selecting.
+    set_mode(&app, Mode::Insert);
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    assert_eq!(shown_line(&app, 2), "- *it*");
+    set_mode(&app, Mode::Select);
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    set_mode(&app, Mode::Normal);
+    assert_eq!(shown_line(&app, 0), "a b c");
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn plugin_keys_only_fill_free_keys() -> anyhow::Result<()> {
     let mut app = AppBuilder::new()

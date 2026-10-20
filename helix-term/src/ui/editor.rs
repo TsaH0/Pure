@@ -94,6 +94,9 @@ impl EditorView {
 
         let view_offset = doc.view_offset(view.id);
 
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations.set_render_mode(editor.mode());
+        }
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
 
@@ -168,6 +171,11 @@ impl EditorView {
                 cursor_line,
                 &mut overlays,
             );
+            if text_annotations.has_conceals() {
+                overlays.push(
+                    text_annotations.collect_conceal_highlights(text.line_to_char(first)..end),
+                );
+            }
         }
 
         if is_focused {

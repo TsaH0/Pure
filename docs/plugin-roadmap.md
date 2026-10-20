@@ -537,7 +537,7 @@ What plugins still can't do, and why:
 | --- | --- |
 | Sidebars, file trees, outlines (nvim-tree) | Done (API 0.4): `sidebar` interface, `examples/tree`. Other panes (bottom panels, floating windows with their own keys) still aren't. |
 | Embedded terminals (toggleterm) | Not possible: no terminal emulator in Helix. `run-interactive` hands over the whole terminal instead. |
-| Conceal (hide `**`, link URLs) | TODO below: needs `DocumentFormatter` support. |
+| Conceal (hide `**`, link URLs) | Done: `set-conceals` + `set-render-modes` (imports in 0.3 and 0.4), `examples/markdown`. |
 | Folding | Not possible: Helix has no folds. |
 | Custom UI components (dashboards with layout) | Not possible beyond popups (markdown) and pickers. |
 | Debug adapters, language servers | Use Helix's own DAP and LSP support (`languages.toml`). |
@@ -552,8 +552,9 @@ What plugins still can't do, and why:
 Tasks in one batch touch the same code, so give each batch to one agent.
 
 1. **Done:** M0–M12 (see `plugin-progress.md`).
-2. **Open, no owner review needed:** the Future TODOs below except conceal.
-3. **Needs the owner first:** conceal (write the proposal, then stop).
+2. **Open, no owner review needed:** the Future TODOs below.
+3. **Done after the owner's decision:** conceal ("whatever
+   render-markdown.nvim does").
 4. **Compatibility rule since 0.3 is on master:** new *imports* (host
    functions) may still be added to API 0.3; anything that needs a new
    *export* (a callback or event handler the plugin must implement) goes
@@ -620,11 +621,15 @@ Small, self-contained; each one is a good single task.
   (`fuzzing_through_the_abi`, 300 seeds).
 - [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
-- [ ] **Conceal decorations:** hide ranges of text (for Markdown `**`,
-  backticks, link URLs). Design written:
-  [`plugin-conceal-proposal.md`](plugin-conceal-proposal.md). **Waiting for
-  the owner's approval** of its open questions (raw line scope, secondary
-  selections, insert mode, mouse) before implementing.
+- [x] **Conceal decorations:** `decorations.set-conceals` and
+  `set-render-modes` (imports, so API 0.3 has them too). The owner chose
+  render-markdown.nvim's behaviour: the primary cursor's line is raw (other
+  selections don't reveal), nothing renders in insert/select modes (per
+  layer, `set-render-modes`), a click on a replacement lands at the range's
+  start. Formatter support in `helix-core` (`text_annotations::Conceal`,
+  one branch in `DocumentFormatter::advance_grapheme`); design and
+  decisions in [`plugin-conceal-proposal.md`](plugin-conceal-proposal.md).
+  `examples/markdown` hides `**`, `*`, `~~`, backticks and link URLs.
 - [x] **Sidebar (API 0.4):** `sidebar.show/close/focus/selected`. One
   sidebar (`Editor::sidebar`, `helix_view::sidebar`) left of the views; the
   editor area shrinks only while it's shown. Items run the owner's commands

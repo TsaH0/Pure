@@ -3866,3 +3866,59 @@ fn api_04_file_operations_are_checked_and_answered() {
         .unwrap_err();
     assert!(err.to_string().contains("outside"), "{err}");
 }
+
+#[test]
+fn conceals_are_checked_against_the_text() {
+    let mut state = State::background("md", 1 << 20);
+    let doc = DocumentId::from(1u32);
+    state.snapshot.documents.insert(
+        doc,
+        DocumentSnapshot {
+            text: Rope::from("ae\u{301}b\nnext\n"),
+            path: None,
+            language: None,
+            selection: None,
+            modified: false,
+            owner: None,
+        },
+    );
+    state
+        .set_conceals(
+            doc,
+            "c".into(),
+            vec![
+                // inside `é` (e + combining accent): widened to whole graphemes
+                (2, 3, "…x".into(), "s".into()),
+                // crosses the line break: cut at the line's end
+                (3, 7, "".into(), "s".into()),
+                // overlaps the first: dropped
+                (1, 2, "".into(), "s".into()),
+                // empty: dropped
+                (6, 6, "".into(), "s".into()),
+            ],
+        )
+        .unwrap();
+    let Some(Action::Decorate { decorations, .. }) = state.actions.pop() else {
+        panic!("no decorations");
+    };
+    assert_eq!(
+        decorations,
+        Decorations::Conceals(vec![
+            (1..3, "…".into(), "s".into()),
+            (3..4, "".into(), "s".into()),
+        ])
+    );
+    assert!(state
+        .set_conceals(doc, "c".into(), vec![(5, 99, "".into(), "s".into())])
+        .is_err());
+    state
+        .set_render_modes(doc, "c".into(), vec![Mode::Normal])
+        .unwrap();
+    assert!(matches!(
+        state.actions.pop(),
+        Some(Action::Decorate {
+            decorations: Decorations::RenderModes(modes),
+            ..
+        }) if modes == [Mode::Normal]
+    ));
+}

@@ -467,7 +467,21 @@ decorations::set_statusline("count", "3 todos")?;
   line break puts it at the end of the line. No line breaks in the text.
 - Overlays (`set_overlays`, `decorations::overlay`) draw other characters
   *over* the text (one over each char), e.g. `◉` over `#`; the text itself
-  is unchanged. Hiding characters (conceal) isn't possible.
+  is unchanged.
+- Conceals (`set_conceals`, `decorations::conceal`) hide text: Markdown's
+  `**`, a link's URL. The replacement is empty or one grapheme (`…`, `α`)
+  styled with the scope. A conceal stays within one line (cut at its end)
+  and is widened to whole graphemes; overlapping ones: the first wins. The
+  text is still there: motions, search and edits act on it, a click on a
+  replacement lands at the hidden range's start, and editing inside hidden
+  text shows it until the plugin sets the layer again. Pair it with
+  `set_raw_on_cursor_line` so the line being edited shows everything.
+- `set_raw_on_cursor_line(doc, layer, true)` hides a layer on the primary
+  cursor's line (other selections don't reveal theirs), and
+  `set_render_modes(doc, layer, &[Mode::Normal])` draws it only in those
+  modes: together, render-markdown.nvim's behaviour (raw while inserting
+  or selecting, raw on the cursor line). Both are kept by the editor, so
+  the plugin needs no cursor or mode events.
 - Signs are one character on a line, shown in the `plugins` gutter, which
   users add to `editor.gutters`.
 - Line backgrounds (`set_line_backgrounds`, `decorations::line_background`)

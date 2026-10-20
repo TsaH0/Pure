@@ -1,8 +1,11 @@
-# Proposal: conceal decorations (needs the owner's approval)
+# Conceal decorations
 
-Status: **design only**. Nothing here is implemented; the roadmap's
-"Conceal decorations" TODO stays open until the owner approves (or changes)
-this design.
+Status: **implemented** (2026-10-20). The owner's answer to the open
+questions below: "whatever render-markdown.nvim does" (see "Decisions").
+What changed from this proposal: the API names `set-conceals` and
+`set-render-modes`; the replacement is drawn as a document grapheme (not
+virtual text) so selections and clicks act on the hidden range; only the
+*primary* cursor's line is raw.
 
 ## What it is for
 
@@ -71,7 +74,17 @@ every consumer stays consistent if it goes through it:
 | Diagnostics, highlights, overlays inside hidden text | not drawn (their cells don't exist); diagnostics still show in the gutter and pickers |
 | Horizontal scrolling (`soft-wrap` off) | the offset counts shown columns |
 
-## Behaviour to agree on first
+## Decisions (render-markdown.nvim's behaviour)
+
+1. Raw text on the whole primary cursor line (`anti_conceal`).
+2. Lines with secondary selections stay rendered.
+3. Insert (and select) mode: nothing rendered, per layer
+   (`set-render-modes [normal]`, like `render_modes = { 'n', 'c', 't' }`).
+4. Select mode: as 3.
+5. Mouse: hidden text has no cell; a click on a replacement lands at the
+   range's start.
+
+## Behaviour that was open (answered above)
 
 1. Raw cursor line: per line (proposed), or only the concealed range under
    the cursor (Neovim's `concealcursor` variants)? Per line is simpler and

@@ -3,12 +3,16 @@
 //!
 //! Headings get an icon per level and their colour, bullets become `•`,
 //! checkboxes `☐` / `✔`, quotes `▋`, code fences a rule with the language,
-//! `---` a full-width rule, and tables box-drawing borders. The line with the
-//! cursor shows the raw text, so it can be edited as usual: the editor does
+//! `---` a full-width rule, and tables box-drawing borders. Inline markup is
+//! hidden (concealed): `**bold**`, `*italic*`, `~~struck~~` and `` `code` ``
+//! show without their markers, and `[text](url)` as just `text`. The line
+//! with the cursor shows the raw text, so it can be edited as usual: the editor does
 //! that itself (`set-raw-on-cursor-line`), so moving the cursor costs the
 //! plugin nothing and it only re-renders on edits. Characters are
 //! drawn *over* the markup (overlays), so the text itself never changes;
-//! `markdown/toggle` (`space M`) turns rendering off and on.
+//! `markdown/toggle` (`space M`) turns rendering off and on. As in
+//! render-markdown.nvim, nothing is rendered while inserting or selecting
+//! (`set-render-modes`), and only the primary cursor's line is raw.
 //!
 //! Settings in `plugins.toml`:
 //!
@@ -19,16 +23,12 @@
 //! ```
 //!
 //! Code blocks get a background across the whole window width.
-//!
-//! Not possible in Pure (yet): hiding markup such as `**` or the link URL of
-//! `[text](url)` (concealing), since Helix has no way to draw fewer
-//! characters than there are.
 
 use std::cell::Cell;
 
 use helix_plugin_api::{
-    decorations::{self, annotation, highlight, overlay, Annotation, Highlight},
-    editor, register_plugin, text, CommandInfo, DocumentId, EventKind, Plugin, Registration,
+    decorations::{self, annotation, conceal, highlight, overlay, Annotation, Conceal, Highlight},
+    editor, register_plugin, text, CommandInfo, DocumentId, EventKind, Mode, Plugin, Registration,
 };
 
 thread_local! {
@@ -49,6 +49,11 @@ struct Rendered {
     annotations: Vec<Annotation>,
     /// Whole-line backgrounds (code blocks).
     blocks: Vec<decorations::LineBackground>,
+    /// Inline markup styles (bold, code, links), a layer of their own so
+    /// they can sit inside a heading's or quote's highlight.
+    inline: Vec<Highlight>,
+    /// Hidden markers and URLs.
+    conceals: Vec<Conceal>,
 }
 
 impl Rendered {
@@ -147,6 +152,8 @@ fn render_update(old: Cache, source: String) -> Cache {
         overlays: old.out.overlays.iter().filter(|o| o.position < cut).cloned().collect(),
         annotations: old.out.annotations.iter().filter(|a| a.position < cut).cloned().collect(),
         blocks: old.out.blocks.iter().filter(|b| (b.line as usize) < prefix).cloned().collect(),
+        inline: old.out.inline.iter().filter(|h| h.from < cut).cloned().collect(),
+        conceals: old.out.conceals.iter().filter(|c| c.from < cut).cloned().collect(),
     };
     let mut in_code = old.in_code[..=prefix].to_vec();
     let mut state = in_code[prefix];
@@ -175,6 +182,13 @@ fn render_update(old: Cache, source: String) -> Cache {
             for a in old.out.annotations.iter().filter(|a| a.position >= from) {
                 out.annotations
                     .push(annotation(shift(a.position), a.text.clone(), &a.scope));
+            }
+            for h in old.out.inline.iter().filter(|h| h.from >= from) {
+                out.inline.push(highlight(shift(h.from), shift(h.to), &h.scope));
+            }
+            for c in old.out.conceals.iter().filter(|c| c.from >= from) {
+                out.conceals
+                    .push(conceal(shift(c.from), shift(c.to), &c.replacement, &c.scope));
             }
             for b in old.out.blocks.iter().filter(|b| b.line as usize >= old_line) {
                 out.blocks.push(decorations::line_background(
@@ -233,6 +247,7 @@ fn render_line(out: &mut Rendered, number: usize, line: &str, start: u32, in_cod
         let marker = format!("{}{}", HEADINGS[hashes - 1], " ".repeat(hashes - 1));
         out.over(at(indent), marker, &scope);
         out.highlights.push(highlight(at(indent + hashes), start + len, &scope));
+        render_inline(out, &rest[hashes..], at(indent + hashes));
         return;
     }
 
@@ -254,6 +269,7 @@ fn render_line(out: &mut Rendered, number: usize, line: &str, start: u32, in_cod
     if rest.starts_with('>') {
         out.over(at(indent), "▋", "markup.quote");
         out.highlights.push(highlight(at(indent + 1), start + len, "markup.quote"));
+        render_inline(out, &rest[1..], at(indent + 1));
         return;
     }
 
@@ -286,6 +302,7 @@ fn render_line(out: &mut Rendered, number: usize, line: &str, start: u32, in_cod
                     out.over(at(indent + i), "│", "comment");
                 }
             }
+            render_inline(out, rest, at(indent));
         }
         return;
     }
@@ -308,6 +325,104 @@ fn render_line(out: &mut Rendered, number: usize, line: &str, start: u32, in_cod
             }
             None => out.over(at(indent), BULLETS[level].to_string(), "markup.list"),
         }
+        render_inline(out, after, at(indent + 2));
+        return;
+    }
+
+    render_inline(out, rest, at(indent));
+}
+
+/// Hide inline markup in `text` (starting at char `start`) and style what it
+/// marks: `**bold**`, `*italic*`, `~~struck~~`, `` `code` ``, `[text](url)`
+/// and `![alt](url)`. Not nested: what is inside a span is shown as is.
+fn render_inline(out: &mut Rendered, text: &str, start: u32) {
+    let chars: Vec<char> = text.chars().collect();
+    let at = |i: usize| start + i as u32;
+    let run = |i: usize, c: char| chars[i..].iter().take_while(|&&x| x == c).count();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\\' => {
+                i += 2;
+                continue;
+            }
+            '`' => {
+                let n = run(i, '`');
+                // The closing run of as many backticks.
+                let close = (i + n..chars.len())
+                    .find(|&j| run(j, '`') == n && (j == 0 || chars[j - 1] != '`'));
+                if let Some(j) = close {
+                    out.conceals.push(conceal(at(i), at(i + n), "", "markup.raw.inline"));
+                    out.conceals.push(conceal(at(j), at(j + n), "", "markup.raw.inline"));
+                    out.inline.push(highlight(at(i + n), at(j), "markup.raw.inline"));
+                    i = j + n;
+                    continue;
+                }
+                i += n;
+                continue;
+            }
+            '*' | '_' | '~' => {
+                let n = run(i, c).min(3);
+                let full = run(i, c);
+                let opens = chars.get(i + full).is_some_and(|x| !x.is_whitespace())
+                    && (c != '_' || i == 0 || !chars[i - 1].is_alphanumeric());
+                if !opens || (c == '~' && n != 2) {
+                    i += full;
+                    continue;
+                }
+                let close = (i + full + 1..chars.len()).find(|&j| {
+                    run(j, c) >= n
+                        && !chars[j - 1].is_whitespace()
+                        && (c != '_' || chars.get(j + n).is_none_or(|x| !x.is_alphanumeric()))
+                });
+                if let Some(j) = close {
+                    let scope = match (c, n) {
+                        ('~', _) => "markup.strikethrough",
+                        (_, 1) => "markup.italic",
+                        _ => "markup.bold",
+                    };
+                    out.conceals.push(conceal(at(i), at(i + n), "", scope));
+                    out.conceals.push(conceal(at(j), at(j + n), "", scope));
+                    out.inline.push(highlight(at(i + n), at(j), scope));
+                    i = j + n;
+                    continue;
+                }
+                i += full;
+                continue;
+            }
+            '[' | '!' => {
+                let open = if c == '!' { i + 1 } else { i };
+                if chars.get(open) != Some(&'[') {
+                    i += 1;
+                    continue;
+                }
+                let Some(close) = (open + 1..chars.len()).find(|&j| chars[j] == ']') else {
+                    i += 1;
+                    continue;
+                };
+                let url_end = (chars.get(close + 1) == Some(&'('))
+                    .then(|| (close + 2..chars.len()).find(|&j| chars[j] == ')'))
+                    .flatten();
+                let Some(url_end) = url_end else {
+                    i = close + 1;
+                    continue;
+                };
+                // `![alt](url)`: an image icon instead of `![`.
+                let (marker, scope) = if c == '!' {
+                    ("▣", "markup.link.label")
+                } else {
+                    ("", "markup.link.text")
+                };
+                out.conceals.push(conceal(at(i), at(open + 1), marker, "markup.link.url"));
+                out.conceals.push(conceal(at(close), at(url_end + 1), "", "markup.link.url"));
+                out.inline.push(highlight(at(open + 1), at(close), scope));
+                i = url_end + 1;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
     }
 }
 
@@ -332,11 +447,17 @@ fn update(doc: DocumentId) -> Result<(), String> {
         CACHE.with_borrow_mut(|cache| cache.remove(&doc));
         Rendered::default()
     };
-    // The cursor's line stays raw; the editor follows the cursor.
-    for layer in ["text", "marks", "rules"] {
+    // The cursor's line stays raw (the editor follows the cursor), and
+    // nothing is drawn while inserting or selecting.
+    for layer in ["text", "marks", "rules", "inline", "conceal"] {
         decorations::set_raw_on_cursor_line(doc, layer, true)?;
     }
+    for layer in ["text", "marks", "rules", "inline", "conceal", "blocks"] {
+        decorations::set_render_modes(doc, layer, &[Mode::Normal])?;
+    }
     decorations::set_highlights(doc, "text", &rendered.highlights)?;
+    decorations::set_highlights(doc, "inline", &rendered.inline)?;
+    decorations::set_conceals(doc, "conceal", &rendered.conceals)?;
     decorations::set_overlays(doc, "marks", &rendered.overlays)?;
     decorations::set_line_backgrounds(doc, "blocks", &rendered.blocks)?;
     decorations::set_annotations(doc, "rules", &rendered.annotations)
@@ -422,6 +543,48 @@ mod test {
         let blocks: Vec<_> = out.blocks.iter().map(|b| b.line).collect();
         assert_eq!(blocks, [7, 8, 9]);
     }
+
+    #[test]
+    fn conceals_inline_markup() {
+        let out = render("é **b** `c` [d](u) snake_case *i* ~~s~~ ![a](p)\n");
+        let hidden: Vec<_> = out
+            .conceals
+            .iter()
+            .map(|c| (c.from, c.to, c.replacement.as_str()))
+            .collect();
+        assert_eq!(
+            hidden,
+            [
+                (2, 4, ""),
+                (5, 7, ""),
+                (8, 9, ""),
+                (10, 11, ""),
+                (12, 13, ""),
+                (14, 18, ""),
+                (30, 31, ""),
+                (32, 33, ""),
+                (34, 36, ""),
+                (37, 39, ""),
+                (40, 42, "▣"),
+                (43, 47, ""),
+            ]
+        );
+        let styled: Vec<_> = out.inline.iter().map(|h| (h.from, h.to, h.scope.as_str())).collect();
+        assert_eq!(
+            styled,
+            [
+                (4, 5, "markup.bold"),
+                (9, 10, "markup.raw.inline"),
+                (13, 14, "markup.link.text"),
+                (31, 32, "markup.italic"),
+                (36, 37, "markup.strikethrough"),
+                (42, 43, "markup.link.label"),
+            ]
+        );
+        // Markers inside code are not concealed; unclosed ones stay.
+        let out = render("`**x**` and **open\n");
+        assert_eq!(out.conceals.len(), 2);
+    }
 }
 
 
@@ -436,6 +599,8 @@ mod incremental {
         all.extend(out.overlays.iter().map(|o| format!("o{} {} {}", o.position, o.text, o.scope)));
         all.extend(out.annotations.iter().map(|a| format!("a{} {} {}", a.position, a.text, a.scope)));
         all.extend(out.blocks.iter().map(|b| format!("b{} {}", b.line, b.scope)));
+        all.extend(out.inline.iter().map(|h| format!("i{} {} {}", h.from, h.to, h.scope)));
+        all.extend(out.conceals.iter().map(|c| format!("c{} {} {}", c.from, c.to, c.replacement)));
         all.sort();
         all
     }
@@ -445,6 +610,7 @@ mod incremental {
         let pieces = [
             "# Title\n", "- item\n", "  - [x] done\n", "> quote\n", "---\n", "| a | b |\n",
             "|---|---|\n", "```rust\n", "let x;\n", "```\n", "text\n", "\n", "~~~\n", "é ✓\n",
+            "a **b** `c` [d](e)\n", "- *é* ~~x~~\n",
         ];
         let mut seed: u64 = 42;
         let mut next = |n: usize| {
