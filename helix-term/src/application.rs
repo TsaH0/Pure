@@ -370,7 +370,10 @@ impl Application {
                     }
                     self.render().await;
                 }
-                _ = self.auto_reload_timer.tick() => {
+                // Only polled (so only waking the editor) while there are
+                // files to check.
+                _ = self.auto_reload_timer.tick(), if self.editor.config().auto_reload
+                    && self.editor.documents.values().any(|doc| doc.path().is_some()) => {
                     if self.editor.reload_changed_documents() {
                         self.render().await;
                     }

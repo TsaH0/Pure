@@ -50,7 +50,7 @@
 | `completion-trigger-len` | The min-length of word under cursor to trigger autocompletion | `2` |
 | `completion-replace` | Whether to make completions always replace the entire word and not just the part before the cursor | `false` |
 | `directory-handler` | A plugin command that opens directories passed on the command line or to `:open` (it gets the directory as its argument), e.g. `"oil/open"`. Without it, or if it fails, the file picker opens | unset |
-| `auto-reload` | Reload files other programs change on disk, like Vim's `autoread`: buffers without unsaved changes follow the file; for the others you get a warning (`:reload` takes the disk's version, `:w!` keeps yours). Checked every second and when the terminal regains focus | `true` |
+| `auto-reload` | Reload files other programs change on disk, like Vim's `autoread`: buffers without unsaved changes follow the file; for the others you get a warning (`:reload` takes the disk's version, `:w!` keeps yours). Checked every second (only while a file is open; it costs one `stat` per open file) and when the terminal regains focus. FIFOs and devices are never read | `true` |
 | `auto-info` | Whether to display info boxes | `true` |
 | `true-color` | Whether to override automatic detection of terminal truecolor support in the event of a false negative | `false` |
 | `undercurl` | Whether to override automatic detection of terminal undercurl support in the event of a false negative | `false` |

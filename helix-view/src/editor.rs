@@ -1558,7 +1558,12 @@ impl Editor {
             .documents
             .values()
             .filter_map(|doc| {
-                let mtime = doc.path()?.metadata().ok()?.modified().ok()?;
+                let metadata = doc.path()?.metadata().ok()?;
+                // Reading a FIFO or a device would block the editor.
+                if !metadata.is_file() {
+                    return None;
+                }
+                let mtime = metadata.modified().ok()?;
                 (mtime != doc.last_saved_time()).then_some((doc.id(), mtime))
             })
             .collect();
