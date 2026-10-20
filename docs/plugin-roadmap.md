@@ -652,8 +652,15 @@ Small, self-contained; each one is a good single task.
   buffers saved only when everything succeeded; otherwise the edits stay
   and what did succeed isn't repeated. `trash = true` in oil's settings.
   API 0.3 is frozen (`testplugin3-v0.3.wasm`, `oil-v0.3.wasm`).
-- [ ] **Incremental Markdown rendering:** re-render only the changed lines
-  (see the overhead numbers in `plugin-progress.md`).
+- [x] **Incremental Markdown rendering:** the example caches its last
+  rendering per document; an edit re-renders from the first changed line
+  until the code-fence state agrees with the old rendering, and the rest is
+  reused, moved by the edit (a property test checks it against full
+  renders). The text still crosses the boundary and layers are still
+  replaced whole: a plugin can't know what changed without reading the
+  text. If that ever shows up in profiles, the next step is API: the
+  changed line range in `on-document-change` and line-range layer
+  updates.
 
 ## Guidelines for agents (lessons from earlier work)
 
