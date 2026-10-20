@@ -491,6 +491,11 @@ impl View {
                 .add_inline_annotations(other_inlay_hints, other_style)
                 .add_inline_annotations(padding_after_inlay_hints, None);
         };
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations
+                .annotate(theme, &mut text_annotations);
+        }
+
         let config = doc.config.load();
 
         if config.lsp.display_color_swatches {

@@ -3136,3 +3136,117 @@ fn finder_grep_cancels_old_queries_and_opens_the_reported_position() {
         matches!(&actions[..], [Action::OpenFileAt { path, action: OpenAction::Vsplit, line: Some(2), column: Some(3) }] if path == Path::new("/work/src/a b.rs"))
     );
 }
+
+#[test]
+fn decorations_are_validated() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    let state = host.plugins[0].store.data_mut();
+    state.snapshot = snapshot("ab\ncd\n", 0, 0);
+    state.context = CallContext::Event;
+
+    // Valid: one action per layer; signs become line-start positions.
+    state
+        .set_highlights(1, "words".into(), vec![(0, 2, "warning".into())])
+        .unwrap();
+    state
+        .set_annotations(1, "notes".into(), vec![(2, " x".into(), "comment".into())])
+        .unwrap();
+    state
+        .set_signs(
+            1,
+            "lines".into(),
+            vec![(1, "●more".into(), "warning".into())],
+        )
+        .unwrap();
+    state
+        .set_statusline("count".into(), "2\ttodos".into())
+        .unwrap();
+    let actions = std::mem::take(&mut state.actions);
+    assert!(matches!(
+        &actions[2],
+        Action::Decorate { decorations: Decorations::Signs(signs), .. }
+            if signs == &[(3, "●".to_string(), "warning".to_string())]
+    ));
+    assert!(matches!(
+        &actions[3],
+        Action::StatusLine { segment, text, .. } if segment == "count" && text == "2 todos"
+    ));
+
+    // Invalid: out of range, unknown document, bad names, line breaks.
+    let err = |r: Result<(), String>| r.unwrap_err();
+    assert!(
+        err(state.set_highlights(1, "l".into(), vec![(5, 9, "s".into())]))
+            .contains("invalid range")
+    );
+    assert!(
+        err(state.set_highlights(1, "l".into(), vec![(2, 1, "s".into())]))
+            .contains("invalid range")
+    );
+    assert!(err(state.set_highlights(9, "l".into(), vec![])).contains("no document"));
+    assert!(err(state.set_highlights(1, "".into(), vec![])).contains("invalid layer"));
+    assert!(err(state.set_highlights(1, "a/b".into(), vec![])).contains("invalid layer"));
+    assert!(
+        err(state.set_annotations(1, "l".into(), vec![(99, "x".into(), "s".into())]))
+            .contains("invalid position")
+    );
+    assert!(
+        err(state.set_annotations(1, "l".into(), vec![(0, "a\nb".into(), "s".into())]))
+            .contains("line breaks")
+    );
+    assert!(
+        err(state.set_signs(1, "l".into(), vec![(7, "x".into(), "s".into())]))
+            .contains("invalid line")
+    );
+    assert!(err(state.set_statusline("".into(), "x".into())).contains("invalid segment"));
+    let long = "x".repeat(MAX_STATUSLINE + 50);
+    state.set_statusline("s".into(), long).unwrap();
+    assert!(matches!(
+        state.actions.last(),
+        Some(Action::StatusLine { text, .. }) if text.chars().count() == MAX_STATUSLINE
+    ));
+}
+
+#[test]
+fn todos_example_decorates_documents() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("todos");
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(fixture(&format!("examples/todos/{file}")), dir.join(file)).unwrap();
+    }
+    host.load(&dir, "{}").unwrap();
+    let results = host.dispatch(
+        Event::DocumentOpen(1),
+        &snapshot("x // TODO a\ny\n// FIXME b\n", 0, 0),
+    );
+    let actions = results[0].1.as_ref().unwrap();
+    let decorations: Vec<_> = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Decorate {
+                layer, decorations, ..
+            } => Some((layer.as_str(), decorations)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        decorations[0],
+        (
+            "words",
+            &Decorations::Highlights(vec![(5..9, "warning".into()), (17..22, "error".into())])
+        )
+    );
+    assert!(matches!(decorations[1], ("lines", Decorations::Signs(signs)) if signs.len() == 2));
+    // End-of-line notes go at the line breaks (offsets 11 and 24).
+    assert!(matches!(
+        decorations[2],
+        ("notes", Decorations::Annotations(notes))
+            if notes.iter().map(|n| n.0).collect::<Vec<_>>() == [11, 24]
+    ));
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::StatusLine { text, .. } if text == "2 todos")));
+}

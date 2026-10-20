@@ -153,6 +153,7 @@ where
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
         helix_view::editor::StatusLineElement::CodeActionHint => render_code_action_hint,
+        helix_view::editor::StatusLineElement::Plugins => render_plugins,
     }
 }
 
@@ -519,6 +520,24 @@ where
     let style = context.editor.theme.get("ui.statusline.separator");
 
     write(context, Span::styled(sep.to_string(), style));
+}
+
+/// What plugins put in the statusline, segment by segment.
+fn render_plugins<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let text = context
+        .editor
+        .plugin_statusline
+        .values()
+        .filter(|text| !text.is_empty())
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("  ");
+    if !text.is_empty() {
+        write(context, format!(" {text} ").into());
+    }
 }
 
 fn render_spacer<'a, F>(context: &mut RenderContext<'a>, write: F)

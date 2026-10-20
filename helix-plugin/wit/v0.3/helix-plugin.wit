@@ -249,10 +249,50 @@ interface events {
   on-editor-idle: func();
 }
 
+/// How documents look: highlights, virtual text, gutter signs and the
+/// statusline. Each plugin's decorations are in layers it names; setting a
+/// layer replaces it, an empty list clears it. Positions are char offsets
+/// into the text the call sees, and follow the user's edits afterwards.
+/// Available from commands, callbacks and event handlers.
+interface decorations {
+  use types.{document-id};
+
+  record highlight {
+    %from: u32,
+    to: u32,
+    /// A theme scope, e.g. `diff.plus`, `warning` or `ui.cursor.match`.
+    scope: string,
+  }
+  /// Overlapping highlights in one layer: the first (by position) wins.
+  set-highlights: func(doc: document-id, layer: string, highlights: list<highlight>) -> result<_, string>;
+
+  record annotation {
+    /// Shown before the char at this offset; the offset of a line's end
+    /// (its newline) puts it at the end of the line.
+    position: u32,
+    text: string,
+    scope: string,
+  }
+  set-annotations: func(doc: document-id, layer: string, annotations: list<annotation>) -> result<_, string>;
+
+  record sign {
+    /// 0-based line.
+    line: u32,
+    /// One character, shown in the `plugins` gutter (`editor.gutters`).
+    text: string,
+    scope: string,
+  }
+  set-signs: func(doc: document-id, layer: string, signs: list<sign>) -> result<_, string>;
+
+  /// Text for the `plugins` statusline element; empty removes the segment.
+  set-statusline: func(segment: string, text: string) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
   import ui;
+  import decorations;
   export plugin;
   export callbacks;
   export events;

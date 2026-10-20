@@ -1,7 +1,7 @@
 //! API 0.3 adapters. Older worlds retain their generated types unchanged.
 use super::{types, v0_3, CommandInfo, DocumentId, Event, EventKind, Mode, State};
 use crate::{Callback, OpenAction};
-use v0_3::helix::plugin::{process, ui};
+use v0_3::helix::plugin::{decorations, process, ui};
 use wasmtime::{Result, Store};
 
 impl v0_3::helix::plugin::types::Host for State {}
@@ -183,6 +183,48 @@ impl process::Host for State {
         State::kill(self, id)
     }
 }
+impl decorations::Host for State {
+    fn set_highlights(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        highlights: Vec<decorations::Highlight>,
+    ) -> std::result::Result<(), String> {
+        let highlights = highlights
+            .into_iter()
+            .map(|h| (h.from, h.to, h.scope))
+            .collect();
+        State::set_highlights(self, doc, layer, highlights)
+    }
+    fn set_annotations(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        annotations: Vec<decorations::Annotation>,
+    ) -> std::result::Result<(), String> {
+        let annotations = annotations
+            .into_iter()
+            .map(|a| (a.position, a.text, a.scope))
+            .collect();
+        State::set_annotations(self, doc, layer, annotations)
+    }
+    fn set_signs(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        signs: Vec<decorations::Sign>,
+    ) -> std::result::Result<(), String> {
+        let signs = signs
+            .into_iter()
+            .map(|s| (s.line, s.text, s.scope))
+            .collect();
+        State::set_signs(self, doc, layer, signs)
+    }
+    fn set_statusline(&mut self, segment: String, text: String) -> std::result::Result<(), String> {
+        State::set_statusline(self, segment, text)
+    }
+}
+
 impl ui::Host for State {
     fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
         let live = picker.live;

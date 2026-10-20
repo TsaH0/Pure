@@ -28,6 +28,7 @@ Ready-made examples are in
 | `text-tools` | `upper`, `lower`, `sort-lines`, `count` |
 | `yazi` | `open`: pick files with yazi |
 | `finder` | `files`, `grep` (live), `branches` (git) |
+| `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
 
 ## Using plugins
 
@@ -47,6 +48,21 @@ e = ":plugin-run yazi/open"
 | `:plugin-list` | Show the plugins, their permissions, grants and commands |
 | `:plugin-log <plugin>` | Show what a plugin logged |
 | `:plugin-reload` | Reload all plugins |
+
+## Decorations
+
+Plugins (API 0.3) can highlight text, add virtual text and set gutter signs
+and statusline text; the `todos` example does all four. Signs and statusline
+text only show where you ask for them:
+
+```toml
+# ~/.config/helix/config.toml
+[editor]
+gutters = ["diagnostics", "plugins", "line-numbers", "spacer", "diff"]
+
+[editor.statusline]
+right = ["plugins", "diagnostics", "selections", "position"]
+```
 
 ## Settings and permissions
 

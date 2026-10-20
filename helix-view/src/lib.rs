@@ -14,6 +14,7 @@ pub mod handlers;
 pub mod info;
 pub mod input;
 pub mod keyboard;
+pub mod plugin_decorations;
 pub mod register;
 pub mod theme;
 pub mod tree;

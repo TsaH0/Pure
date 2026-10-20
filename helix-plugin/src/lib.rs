@@ -156,6 +156,22 @@ pub enum EventKind {
     EditorIdle,
 }
 
+/// What a [`Action::Decorate`] sets, validated against the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decorations {
+    /// `(char range, theme scope)`.
+    Highlights(Vec<(std::ops::Range<usize>, String)>),
+    /// `(char position, text, theme scope)`.
+    Annotations(Vec<(usize, String, String)>),
+    /// `(char position of the line start, one-char text, theme scope)`.
+    Signs(Vec<(usize, String, String)>),
+}
+
+/// Most decorations in one layer.
+pub const MAX_DECORATIONS: usize = 100_000;
+/// Longest statusline segment, in chars.
+pub const MAX_STATUSLINE: usize = 200;
+
 /// Most programs a plugin may run at once.
 pub const MAX_PROCESSES: usize = 16;
 /// Default and largest time limits of a background program.
@@ -331,6 +347,19 @@ pub enum Action {
     ClosePopup {
         plugin: String,
         id: u32,
+    },
+    /// Replace one of `plugin`'s decoration layers on `doc`.
+    Decorate {
+        plugin: String,
+        doc: DocumentId,
+        layer: String,
+        decorations: Decorations,
+    },
+    /// Set (or, empty, remove) a statusline segment.
+    StatusLine {
+        plugin: String,
+        segment: String,
+        text: String,
     },
     /// Ask for a line of text and deliver [`Callback::PromptDone`].
     ShowPrompt {
@@ -904,6 +933,115 @@ impl State {
             id,
             items,
             generation,
+        });
+        Ok(())
+    }
+
+    /// Validate a layer name, a document and the number of decorations.
+    fn need_layer(&self, doc: DocumentId, layer: &str, count: usize) -> Result<usize, String> {
+        if layer.is_empty() || layer.len() > 64 || layer.contains('/') {
+            return Err(format!("invalid layer name '{layer}': 1-64 chars, no '/'"));
+        }
+        if count > MAX_DECORATIONS {
+            return Err(format!(
+                "a layer can have at most {MAX_DECORATIONS} decorations"
+            ));
+        }
+        Ok(self.document(doc)?.text.len_chars())
+    }
+
+    fn decorate(&mut self, doc: DocumentId, layer: String, decorations: Decorations) {
+        self.actions.push(Action::Decorate {
+            plugin: self.plugin.clone(),
+            doc,
+            layer,
+            decorations,
+        });
+    }
+
+    fn set_highlights(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        highlights: Vec<(u32, u32, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, highlights.len())?;
+        let mut ranges = Vec::with_capacity(highlights.len());
+        for (from, to, scope) in highlights {
+            let (from, to) = (from as usize, to as usize);
+            if from > to || to > len {
+                return Err(format!(
+                    "invalid range {from}..{to} for a document of {len} chars"
+                ));
+            }
+            ranges.push((from..to, scope));
+        }
+        self.decorate(doc, layer, Decorations::Highlights(ranges));
+        Ok(())
+    }
+
+    fn set_annotations(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        annotations: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, annotations.len())?;
+        let mut checked = Vec::with_capacity(annotations.len());
+        for (position, text, scope) in annotations {
+            if position as usize > len {
+                return Err(format!(
+                    "invalid position {position} for a document of {len} chars"
+                ));
+            }
+            if text.contains('\n') {
+                return Err("virtual text can't contain line breaks".into());
+            }
+            checked.push((position as usize, text, scope));
+        }
+        self.decorate(doc, layer, Decorations::Annotations(checked));
+        Ok(())
+    }
+
+    fn set_signs(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        signs: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, signs.len())?;
+        let text = &self.document(doc)?.text;
+        let lines = text.len_lines();
+        let mut checked = Vec::with_capacity(signs.len());
+        for (line, sign, scope) in signs {
+            if line as usize >= lines {
+                return Err(format!(
+                    "invalid line {line} for a document of {lines} lines"
+                ));
+            }
+            let sign: String = sign.chars().take(1).collect();
+            checked.push((text.line_to_char(line as usize), sign, scope));
+        }
+        self.decorate(doc, layer, Decorations::Signs(checked));
+        Ok(())
+    }
+
+    fn set_statusline(&mut self, segment: String, text: String) -> Result<(), String> {
+        if segment.is_empty() || segment.len() > 64 || segment.contains('/') {
+            return Err(format!(
+                "invalid segment name '{segment}': 1-64 chars, no '/'"
+            ));
+        }
+        // One line, bounded: it is drawn on every frame.
+        let text: String = text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(MAX_STATUSLINE)
+            .collect();
+        self.actions.push(Action::StatusLine {
+            plugin: self.plugin.clone(),
+            segment,
+            text,
         });
         Ok(())
     }

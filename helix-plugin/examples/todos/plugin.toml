@@ -1,0 +1,6 @@
+name = "todos"
+version = "0.1.0"
+api = "0.3"
+description = "Highlight TODO, FIXME and NOTE comments; list them in a picker"
+permissions = ["read-buffers", "open-files"]
+wasm = "plugin.wasm"

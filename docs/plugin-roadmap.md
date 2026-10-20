@@ -298,16 +298,21 @@ git pickers.
 Each one needs a small hook in `helix-view`/`helix-term` rendering, so design
 the hook first and keep it generic.
 
-- [ ] **M5.1 Highlights.** Plugin-provided highlight ranges per document
+- [x] **M5.1 Highlights.** Plugin-provided highlight ranges per document
   (scope name + char range), cleared by id. Use the existing overlay
   highlight mechanism.
-- [ ] **M5.2 Virtual text.** Inline and end-of-line annotations via
+- [x] **M5.2 Virtual text.** Inline and end-of-line annotations via
   `TextAnnotations` (like inlay hints) for git blame, test results, values.
-- [ ] **M5.3 Gutter signs.** A plugin gutter column (one char + style per
+- [x] **M5.3 Gutter signs.** A plugin gutter column (one char + style per
   line), opt-in through `editor.gutters`.
-- [ ] **M5.4 Statusline segment.** `statusline` element
+- [x] **M5.4 Statusline segment.** `statusline` element
   `plugin:<name>/<segment>` whose text the plugin sets with
   `set-statusline(segment, text)`.
+  - Done (API 0.3 `decorations` interface): layers per plugin stored on the
+    document (`helix_view::plugin_decorations`), mapped through edits, drawn
+    only when non-empty; `plugins` gutter and statusline element (opt-in).
+    One `plugins` statusline element shows all segments, instead of one
+    element per segment. Example: `examples/todos`.
 
 ## M6. Events and key bindings
 

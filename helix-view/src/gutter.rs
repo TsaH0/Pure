@@ -33,6 +33,7 @@ impl GutterType {
             GutterType::Spacer => padding(editor, doc, view, theme, is_focused),
             GutterType::Diff => diff(editor, doc, view, theme, is_focused),
             GutterType::CodeActionHint => code_action_hint(editor, doc, view, theme, is_focused),
+            GutterType::Plugins => plugin_signs(editor, doc, view, theme, is_focused),
         }
     }
 
@@ -43,8 +44,38 @@ impl GutterType {
             GutterType::Spacer => 1,
             GutterType::Diff => 1,
             GutterType::CodeActionHint => 1,
+            GutterType::Plugins => 1,
         }
     }
+}
+
+/// Signs plugins set on lines (`set-signs`): one character each.
+pub fn plugin_signs<'doc>(
+    _editor: &'doc Editor,
+    doc: &'doc Document,
+    _view: &View,
+    theme: &Theme,
+    _is_focused: bool,
+) -> GutterFn<'doc> {
+    let signs: Vec<(usize, char, Style)> = doc
+        .plugin_decorations
+        .signs_by_line(doc.text().slice(..))
+        .into_iter()
+        .filter_map(|(line, (text, scope))| Some((line, text.chars().next()?, theme.get(scope))))
+        .collect();
+    Box::new(
+        move |line: usize, _selected: bool, first_visual_line: bool, out: &mut String| {
+            if !first_visual_line {
+                return None;
+            }
+            let i = signs
+                .binary_search_by_key(&line, |(line, _, _)| *line)
+                .ok()?;
+            let (_, sign, style) = signs[i];
+            out.push(sign);
+            Some(style)
+        },
+    )
 }
 
 pub fn diagnostic<'doc>(

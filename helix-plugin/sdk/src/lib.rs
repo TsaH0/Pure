@@ -81,6 +81,42 @@ pub mod editor {
     };
 }
 
+/// How documents look (API 0.3): highlights, virtual text, gutter signs and
+/// statusline segments, in layers the plugin names. Setting a layer replaces
+/// it; an empty list clears it. Positions follow the user's edits until the
+/// plugin sets the layer again.
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
+pub mod decorations {
+    pub use crate::bindings::helix::plugin::decorations::*;
+
+    /// A highlight of chars `from..to` with a theme scope (e.g. `warning`).
+    pub fn highlight(from: u32, to: u32, scope: &str) -> Highlight {
+        Highlight {
+            from,
+            to,
+            scope: scope.into(),
+        }
+    }
+
+    /// Virtual text before the char at `position`.
+    pub fn annotation(position: u32, text: impl Into<String>, scope: &str) -> Annotation {
+        Annotation {
+            position,
+            text: text.into(),
+            scope: scope.into(),
+        }
+    }
+
+    /// A one-character sign on a 0-based line.
+    pub fn sign(line: u32, text: impl Into<String>, scope: &str) -> Sign {
+        Sign {
+            line,
+            text: text.into(),
+            scope: scope.into(),
+        }
+    }
+}
+
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the
 /// event handlers are only called for the events returned from `init`.
 pub trait Plugin {

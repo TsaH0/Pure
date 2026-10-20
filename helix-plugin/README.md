@@ -54,6 +54,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`text-tools`](examples/text-tools) | `upper`, `lower`, `sort-lines`, `count` | – |
 | [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
+| [`todos`](examples/todos) | `list`; highlights TODO / FIXME / NOTE, signs, end-of-line notes, a statusline count | – |
 | [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
 
 ```toml
@@ -382,3 +383,34 @@ are suppressed to prevent feedback loops. Focus events work even when a picker
 or popup is open. Idle uses the editor's existing idle timer and fires once
 until input re-arms it. Unsubscribed event hooks return after an atomic mask
 check; subscribing adds no polling timer or periodic idle wake-up.
+
+## Decorations (API 0.3)
+
+`helix_plugin_api::decorations` changes how documents look. Each kind is set
+per layer (a name the plugin picks); setting a layer replaces it and an
+empty list clears it. Positions are char offsets into the text the call sees
+and follow the user's edits until the plugin sets the layer again. They work
+from commands, callbacks and event handlers, so a plugin can redecorate on
+`on_document_change`. No permission is needed (decorations only change what
+is shown); reading the text to compute them needs `read-buffers`.
+
+```rust,ignore
+use helix_plugin_api::decorations::{self, annotation, highlight, sign};
+
+decorations::set_highlights(doc, "words", &[highlight(4, 8, "warning")])?;
+decorations::set_annotations(doc, "notes", &[annotation(line_end, "  ◂ todo", "comment")])?;
+decorations::set_signs(doc, "lines", &[sign(0, "●", "warning")])?;
+decorations::set_statusline("count", "3 todos")?;
+```
+
+- Highlights use theme scopes (`warning`, `diff.plus`, ...). Overlapping
+  ones in one layer: the first wins.
+- Virtual text goes before the char at its position; the offset of a line's
+  line break puts it at the end of the line. No line breaks in the text.
+- Signs are one character on a line, shown in the `plugins` gutter, which
+  users add to `editor.gutters`.
+- The statusline text shows in the `plugins` element of
+  `editor.statusline` (one line, at most 200 chars per segment).
+- At most 100,000 decorations per layer. Reloading plugins clears them.
+
+See `examples/todos`.

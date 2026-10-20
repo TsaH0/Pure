@@ -1391,3 +1391,67 @@ async fn displaced_terminal_requests_are_answered() -> anyhow::Result<()> {
     assert!(!app.drop_queued_program());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_decorate_documents() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new()
+        .with_input_text("#[a|]#\n")
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("todos");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/todos").join(file),
+            plugin.join(file),
+        )?;
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    let signs = |app: &Application| {
+        let doc = helix_view::doc!(app.editor);
+        doc.plugin_decorations
+            .signs_by_line(doc.text().slice(..))
+            .into_iter()
+            .map(|(line, (text, _))| (line, text.to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert!(helix_view::doc!(app.editor).plugin_decorations.is_empty());
+
+    // Typing a TODO: the change event decorates the line.
+    keys(&mut app, "i// TODO x<esc>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(signs(&app), [(0, "●".to_string())]);
+    assert_eq!(
+        app.editor
+            .plugin_statusline
+            .get("todos/count")
+            .map(String::as_str),
+        Some("1 todo")
+    );
+
+    // A new line above moves the sign along with the text right away.
+    keys(&mut app, "ggOnew<esc>").await;
+    assert_eq!(signs(&app), [(1, "●".to_string())]);
+    deliver_events(&mut app).await;
+    assert_eq!(signs(&app), [(1, "●".to_string())]);
+
+    // Removing it clears the decorations and the statusline segment.
+    keys(&mut app, "%d").await;
+    deliver_events(&mut app).await;
+    assert!(signs(&app).is_empty());
+    assert!(app.editor.plugin_statusline.is_empty());
+
+    // Reloading drops what a plugin left behind.
+    keys(&mut app, "i// FIXME y<esc>").await;
+    deliver_events(&mut app).await;
+    assert!(!helix_view::doc!(app.editor).plugin_decorations.is_empty());
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[todos]\nenabled = false\n",
+    )?;
+    assert!(helix_view::doc!(app.editor).plugin_decorations.is_empty());
+    assert!(app.editor.plugin_statusline.is_empty());
+    Ok(())
+}

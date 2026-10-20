@@ -40,7 +40,7 @@
 | `cursorline` | Highlight all lines with a cursor | `false` |
 | `cursorcolumn` | Highlight all columns with a cursor | `false` |
 | `continue-comments` | if helix should automatically add a line comment token if you create a new line inside a comment. | `true` |
-| `gutters` | Gutters to display: Available are `diagnostics` and `diff` and `line-numbers` and `spacer` and `code-action-hint`, note that `diagnostics` also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty | `["diagnostics", "spacer", "line-numbers", "spacer", "diff"]` |
+| `gutters` | Gutters to display: Available are `diagnostics` and `diff` and `line-numbers` and `spacer` and `code-action-hint` and `plugins` (signs plugins set), note that `diagnostics` also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty | `["diagnostics", "spacer", "line-numbers", "spacer", "diff"]` |
 | `auto-completion` | Enable automatic pop up of auto-completion | `true` |
 | `path-completion` | Enable filepath completion. Show files and directories if an existing path at the cursor was recognized, either absolute or relative to the current opened document or current working directory (if the buffer is not yet saved). Defaults to true. | `true` |
 | `auto-format` | Enable automatic formatting on save[^3] | `true` |
@@ -160,6 +160,7 @@ The following statusline elements can be configured:
 | `version-control` | The current branch name or detached commit hash of the opened workspace |
 | `register` | The current selected register |
 | `code-action-hint` | Indicator for when code actions are available |
+| `plugins` | Text plugins put in the statusline |
 
 ### `[editor.lsp]` Section
 

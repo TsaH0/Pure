@@ -287,6 +287,13 @@ fn install(
     actions: Vec<Action>,
     errors: Vec<anyhow::Error>,
 ) {
+    // The previous plugins' decorations go with them.
+    for doc in editor.documents.values_mut() {
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations = Default::default();
+        }
+    }
+    editor.plugin_statusline.clear();
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -690,6 +697,54 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             Action::ClosePopup { plugin, id } => ui.push(Box::new(move |_, compositor| {
                 popup::close(compositor, &plugin, id)
             })),
+            Action::Decorate {
+                plugin,
+                doc,
+                layer,
+                decorations,
+            } => {
+                let Some(doc_id) = editor_doc_id(editor, doc) else {
+                    continue;
+                };
+                let doc = editor.documents.get_mut(&doc_id).unwrap();
+                let len = doc.text().len_chars();
+                let layer = format!("{plugin}/{layer}");
+                let store = &mut doc.plugin_decorations;
+                match decorations {
+                    helix_plugin::Decorations::Highlights(highlights) => {
+                        store.set_highlights(layer, highlights, len)
+                    }
+                    helix_plugin::Decorations::Annotations(annotations) => {
+                        store.set_annotations(layer, annotations, len)
+                    }
+                    helix_plugin::Decorations::Signs(signs) => store.set_signs(
+                        layer,
+                        signs
+                            .into_iter()
+                            .map(|(pos, text, scope)| helix_view::plugin_decorations::Sign {
+                                pos,
+                                text,
+                                scope,
+                            })
+                            .collect(),
+                        len,
+                    ),
+                }
+                helix_event::request_redraw();
+            }
+            Action::StatusLine {
+                plugin,
+                segment,
+                text,
+            } => {
+                let key = format!("{plugin}/{segment}");
+                if text.is_empty() {
+                    editor.plugin_statusline.remove(&key);
+                } else {
+                    editor.plugin_statusline.insert(key, text);
+                }
+                helix_event::request_redraw();
+            }
             Action::ShowPrompt { plugin, id, prompt } => {
                 ui.push(Box::new(move |editor, compositor| {
                     prompt::show(editor, compositor, plugin, id, prompt)
