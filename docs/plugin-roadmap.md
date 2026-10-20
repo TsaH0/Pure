@@ -621,9 +621,10 @@ Small, self-contained; each one is a good single task.
 - [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
 - [ ] **Conceal decorations:** hide ranges of text (for Markdown `**`,
-  backticks, link URLs). Needs `helix-core`'s `DocumentFormatter` to skip
-  graphemes; cursor movement over hidden text must still work. Larger than
-  other decorations: design with the owner first.
+  backticks, link URLs). Design written:
+  [`plugin-conceal-proposal.md`](plugin-conceal-proposal.md). **Waiting for
+  the owner's approval** of its open questions (raw line scope, secondary
+  selections, insert mode, mouse) before implementing.
 - [x] **Sidebar (API 0.4):** `sidebar.show/close/focus/selected`. One
   sidebar (`Editor::sidebar`, `helix_view::sidebar`) left of the views; the
   editor area shrinks only while it's shown. Items run the owner's commands
