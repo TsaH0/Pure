@@ -40,7 +40,7 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 | `helix-plugin/src/test.rs` | Host tests with real components, including frozen compatibility fixtures and current examples |
 | `helix-plugin/tests/plugins/testplugin` | Source of the test plugin (its own cargo workspace) |
 | `helix-plugin/sdk` | Rust guest SDK `helix-plugin-api` (`Plugin` trait, `register_plugin!`, `editor`, `text`) |
-| `helix-plugin/examples/text-tools` | Example plugin; `plugin.wasm` is committed |
+| `helix-plugin/examples/*` | Example plugins (one per API feature); each `plugin.wasm` is committed |
 | `helix-plugin/build-plugins.sh` | Rebuilds the test plugin and example wasm files |
 | `helix-term/src/plugins.rs` | Editor integration: loading, `snapshot`, `apply` (turns `Action`s into edits), hooks, debouncing, `:plugin-*` helpers |
 | `helix-term/src/commands/typed.rs` | `:plugin-run`, `:plugin-list`, `:plugin-reload` |
@@ -482,7 +482,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   replacements are numbered `first_line + n`; CR-only line endings are not
   split.
 
-## API 0.3 work in progress
+## API 0.3 (done; notes from the work)
 
 The draft WIT moved to `helix-plugin/wit/v0.3/helix-plugin.wit`, including
 optional `generation: u64` tags on picker updates and a generation in query
@@ -550,12 +550,14 @@ What plugins still can't do, and why:
 
 Tasks in one batch touch the same code, so give each batch to one agent.
 
-1. **Done:** M0–M4, M6.1, M9, M11 and the M10 host/editor work
-   (see `plugin-progress.md`).
-2. **Open, no owner review needed:** M10 SDK/examples/guide migration and
-   the small TODOs below.
-3. **Needs the owner first:** M5, M6.2, M6.3, M7, M8 and the file-manager
-   APIs.
+1. **Done:** M0–M12 (see `plugin-progress.md`).
+2. **Open, no owner review needed:** the Future TODOs below except conceal.
+3. **Needs the owner first:** conceal (write the proposal, then stop).
+4. **Compatibility rule since 0.3 is on master:** new *imports* (host
+   functions) may still be added to API 0.3; anything that needs a new
+   *export* (a callback or event handler the plugin must implement) goes
+   into a new API version with the old one frozen, because components
+   missing an export fail to load.
 
 ## Future TODOs (not yet milestones)
 

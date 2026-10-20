@@ -3,56 +3,30 @@
 Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 [`plugin-processes-and-pickers.md`](plugin-processes-and-pickers.md).
 
-## Status
+## Status (2026-10-20)
 
-- Done: M0 (API 0.2 groundwork), M1 (processes and the terminal), M2
-  (pickers, including live pickers), M3.1–M3.2 (popups, prompts), M4 (file
-  access, workspace info), M6.1 (save, close and selection events).
-- Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
-  (benchmarks).
-- Done: review-fix regression coverage and M11, including query generations
-  in the API 0.3 host/editor.
-- Done: M10 (API 0.3), including default SDK, finder migration, the guide,
-  frozen 0.2 compatibility fixtures and the kept API trial example.
-  Five follow-up findings remain in Future TODOs.
-- Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
-  for file-manager style plugins.
+- Done: M0–M12. API 0.1 and 0.2 are frozen (compatibility fixtures in
+  `helix-plugin/tests/fixtures`); API 0.3 is the current one.
+- Still open: the Future TODOs in the roadmap (conceal needs the owner's
+  approval of a design first; one item is blocked upstream).
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
   `helix-plugin/examples/` (`text-tools`, `finder`, `api-demo`, `todos`,
   `markdown`, `js-upper`, `oil`, `lint`, `emoji`, `pomodoro`,
   `yank-history`). The `yazi` example was removed at the owner's request
   (2026-10-20) and replaced by `oil`.
-- Done: M12, more kinds of plugins (linters, completion sources, timers,
-  plugin buffers, registers, file operations); see the roadmap for what
-  still isn't possible.
+- Sections below are a log, oldest first after this one; numbers in them
+  are from the day they were measured.
 
 ## Open questions for the owner
 
 - ~~Per-program prompt~~: decided no; `allow-process` is the only gate.
-- Should a plugin's `run-command` (API 0.1's `run-commands` permission, which
-  can run `:sh`, `:write`, ...) also need the `process` grant? Unchanged for
-  now.
-
-- **M5 decorations proposal:** plugin-owned ids and per-document ranges for
-  highlights and virtual text; opt-in gutter/statusline entries. Reuse the
-  existing annotation renderer and invalidate only when a plugin changes its
-  data. Owner review should settle lifetimes, priority and theme scopes first.
-- **M6 bindings/commands proposal:** optional manifest defaults merged below
-  user bindings, with an explicit per-plugin disable switch; command aliases
-  resolve through the existing command dispatcher. Review naming and conflict
-  handling before implementing either feature; preserve existing bindings.
-- **M7 background work proposal:** explicit opt-in jobs receive immutable input
-  and return bounded results through callbacks, with cancellation on reload.
-  Research WASI 0.3 separately against the pinned Rust/Wasmtime versions;
-  host async execution for time limits does not require a new guest ABI.
-- **M8 distribution proposal:** stage downloads, display requested grants,
-  verify a pinned commit and component digest, then enable explicitly. Review
-  update trust and rollback rules before adding install/update/remove commands.
-- **File-manager API proposal:** compare an editable scratch buffer with
-  plugin-owned views. A scratch buffer can reuse editing and save hooks;
-  persistent views require a larger rendering and focus API. Agree on the
-  interaction model and upstream diff budget before implementation.
+- ~~Should a plugin's `run-command` that starts a program also need the
+  `allow-process` grant?~~ Being implemented: only the commands that start
+  programs are gated (see the roadmap's Future TODOs).
+- The M5–M8 and file-manager proposals that were here were reviewed and
+  implemented (M5 decorations, M6 bindings and commands, M7 background
+  tasks, M8 distribution, M12 plugin buffers and file operations).
 
 ## Review-fix regression coverage
 
