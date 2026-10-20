@@ -9,8 +9,10 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   `helix-plugin/tests/fixtures`); API 0.4 is the current one (0.3 still
   gets new imports).
 - Still open: the Future TODOs in the roadmap (one item is blocked
-  upstream). Conceal is done (render-markdown.nvim's behaviour, the owner's
-  choice).
+  upstream), plus the 22 correctness/performance findings in
+  [`suggested-improvements.md`](suggested-improvements.md). Conceal is done
+  (render-markdown.nvim's behaviour, the owner's choice); the review identifies
+  additional invalidation and scaling work.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
   `helix-plugin/examples/` (`text-tools`, `finder`, `api-demo`, `todos`,
@@ -729,3 +731,36 @@ does". So:
   before; the formatter checks an empty conceal list per document grapheme
   (a loop over zero layers).
 
+## System review (2026-10-20, master `1268b872`)
+
+Pulled the latest master and reviewed plugin execution/SDK/ABI compatibility,
+startup and reload, file/process jobs, editor I/O, decorations/conceal,
+Markdown/oil/tree, substitution preview, compilation/quickfix and CI/performance
+instrumentation. Findings and next steps are in
+[`suggested-improvements.md`](suggested-improvements.md): **22 prioritized
+items**, each distinguishing reproduced behavior, code-supported risks and
+proposed capabilities. No runtime fixes or guest artifacts changed in this
+review.
+
+Bounded scratch probes reproduced the shell-expansion process-grant bypass,
+auto-reload FIFO UI stall, loss of worker interruption after host drop, and
+local installer writes outside staging before path rejection. Host/native probes
+also confirmed cancelled timer scheduling actions and preview output allocation
+before display truncation. The report identifies memory/job limits, filesystem
+race boundaries, lifecycle cleanup and large-file/many-plugin scaling work.
+
+Validation: 95 host tests, 47 editor library tests and 13 formatter tests passed;
+workspace formatting and Clippy passed without warnings. The default plugin
+integration run had 67 passes and one idle-event assertion failure; that test
+passed alone, and all 68 plugin tests passed with four test threads. Two
+auto-reload integration tests, three Markdown native tests and three oil native
+tests passed. A normal editor build was used for the scratch terminal probes.
+The full documented integration/workspace suites and release benchmarks were
+not rerun.
+
+Performance observations are deliberately limited: an idle normal debug editor
+with no plugins recorded 13 thread context switches in each 3.3-second sample
+with auto-reload enabled and disabled; source inspection confirms the recurring
+timer exists in both cases. This is neither an exact wake-up count nor a release
+benchmark against vanilla Helix. The report proposes regression gates and
+measurements rather than extending historical parity claims to this revision.

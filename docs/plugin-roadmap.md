@@ -552,7 +552,10 @@ What plugins still can't do, and why:
 Tasks in one batch touch the same code, so give each batch to one agent.
 
 1. **Done:** M0–M12 (see `plugin-progress.md`).
-2. **Open, no owner review needed:** the Future TODOs below.
+2. **Open, no owner review needed:** the Future TODOs below and the
+   correctness/performance findings in
+   [`suggested-improvements.md`](suggested-improvements.md). Its proposed API
+   and UI extensions still need separate design review.
 3. **Done after the owner's decision:** conceal ("whatever
    render-markdown.nvim does").
 4. **Compatibility rule since 0.3 is on master:** new *imports* (host
@@ -562,6 +565,15 @@ Tasks in one batch touch the same code, so give each batch to one agent.
    missing an export fail to load.
 
 ## Future TODOs (not yet milestones)
+
+The 2026-10-20 system review adds **22 prioritized findings** in
+[`suggested-improvements.md`](suggested-improvements.md), with evidence, source
+references, implementation guidance and validation checks. Treat those as open
+work alongside this list; the review did not implement fixes. Start with the
+reproduced process-grant, auto-reload, worker-lifetime and installer-path issues
+(S01–S04), then follow the report's suggested sequence. Historical completed
+items below remain checked; the report identifies further gaps in their current
+implementations.
 
 - [x] **Picker titles:** `Picker::with_title` draws the plugin's title in
   the top border; native pickers (no title) are unchanged.
