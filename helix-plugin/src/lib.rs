@@ -786,6 +786,8 @@ struct State {
 
 /// `log` lines kept per plugin.
 const LOG_LINES: usize = 1000;
+/// Longest line kept in a plugin's log.
+const LOG_LINE_BYTES: usize = 4096;
 
 impl State {
     /// For a background instance: no permissions, grants, files or snapshot.
@@ -797,7 +799,7 @@ impl State {
                 .memory_size(memory)
                 .instances(16)
                 .tables(64)
-                .memories(16)
+                .memories(2)
                 .build(),
             plugin: plugin.to_string(),
             permissions: HashSet::new(),
@@ -1034,7 +1036,16 @@ impl State {
         self.actions.push(Action::Error(message));
     }
 
-    fn log(&mut self, message: String) {
+    fn log(&mut self, mut message: String) {
+        // The log keeps lines, not floods: at most LOG_LINE_BYTES each.
+        if message.len() > LOG_LINE_BYTES {
+            let mut end = LOG_LINE_BYTES;
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            message.truncate(end);
+            message.push('…');
+        }
         log::info!("[plugin {}] {message}", self.plugin);
         if self.log.len() == LOG_LINES {
             self.log.pop_front();
@@ -2502,7 +2513,7 @@ impl PluginHost {
                 .memory_size(self.limits.memory)
                 .instances(16)
                 .tables(64)
-                .memories(16)
+                .memories(2)
                 .build(),
             plugin: name.clone(),
             permissions: manifest.permissions.iter().copied().collect(),
