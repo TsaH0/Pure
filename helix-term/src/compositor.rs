@@ -7,6 +7,33 @@ use helix_view::graphics::{CursorKind, Rect};
 use tui::buffer::Buffer as Surface;
 
 pub type Callback = Box<dyn FnOnce(&mut Compositor, &mut Context)>;
+
+/// UI that a command run outside a key press (by a plugin) produced: a
+/// layer to push, or a handler for the next key. The application runs it
+/// with the compositor right after the event that produced it.
+pub enum DeferredUi {
+    Callback(Callback),
+    NextKey(
+        crate::commands::OnKeyCallback,
+        crate::commands::OnKeyCallbackKind,
+    ),
+}
+
+thread_local! {
+    // The closures aren't `Send`; they are made and run on the
+    // application's thread.
+    static DEFERRED: std::cell::RefCell<Vec<DeferredUi>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Queue UI for the application to set up (see [`DeferredUi`]).
+pub fn defer_ui(ui: DeferredUi) {
+    DEFERRED.with_borrow_mut(|deferred| deferred.push(ui));
+}
+
+/// The UI queued since the last call.
+pub fn take_deferred_ui() -> Vec<DeferredUi> {
+    DEFERRED.with_borrow_mut(std::mem::take)
+}
 pub type SyncCallback = Box<dyn FnOnce(&mut Compositor, &mut Context) + Sync>;
 
 // Cursive-inspired

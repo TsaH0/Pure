@@ -240,6 +240,20 @@ async fn plugins_run_editor_commands() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_commands_that_open_ui() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_plugins("#[h|]#ello\nworld", ALL, "");
+    // A command waiting for the next key (`r`): the key goes to it.
+    keys(&mut app, ":plugin-run testplugin/run replace<ret>").await;
+    keys(&mut app, "j").await;
+    assert_eq!(text(&app), "jello\nworld");
+    // A command opening a prompt (`/`): it shows and takes the input.
+    keys(&mut app, ":plugin-run testplugin/run search<ret>").await;
+    keys(&mut app, "wor<ret>").await;
+    assert_eq!(primary(&app), (6, 9));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugins_open_files() -> anyhow::Result<()> {
     let file = helpers::temp_file_with_contents("from disk")?;
     let (mut app, _dir) = app_with_plugins("#[h|]#ello", ALL, "");

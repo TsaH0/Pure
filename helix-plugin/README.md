@@ -87,7 +87,9 @@ f = ":plugin-run finder/files"
     and callbacks). Commands that start programs (`:sh`, `:pipe`,
     `:insert-output`, `!`, `:compile`, `:grep`, ...) and commands with a
     `%sh{...}` expansion also need the user's
-    `allow-process = true`, since they can run anything.
+    `allow-process = true`, since they can run anything. Commands that open
+    UI work like a key press: `file_picker` opens the picker, `search` its
+    prompt, `replace` (`r`) takes the next key the user presses.
   - `process`: run programs, see [Running programs](#running-programs). This
     one also needs the user's `allow-process` grant.
   - `filesystem`: read (or write) the workspace, see [Files](#files). This one

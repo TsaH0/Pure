@@ -328,7 +328,10 @@ Unsubscribed events cost nothing: the editor checks an atomic bitmask.
 - `set_status(&str)`, `set_error(&str)`, `log(&str)` (Helix log file plus
   `:plugin-log`)
 - `run_command(":write")` or a static command name like `"goto_line_end"`
-  (needs `run-commands`; commands and callbacks only)
+  (needs `run-commands`; commands and callbacks only). Commands that open UI
+  behave as if the user pressed their key: `file_picker` opens the picker,
+  `search` its prompt, `replace` waits for the next key. They open once the
+  plugin call has returned.
 - `workspace_root() -> Option<String>`, `cwd()`, `config_dir()`,
   `data_dir()` (`~/.local/share/helix/plugins/<name>/`, always read-write via
   `std::fs`, no permission needed)

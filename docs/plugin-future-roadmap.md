@@ -34,6 +34,14 @@ keep loading.
 | F02 | `revisions.revision` (Helix's document version, counting the plugin's own edits within a call) and `revisions.apply-edits-at` (refused when the text changed); trial: `api-demo`'s background `sort` | `changes-since` deltas, origin-tagged change subscriptions, multi-document conditional edits |
 | F06 | `snippets.complete`: plugin completions inserted through the native snippet engine (tab stops, placeholders, choices); trial: `examples/snippets` | Snippet variables (the editor doesn't resolve them yet), inline suggestions (ghost text, partial acceptance) |
 
+F04's command bridge is done too (the owner asked for it next):
+`run-command` with a command that opens UI (a picker, a prompt, a
+next-key command like `r`) now works as a key press does; the
+compositor callbacks and next-key handlers are set up by the
+application right after the plugin call, on its thread. Programs stay
+behind `allow-process`. Still open in F04: owned-buffer options
+(read-only, append), structured results.
+
 Next in the roadmap's order: F03 (views/viewport), F05 (syntax trees),
 F07 (LSP services), F09 (watches). F04, F10 and later touch UI and
 process architecture and need the owner's review first.

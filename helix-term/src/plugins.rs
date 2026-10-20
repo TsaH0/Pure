@@ -1774,8 +1774,13 @@ fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
         jobs,
     };
     command.execute(&mut cx);
-    if !cx.callback.is_empty() || cx.on_next_key_callback.is_some() {
-        log::warn!("plugins can't run commands that open a UI: {command}");
+    // Pickers, prompts and next-key commands (`r`, `t`...) need the
+    // compositor: the application sets them up right after this event.
+    for callback in cx.callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::Callback(callback));
+    }
+    if let Some((callback, kind)) = cx.on_next_key_callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::NextKey(callback, kind));
     }
 }
 
