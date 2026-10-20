@@ -8,7 +8,6 @@ async fn insert_mode_cursor_position() -> anyhow::Result<()> {
         in_keys: "i".into(),
         out_text: String::new(),
         out_selection: Selection::single(0, 0),
-        line_feed_handling: LineFeedHandling::AsIs,
     })
     .await?;
 
@@ -895,5 +894,21 @@ async fn tree_sitter_motions_work_across_injections() -> anyhow::Result<()> {
     )
     .await?;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn select_inside_next_pair_on_the_line() -> anyhow::Result<()> {
+    // To the right, then into the next pair.
+    test(("#[x|]# = (\"hello\")", "<A-m>", "x = (#[\"hello\"|]#)")).await?;
+    test(("#[x|]# = (\"hello\")", "<A-m><A-m>", "x = (\"#[hello|]#\")")).await?;
+    // Nothing to the right: the nearest pair to the left.
+    test(("f(abc) + #[b|]#", "<A-m>", "f(#[abc|]#) + b")).await?;
+    // Inside a pair with nothing else on the line.
+    test(("[a#[b|]#c]", "<A-m>", "[#[abc|]#]")).await?;
+    // Empty pair: the cursor goes between the delimiters.
+    test(("#[f|]#()", "<A-m>", "f(#[)|]#")).await?;
+    // Every selection, each on its own line.
+    test(("#[a|]# {x}\n#(b|)# 'y'", "<A-m>", "a {#[x|]#}\nb '#(y|)#'")).await?;
     Ok(())
 }

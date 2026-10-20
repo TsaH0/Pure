@@ -1,6 +1,6 @@
 name = "text-tools"
 version = "0.1.0"
-api = "0.2"
+api = "0.3"
 description = "Change case, sort lines and count words"
 permissions = ["read-buffers", "edit-buffers"]
 wasm = "plugin.wasm"

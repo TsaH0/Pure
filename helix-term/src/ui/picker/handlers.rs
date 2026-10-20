@@ -115,6 +115,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook
 pub(super) struct DynamicQueryChange {
     pub query: Arc<str>,
     pub is_paste: bool,
+    pub generation: Option<u64>,
 }
 
 pub(super) struct DynamicQueryHandler<T: 'static + Send + Sync, D: 'static + Send + Sync> {
@@ -124,16 +125,25 @@ pub(super) struct DynamicQueryHandler<T: 'static + Send + Sync, D: 'static + Sen
     // this higher if the dynamic query is expensive - for example global search.
     debounce: Duration,
     last_query: Arc<str>,
-    query: Option<Arc<str>>,
+    last_generation: Option<u64>,
+    query: Option<(Arc<str>, Option<u64>)>,
+    picker_version: Arc<atomic::AtomicUsize>,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> DynamicQueryHandler<T, D> {
-    pub(super) fn new(callback: DynQueryCallback<T, D>, duration_ms: Option<u64>) -> Self {
+    pub(super) fn new(
+        callback: DynQueryCallback<T, D>,
+        duration_ms: Option<u64>,
+        generation: Option<u64>,
+        picker_version: Arc<atomic::AtomicUsize>,
+    ) -> Self {
         Self {
             callback: Arc::new(callback),
             debounce: Duration::from_millis(duration_ms.unwrap_or(100)),
             last_query: "".into(),
+            last_generation: generation,
             query: None,
+            picker_version,
         }
     }
 }
@@ -142,14 +152,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicQu
     type Event = DynamicQueryChange;
 
     fn handle_event(&mut self, change: Self::Event, _timeout: Option<Instant>) -> Option<Instant> {
-        let DynamicQueryChange { query, is_paste } = change;
-        if query == self.last_query {
+        let DynamicQueryChange {
+            query,
+            is_paste,
+            generation,
+        } = change;
+        if query == self.last_query && generation == self.last_generation {
             // If the search query reverts to the last one we requested, no need to
             // make a new request.
             self.query = None;
             None
         } else {
-            self.query = Some(query);
+            self.query = Some((query, generation));
             if is_paste {
                 self.finish_debounce();
                 None
@@ -160,11 +174,13 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicQu
     }
 
     fn finish_debounce(&mut self) {
-        let Some(query) = self.query.take() else {
+        let Some((query, generation)) = self.query.take() else {
             return;
         };
         self.last_query = query.clone();
+        self.last_generation = generation;
         let callback = self.callback.clone();
+        let picker_version = self.picker_version.clone();
 
         job::dispatch_blocking(move |editor, compositor| {
             let Some(Overlay {
@@ -173,9 +189,17 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> AsyncHook for DynamicQu
             else {
                 return;
             };
-            // Increment the version number to cancel any ongoing requests.
-            picker.version.fetch_add(1, atomic::Ordering::Relaxed);
-            picker.matcher.restart(false);
+            if !Arc::ptr_eq(&picker.version, &picker_version)
+                || picker.query_generation != generation
+                || (generation.is_some() && picker.primary_query() != query)
+            {
+                return;
+            }
+            // Versioned pickers already cleared their snapshot at input time.
+            if generation.is_none() {
+                picker.version.fetch_add(1, atomic::Ordering::Relaxed);
+                picker.matcher.restart(false);
+            }
             let injector = picker.injector();
             let get_options = (callback)(&query, editor, picker.editor_data.clone(), &injector);
             tokio::spawn(async move {

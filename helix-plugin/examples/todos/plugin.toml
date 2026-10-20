@@ -1,0 +1,10 @@
+name = "todos"
+version = "0.1.0"
+api = "0.3"
+description = "Highlight TODO, FIXME and NOTE comments; list them in a picker"
+permissions = ["read-buffers", "open-files"]
+wasm = "plugin.wasm"
+
+# Default bindings: only used where nothing else binds the key.
+[keys.normal.space]
+T = "list"

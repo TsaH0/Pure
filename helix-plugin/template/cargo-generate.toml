@@ -1,0 +1,7 @@
+[template]
+cargo_generate_version = ">=0.18"
+
+[placeholders.description]
+type = "string"
+prompt = "What does the plugin do?"
+default = "A Pure plugin"

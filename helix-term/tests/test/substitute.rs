@@ -272,3 +272,56 @@ async fn live_preview() -> anyhow::Result<()> {
     assert_eq!(text(&app), "P( hello )\nprint(x)\nother\n");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_preview_numbers_source_lines_and_splits_cr_endings() -> anyhow::Result<()> {
+    use helix_term::commands::substitute_preview::{snapshot, snapshot_line_numbers};
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[a|]#\na\n")
+        .build()?;
+    helpers::send_keys(&mut app, r":%s/a/x\ny/g").await;
+    assert_eq!(snapshot().unwrap().1, ["x", "y", "x", "y"]);
+    assert_eq!(
+        snapshot_line_numbers().unwrap(),
+        [Some(0), None, Some(1), None]
+    );
+    assert_eq!(helix_view::doc!(app.editor).text().to_string(), "a\na\n");
+    helpers::send_keys(&mut app, "<esc>").await;
+
+    // Replace the same document through ordinary editing to keep one app/job queue.
+    helpers::send_keys(&mut app, "%c<esc>").await;
+    let (view, doc) = helix_view::current!(app.editor);
+    let transaction = helix_core::Transaction::change(
+        doc.text(),
+        [(0, doc.text().len_chars(), Some("a\ra\r".into()))].into_iter(),
+    );
+    doc.apply(&transaction, view.id);
+    helpers::send_keys(&mut app, ":%s/a/x/g").await;
+    assert_eq!(snapshot().unwrap().1, ["x", "x"]);
+    #[cfg(feature = "unicode-lines")]
+    assert_eq!(snapshot_line_numbers().unwrap(), [Some(0), Some(1)]);
+    // Without unicode-lines the editor treats CR-only text as one source
+    // line; the preview still splits it, leaving continuation rows blank.
+    #[cfg(not(feature = "unicode-lines"))]
+    assert_eq!(snapshot_line_numbers().unwrap(), [Some(0), None]);
+    assert_eq!(helix_view::doc!(app.editor).text().to_string(), "a\ra\r");
+    helpers::send_keys(&mut app, "<esc>").await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn preview_counts_generated_rows() -> anyhow::Result<()> {
+    use helix_term::commands::substitute_preview::{snapshot, snapshot_rows};
+
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[a|]#\nb\nc\n")
+        .build()?;
+    // Each of 3 lines becomes 4 rows: 12 rows from 3 source lines.
+    helpers::send_keys(&mut app, r":%s/\w/x\ry\rz\rw/").await;
+    let (title, lines) = snapshot().expect("a preview");
+    assert_eq!(title, "3 matches on 3 lines");
+    assert_eq!(lines.len(), 12);
+    assert_eq!(snapshot_rows(), Some((12, false)));
+    helpers::send_keys(&mut app, "<esc>").await;
+    Ok(())
+}

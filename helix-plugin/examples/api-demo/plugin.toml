@@ -1,0 +1,6 @@
+name = "api-demo"
+version = "0.1.0"
+api = "0.3"
+description = "Try API 0.3 popup callbacks, live queries, streaming and events"
+permissions = ["open-files", "process"]
+wasm = "plugin.wasm"

@@ -18,14 +18,17 @@
 //!
 //! Every plugin can use its own directory, `<data dir>/plugins/<name>/`.
 
+pub mod install;
+pub use install::{install_command, remove_command, update_command};
 mod picker;
+mod popup;
 mod process;
 mod prompt;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -42,7 +45,7 @@ use parking_lot::Mutex;
 
 use crate::commands::{self, MappableCommand};
 use crate::compositor::Compositor;
-use crate::events::OnModeSwitch;
+use crate::events::{OnModeSwitch, PostCommand};
 use crate::job::{self, Jobs};
 
 /// Events are delivered after this delay, so a burst of changes (typing)
@@ -54,12 +57,108 @@ runtime_local! {
     static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), scheduled: false });
     /// Set while plugin actions are applied, so a plugin's own edits don't
     /// produce change events (which could loop forever).
-    static APPLYING: AtomicBool = AtomicBool::new(false);
+    static APPLYING: AtomicUsize = AtomicUsize::new(0);
+    /// Plugin commands running inside each other (a plugin command running
+    /// `:plugin-run`), to stop runaway recursion.
+    static DEPTH: AtomicUsize = AtomicUsize::new(0);
+    /// The events some plugin subscribed to (bits of `event_bit`), so editor
+    /// hooks cost nothing when no plugin listens.
+    static WANTED: AtomicU32 = AtomicU32::new(0);
+    /// The workspace of the working directory, cached: `(cwd, workspace)`.
+    static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+    /// Counts loads, so a slow background load can't replace a newer one.
+    static GENERATION: AtomicUsize = AtomicUsize::new(0);
+    /// The plugin directory and settings loaded last, to reload them.
+    static LOADED: Mutex<Option<(PathBuf, toml::Table)>> = Mutex::new(None);
+}
+
+fn event_bit(kind: EventKind) -> u32 {
+    1 << match kind {
+        EventKind::DocumentOpen => 0,
+        EventKind::DocumentChange => 1,
+        EventKind::ModeSwitch => 2,
+        EventKind::DocumentSave => 3,
+        EventKind::DocumentClose => 4,
+        EventKind::SelectionChange => 5,
+        EventKind::PostCommand => 6,
+        EventKind::FocusGained => 7,
+        EventKind::FocusLost => 8,
+        EventKind::EditorIdle => 9,
+    }
+}
+
+const EVENT_KINDS: [EventKind; 10] = [
+    EventKind::DocumentOpen,
+    EventKind::DocumentChange,
+    EventKind::ModeSwitch,
+    EventKind::DocumentSave,
+    EventKind::DocumentClose,
+    EventKind::SelectionChange,
+    EventKind::PostCommand,
+    EventKind::FocusGained,
+    EventKind::FocusLost,
+    EventKind::EditorIdle,
+];
+
+/// The workspace root for the current working directory.
+fn workspace() -> PathBuf {
+    let cwd = helix_stdx::env::current_working_dir();
+    let mut cache = WORKSPACE.lock();
+    match &*cache {
+        Some((cached_cwd, workspace)) if *cached_cwd == cwd => workspace.clone(),
+        _ => {
+            let workspace = helix_loader::find_workspace_in(&cwd).0;
+            *cache = Some((cwd, workspace.clone()));
+            workspace
+        }
+    }
 }
 
 struct Pending {
     events: Vec<Event>,
     scheduled: bool,
+}
+
+/// The directory plugins with `allow-files` may use: the workspace, but only
+/// a real project (with a `.git`, `.helix`, ... marker), never the home
+/// directory, `/`, or anything containing Pure's own configuration or data
+/// (a plugin could otherwise grant itself permissions in `plugins.toml`).
+fn file_workspace() -> Option<PathBuf> {
+    let cwd = helix_stdx::env::current_working_dir();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    file_workspace_in(
+        &cwd,
+        home.as_deref(),
+        &helix_loader::config_dir(),
+        &helix_loader::data_dir(),
+    )
+}
+
+fn file_workspace_in(
+    cwd: &Path,
+    home: Option<&Path>,
+    config: &Path,
+    data: &Path,
+) -> Option<PathBuf> {
+    let (workspace, is_fallback) = helix_loader::find_workspace_in(cwd);
+    let too_broad = is_fallback
+        || workspace.parent().is_none()
+        || home == Some(workspace.as_path())
+        || config.starts_with(&workspace)
+        || data.starts_with(&workspace);
+    if too_broad {
+        log::info!(
+            "plugins get no file access to {}: not a project directory",
+            workspace.display()
+        );
+        return None;
+    }
+    Some(workspace)
+}
+
+/// `plugins.lock`, next to the plugins directory `dir`.
+pub fn lock_file(dir: &Path) -> PathBuf {
+    dir.with_file_name("plugins.lock")
 }
 
 pub fn plugin_dir() -> PathBuf {
@@ -70,45 +169,125 @@ pub fn settings_file() -> PathBuf {
     helix_loader::config_dir().join("plugins.toml")
 }
 
-/// Load the user's plugins. Problems are reported in the status line and the
-/// log; they never stop the editor from starting.
-pub fn load(editor: &mut Editor) {
-    let settings = match std::fs::read_to_string(settings_file()) {
+/// The user's `plugins.toml`, and an error if it is invalid.
+fn read_settings() -> (toml::Table, Option<anyhow::Error>) {
+    match std::fs::read_to_string(settings_file()) {
         Ok(source) => match toml::from_str::<toml::Table>(&source) {
-            Ok(settings) => settings,
-            Err(err) => {
-                editor.set_error(format!("Invalid {}: {err}", settings_file().display()));
-                toml::Table::new()
-            }
+            Ok(settings) => (settings, None),
+            Err(err) => (
+                toml::Table::new(),
+                Some(anyhow::anyhow!(
+                    "Invalid {}: {err}",
+                    settings_file().display()
+                )),
+            ),
         },
-        Err(_) => toml::Table::new(),
-    };
+        Err(_) => (toml::Table::new(), None),
+    }
+}
+
+/// Load the user's plugins now (`:plugin-reload`). Problems are reported in
+/// the status line and the log.
+pub fn load(editor: &mut Editor) {
+    let (settings, error) = read_settings();
+    if let Some(err) = error {
+        editor.set_error(err.to_string());
+    }
     load_from(editor, &plugin_dir(), &settings);
 }
 
-/// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
-/// replacing any loaded plugins.
-pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
-    // The old plugins' programs and pickers are of no use to the new ones.
-    process::kill_all();
-    if !dir.is_dir() {
-        *HOST.lock() = None;
+/// Load the user's plugins without delaying startup: compiling and starting
+/// them happens on another thread, then they are installed and see the
+/// documents opened in the meantime. Without plugins this costs nothing.
+pub fn load_in_background() {
+    let dir = plugin_dir();
+    if !has_plugins(&dir) {
         return;
+    }
+    let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    tokio::spawn(async move {
+        let (settings, error) = read_settings();
+        let built = tokio::task::spawn_blocking(move || {
+            let (host, actions, mut errors) = build_host(&dir, &settings);
+            errors.extend(error);
+            (host, actions, errors, (dir, settings))
+        })
+        .await;
+        let Ok((host, actions, errors, loaded)) = built else {
+            return;
+        };
+        job::dispatch(move |editor, _| {
+            install_background(editor, generation, host, actions, errors, loaded);
+        })
+        .await;
+    });
+}
+
+/// Complete a background load only if it is still the newest request.
+fn install_background(
+    editor: &mut Editor,
+    generation: usize,
+    host: Option<PluginHost>,
+    actions: Vec<Action>,
+    errors: Vec<anyhow::Error>,
+    loaded: (PathBuf, toml::Table),
+) {
+    if GENERATION.load(Ordering::Relaxed) != generation {
+        return;
+    }
+    *LOADED.lock() = Some(loaded);
+    install(editor, host, actions, errors);
+    let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
+    for doc in open {
+        queue(Event::DocumentOpen(plugin_doc_id(doc)));
+    }
+}
+
+/// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).
+fn has_plugins(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().join("plugin.toml").is_file())
+    })
+}
+
+/// Start a plugin host with the plugins in `dir`; `None` if there are none.
+fn build_host(
+    dir: &Path,
+    settings: &toml::Table,
+) -> (Option<PluginHost>, Vec<Action>, Vec<anyhow::Error>) {
+    if !has_plugins(dir) {
+        return (None, Vec::new(), Vec::new());
     }
     let mut host = match PluginHost::new(Some(helix_loader::cache_dir().join("plugins"))) {
         Ok(host) => host,
         Err(err) => {
-            log::error!("failed to start the plugin host: {err:#}");
-            editor.set_error(format!("Failed to start the plugin host: {err}"));
-            return;
+            return (
+                None,
+                Vec::new(),
+                vec![err.context("failed to start the plugin host")],
+            )
         }
     };
     host.set_dirs(
-        Some(helix_loader::find_workspace().0),
+        file_workspace(),
         Some(helix_loader::data_dir().join("plugins")),
     );
     let mut setting_errors = Vec::new();
+    // Installed plugins whose component changed since aren't loaded.
+    let changed = match install::Lock::read(&lock_file(dir)) {
+        Ok(lock) => install::verify(dir, &lock),
+        Err(err) => {
+            setting_errors.push(err);
+            Vec::new()
+        }
+    };
     let (actions, mut errors) = host.load_all(dir, |name| {
+        if let Some((_, reason)) = changed.iter().find(|(changed, _)| changed == name) {
+            setting_errors.push(anyhow::anyhow!("{reason}"));
+            return None;
+        }
         plugin_settings(settings, name).map(|settings| {
             settings.unwrap_or_else(|err| {
                 setting_errors.push(err);
@@ -117,7 +296,43 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
         })
     });
     errors.extend(setting_errors);
-    *HOST.lock() = Some(host);
+    (Some(host), actions, errors)
+}
+
+/// Make `host` the editor's plugins and report what went wrong.
+fn install(
+    editor: &mut Editor,
+    host: Option<PluginHost>,
+    actions: Vec<Action>,
+    mut errors: Vec<anyhow::Error>,
+) {
+    let settings = LOADED.lock().as_ref().map(|(_, settings)| settings.clone());
+    let keys = host.as_ref().map_or(Ok(None), |host| {
+        plugin_keys(
+            &host.info(),
+            settings.as_ref().unwrap_or(&toml::Table::new()),
+        )
+    });
+    crate::keymap::set_plugin_keys(keys.unwrap_or_else(|err| {
+        errors.push(err);
+        None
+    }));
+    // The previous plugins' decorations go with them.
+    for doc in editor.documents.values_mut() {
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations = Default::default();
+        }
+    }
+    editor.plugin_statusline.clear();
+    let wanted = host.as_ref().map_or(0, |host| {
+        EVENT_KINDS
+            .into_iter()
+            .filter(|kind| host.wants(*kind))
+            .map(event_bit)
+            .fold(0, |mask, bit| mask | bit)
+    });
+    WANTED.store(wanted, Ordering::Relaxed);
+    *HOST.lock() = host;
 
     apply(editor, None, actions);
     for err in &errors {
@@ -132,6 +347,18 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     }
 }
 
+/// Load the plugins in `dir` with `settings` (the contents of `plugins.toml`),
+/// replacing any loaded plugins.
+pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
+    // The old plugins' programs are of no use to the new ones.
+    process::kill_all();
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+    *HOST.lock() = None;
+    *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
+    let (host, actions, errors) = build_host(dir, settings);
+    install(editor, host, actions, errors);
+}
+
 /// Like [`load_from`] with the settings given as TOML source.
 pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> anyhow::Result<()> {
     let settings: toml::Table = toml::from_str(settings)?;
@@ -143,6 +370,8 @@ pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> an
 fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<PluginSettings>> {
     let mut table = match settings.get(name) {
         Some(toml::Value::Table(table)) => table.clone(),
+        // `name = false` disables it too.
+        Some(toml::Value::Boolean(false)) => return None,
         _ => toml::Table::new(),
     };
     if let Some(enabled) = table.remove("enabled") {
@@ -152,6 +381,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     }
     table.remove("allow-process");
     table.remove("allow-files");
+    table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
         Ok(PluginSettings {
@@ -160,6 +390,80 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             files: file_grant(settings, name)?,
         })
     })())
+}
+
+/// The plugins' `[keys]`, as one keymap: each value is one of the plugin's
+/// commands, bound to `:plugin-run <plugin>/<command>`. `keys = false` in a
+/// plugin's `plugins.toml` table leaves its keys out. Earlier plugins (by
+/// directory name) win over later ones; the user's and Pure's keys over all.
+fn plugin_keys(
+    plugins: &[helix_plugin::PluginInfo],
+    settings: &toml::Table,
+) -> anyhow::Result<Option<HashMap<Mode, crate::keymap::KeyTrie>>> {
+    fn translate(
+        plugin: &helix_plugin::PluginInfo,
+        value: &toml::Value,
+    ) -> anyhow::Result<toml::Value> {
+        match value {
+            toml::Value::String(command) => {
+                anyhow::ensure!(
+                    plugin.commands.iter().any(|c| &c.name == command),
+                    "plugin '{}': [keys] names '{command}', which is not one of its commands",
+                    plugin.name
+                );
+                Ok(toml::Value::String(format!(
+                    ":plugin-run {}/{command}",
+                    plugin.name
+                )))
+            }
+            toml::Value::Table(table) => Ok(toml::Value::Table(
+                table
+                    .iter()
+                    .map(|(key, value)| Ok((key.clone(), translate(plugin, value)?)))
+                    .collect::<anyhow::Result<_>>()?,
+            )),
+            _ => anyhow::bail!(
+                "plugin '{}': [keys] values must be command names or tables",
+                plugin.name
+            ),
+        }
+    }
+    let mut all: Option<HashMap<Mode, crate::keymap::KeyTrie>> = None;
+    for plugin in plugins.iter().filter(|plugin| plugin.disabled.is_none()) {
+        let Some(keys) = &plugin.keys else {
+            continue;
+        };
+        let wanted = settings
+            .get(&plugin.name)
+            .and_then(|table| table.get("keys"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
+        if !wanted {
+            continue;
+        }
+        let translated = translate(plugin, &toml::Value::Table(keys.clone()))?;
+        let keymap: HashMap<Mode, crate::keymap::KeyTrie> = translated
+            .try_into()
+            .map_err(|err| anyhow::anyhow!("plugin '{}': invalid [keys]: {err}", plugin.name))?;
+        match &mut all {
+            None => all = Some(keymap),
+            Some(all) => {
+                for (mode, trie) in keymap {
+                    match (all.get_mut(&mode), trie) {
+                        (
+                            Some(crate::keymap::KeyTrie::Node(node)),
+                            crate::keymap::KeyTrie::Node(extra),
+                        ) => node.fill(extra),
+                        (None, trie) => {
+                            all.insert(mode, trie);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(all)
 }
 
 /// `allow-files` for plugin `name`: `"read"`, `"write"` or `false`.
@@ -212,6 +516,42 @@ pub fn command_names() -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// The working directory changed (`:cd`). Plugins with access to the
+/// workspace keep the directory they were started with (WASI preopens are
+/// fixed when a plugin starts), so reload them if the workspace changed.
+pub fn directory_changed(editor: &mut Editor) {
+    let stale = with_host(|host| {
+        host.workspace() != file_workspace().as_deref()
+            && host.info().iter().any(|plugin| {
+                plugin.files != FileGrant::None
+                    && plugin
+                        .permissions
+                        .contains(&helix_plugin::Permission::Filesystem)
+            })
+    })
+    .unwrap_or(false);
+    let loaded = LOADED.lock().clone();
+    if let (true, Some((dir, settings))) = (stale, loaded) {
+        load_from(editor, &dir, &settings);
+    }
+}
+
+/// `(plugin/command, doc)` of all plugin commands, for the command palette.
+pub fn commands_with_docs() -> Vec<(String, String)> {
+    with_host(|host| {
+        host.commands()
+            .into_iter()
+            .map(|(plugin, command)| (format!("{plugin}/{}", command.name), command.doc))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// How many plugins are loaded.
+pub fn count() -> usize {
+    with_host(|host| host.plugins().len()).unwrap_or(0)
+}
+
 /// Names of the loaded plugins, for completion.
 pub fn plugin_names() -> Vec<String> {
     with_host(|host| {
@@ -240,10 +580,24 @@ pub fn run_command(
     let (plugin, command) = name
         .split_once('/')
         .ok_or_else(|| anyhow::anyhow!("expected <plugin>/<command>, got '{name}'"))?;
+    // A plugin command may run other plugin commands, but not endlessly.
+    const MAX_DEPTH: usize = 4;
+    if DEPTH.load(Ordering::Relaxed) >= MAX_DEPTH {
+        anyhow::bail!("plugin commands nested too deeply (running {name})");
+    }
     let snapshot = snapshot(editor);
-    let actions = with_host(|host| host.run_command(plugin, command, args, snapshot))
-        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))??;
+    let result = with_host(|host| host.run_command(plugin, command, args, snapshot))
+        .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))?;
+    let actions = match result {
+        Ok(actions) => actions,
+        Err(error) => {
+            refresh_wanted();
+            return Err(error);
+        }
+    };
+    DEPTH.fetch_add(1, Ordering::Relaxed);
     apply(editor, Some(jobs), actions);
+    DEPTH.fetch_sub(1, Ordering::Relaxed);
     Ok(())
 }
 
@@ -304,7 +658,7 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         documents,
         current: Some(plugin_doc_id(editor.tree.get(editor.tree.focus).doc)),
         mode: plugin_mode(editor.mode()),
-        workspace: Some(helix_loader::find_workspace().0),
+        workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
     }
@@ -312,9 +666,13 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
 
 /// Apply the actions of a plugin call. `jobs` is needed to run commands; it is
 /// only available when a plugin command runs (not for events).
+type UiJob = Box<dyn FnOnce(&mut Editor, &mut Compositor) + Send>;
+
 fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>) {
-    APPLYING.store(true, Ordering::Relaxed);
+    APPLYING.fetch_add(1, Ordering::Relaxed);
     let mut edited: HashMap<DocumentId, ViewId> = HashMap::new();
+    // UI changes need the compositor: run them later, together, in order.
+    let mut ui: Vec<UiJob> = Vec::new();
     for action in actions {
         match action {
             Action::Edit { doc, transaction } => {
@@ -326,6 +684,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     continue;
                 };
                 let doc = editor.documents.get_mut(&doc_id).unwrap();
+                // Refused if the text changed since the plugin read it.
                 if doc.apply(&transaction, view_id) {
                     edited.insert(doc_id, view_id);
                 }
@@ -338,6 +697,11 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     continue;
                 };
                 let doc = editor.documents.get_mut(&doc_id).unwrap();
+                // The text may have changed since the plugin read it.
+                let len = doc.text().len_chars();
+                if selection.ranges().iter().any(|range| range.to() > len) {
+                    continue;
+                }
                 let selection = selection.ensure_invariants(doc.text().slice(..));
                 doc.set_selection(view_id, selection);
             }
@@ -345,6 +709,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 let path = helix_stdx::path::canonicalize(path);
                 if let Err(err) = editor.open(&path, helix_view::editor::Action::Replace) {
                     editor.set_error(format!("Failed to open {}: {err}", path.display()));
+                }
+            }
+            Action::OpenFileAt {
+                path,
+                action,
+                line,
+                column,
+            } => {
+                if let Err(error) = open_file_at(editor, &path, action, line, column) {
+                    editor.set_error(format!("Failed to open {}: {error}", path.display()));
                 }
             }
             Action::RunCommand(command) => match jobs.as_deref_mut() {
@@ -360,7 +734,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 cwd,
                 stdin,
                 timeout,
-            } => process::spawn(plugin, id, argv, cwd, stdin, timeout),
+                stream,
+            } => ui.push(Box::new(move |_, _| {
+                if with_host(|host| {
+                    host.has_request(&plugin, id, helix_plugin::PendingKind::Process)
+                })
+                .unwrap_or(false)
+                {
+                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream);
+                }
+            })),
             Action::RunInteractive {
                 plugin,
                 id,
@@ -376,9 +759,11 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 chooser_file,
                 wait_for_key,
             ) {
-                Ok(interactive) => later(move |_, compositor| {
-                    compositor.interactive = Some(interactive);
-                }),
+                Ok(interactive) => ui.push(Box::new(move |_, compositor| {
+                    if interactive.can_run() {
+                        compositor.interactive = Some(interactive);
+                    }
+                })),
                 Err(err) => deliver_later(
                     plugin,
                     Callback::ProcessDone {
@@ -387,38 +772,178 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     },
                 ),
             },
-            Action::Kill { plugin, id } => process::kill(&plugin, id),
-            Action::ShowPicker { plugin, id, picker } => {
-                later(move |_, compositor| picker::show(compositor, plugin, id, picker))
+            Action::Kill { plugin, id } => {
+                ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
             }
-            Action::PushItems { plugin, id, items } => {
-                later(move |_, compositor| picker::push_items(compositor, &plugin, id, items))
+            Action::ShowPicker {
+                plugin,
+                id,
+                picker,
+                generation,
+            } => ui.push(Box::new(move |_, compositor| {
+                picker::show(compositor, plugin, id, picker, generation)
+            })),
+            Action::PushItems {
+                plugin,
+                id,
+                items,
+                generation,
+            } => ui.push(Box::new(move |_, compositor| {
+                picker::push_items(compositor, &plugin, id, generation, items)
+            })),
+            Action::SetItems {
+                plugin,
+                id,
+                items,
+                generation,
+            } => {
+                // Now: the plugin's list already changed.
+                let revision = picker::set_items_requested(&plugin, id);
+                ui.push(Box::new(move |_, compositor| {
+                    picker::set_items(compositor, &plugin, id, generation, revision, items)
+                }))
             }
-            Action::SetItems { plugin, id, items } => {
-                later(move |_, compositor| picker::set_items(compositor, &plugin, id, items))
+            Action::Popup {
+                markdown,
+                centered,
+                owner,
+            } => ui.push(Box::new(move |editor, compositor| {
+                popup::show(editor, compositor, markdown, centered, owner);
+            })),
+            Action::ClosePopup { plugin, id } => ui.push(Box::new(move |_, compositor| {
+                popup::close(compositor, &plugin, id)
+            })),
+            Action::Decorate {
+                plugin,
+                doc,
+                layer,
+                decorations,
+            } => {
+                let Some(doc_id) = editor_doc_id(editor, doc) else {
+                    continue;
+                };
+                let doc = editor.documents.get_mut(&doc_id).unwrap();
+                let len = doc.text().len_chars();
+                let layer = format!("{plugin}/{layer}");
+                let store = &mut doc.plugin_decorations;
+                match decorations {
+                    helix_plugin::Decorations::Highlights(highlights) => {
+                        store.set_highlights(layer, highlights, len)
+                    }
+                    helix_plugin::Decorations::Annotations(annotations) => {
+                        store.set_annotations(layer, annotations, len)
+                    }
+                    helix_plugin::Decorations::Overlays(overlays) => {
+                        store.set_overlays(layer, overlays, len)
+                    }
+                    helix_plugin::Decorations::Signs(signs) => store.set_signs(
+                        layer,
+                        signs
+                            .into_iter()
+                            .map(|(pos, text, scope)| helix_view::plugin_decorations::Sign {
+                                pos,
+                                text,
+                                scope,
+                            })
+                            .collect(),
+                        len,
+                    ),
+                    helix_plugin::Decorations::RawOnCursorLine(raw) => {
+                        store.set_raw_on_cursor_line(layer, raw)
+                    }
+                }
+                helix_event::request_redraw();
             }
-            Action::Popup(markdown) => later(move |editor, compositor| {
-                let contents = crate::ui::Markdown::new(markdown, editor.syn_loader.clone());
-                let popup = crate::ui::Popup::new("plugin-popup", contents).auto_close(true);
-                compositor.replace_or_push("plugin-popup", popup);
-            }),
-            Action::ShowPrompt { plugin, id, prompt } => later(move |editor, compositor| {
-                prompt::show(editor, compositor, plugin, id, prompt)
-            }),
+            Action::RunBackground {
+                plugin,
+                id,
+                task,
+                input,
+            } => {
+                // `done` runs on the worker thread: hand the result to the
+                // editor's runtime.
+                let runtime = tokio::runtime::Handle::current();
+                let owner = plugin.clone();
+                let done = Box::new(move |result| {
+                    runtime.spawn(deliver_async(
+                        owner,
+                        Callback::BackgroundDone { id, result },
+                    ));
+                });
+                with_host(|host| host.run_background(&plugin, id, task, input, done));
+            }
+            Action::StatusLine {
+                plugin,
+                segment,
+                text,
+            } => {
+                let key = format!("{plugin}/{segment}");
+                if text.is_empty() {
+                    editor.plugin_statusline.remove(&key);
+                } else {
+                    editor.plugin_statusline.insert(key, text);
+                }
+                helix_event::request_redraw();
+            }
+            Action::ShowPrompt { plugin, id, prompt } => {
+                ui.push(Box::new(move |editor, compositor| {
+                    prompt::show(editor, compositor, plugin, id, prompt)
+                }))
+            }
         }
     }
     // All edits of one call are one undo step.
     let scrolloff = editor.config().scrolloff;
     for (doc_id, view_id) in edited {
-        if !editor.tree.contains(view_id) {
+        // A command the plugin ran may have closed the document or shown
+        // another one in the view.
+        if !editor.tree.contains(view_id) || editor.tree.get(view_id).doc != doc_id {
             continue;
         }
+        let Some(doc) = editor.documents.get_mut(&doc_id) else {
+            continue;
+        };
         let view = editor.tree.get_mut(view_id);
-        let doc = editor.documents.get_mut(&doc_id).unwrap();
         doc.append_changes_to_history(view);
         view.ensure_cursor_in_view(doc, scrolloff);
     }
-    APPLYING.store(false, Ordering::Relaxed);
+    if !ui.is_empty() {
+        later(move |editor, compositor| {
+            for job in ui {
+                job(editor, compositor);
+            }
+        });
+    }
+    APPLYING.fetch_sub(1, Ordering::Relaxed);
+}
+
+fn open_file_at(
+    editor: &mut Editor,
+    path: &Path,
+    action: helix_plugin::OpenAction,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> anyhow::Result<()> {
+    let action = match action {
+        helix_plugin::OpenAction::Replace => helix_view::editor::Action::Replace,
+        helix_plugin::OpenAction::Hsplit => helix_view::editor::Action::HorizontalSplit,
+        helix_plugin::OpenAction::Vsplit => helix_view::editor::Action::VerticalSplit,
+    };
+    let id = editor.open(&helix_stdx::path::canonicalize(path), action)?;
+    let scrolloff = editor.config().scrolloff;
+    let view = editor.tree.get_mut(editor.tree.focus);
+    let doc = editor.documents.get_mut(&id).unwrap();
+    let row = (line.unwrap_or(1).saturating_sub(1) as usize).min(doc.text().len_lines() - 1);
+    let end = helix_core::line_ending::line_end_char_index(&doc.text().slice(..), row);
+    let pos = doc
+        .text()
+        .line_to_char(row)
+        .saturating_add(column.unwrap_or(1).saturating_sub(1) as usize)
+        .min(end);
+    let selection = helix_core::Selection::point(pos).ensure_invariants(doc.text().slice(..));
+    doc.set_selection(view.id, selection);
+    view.ensure_cursor_in_view(doc, scrolloff);
+    Ok(())
 }
 
 /// Run `f` once the current event is handled (with the compositor, which
@@ -433,16 +958,25 @@ fn deliver(editor: &mut Editor, jobs: &mut Jobs, plugin: &str, callback: Callbac
     let snapshot = snapshot(editor);
     match with_host(|host| host.callback(plugin, callback, &snapshot)) {
         Some(Ok(actions)) => apply(editor, Some(jobs), actions),
-        Some(Err(err)) => editor.set_error(err.to_string()),
+        Some(Err(err)) => {
+            refresh_wanted();
+            editor.set_error(err.to_string());
+        }
         None => {}
     }
 }
 
 /// [`deliver`] from outside the editor's event loop.
 fn deliver_later(plugin: String, callback: Callback) {
-    tokio::spawn(job::dispatch_callback(job::Callback::EditorCompositorJobs(
-        Box::new(move |editor, _, jobs| deliver(editor, jobs, &plugin, callback)),
-    )));
+    tokio::spawn(deliver_async(plugin, callback));
+}
+
+/// Await the bounded job queue, preserving stream batches before completion.
+async fn deliver_async(plugin: String, callback: Callback) {
+    job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+        move |editor, _, jobs| deliver(editor, jobs, &plugin, callback),
+    )))
+    .await;
 }
 
 fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
@@ -469,12 +1003,19 @@ fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
 
 /// Register the hooks that turn editor events into plugin events.
 pub fn register_hooks() {
+    register_hook!(move |event: &mut PostCommand<'_, '_>| {
+        // Do not allocate a command name or lock anything unless requested.
+        if wants(EventKind::PostCommand) && APPLYING.load(Ordering::Relaxed) == 0 {
+            queue(Event::PostCommand(event.command.name().to_owned()));
+        }
+        Ok(())
+    });
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
         queue(Event::DocumentOpen(plugin_doc_id(event.doc)));
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
-        if !event.ghost_transaction && !APPLYING.load(Ordering::Relaxed) {
+        if !event.ghost_transaction && APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::DocumentChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
@@ -484,7 +1025,7 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut SelectionDidChange<'_>| {
-        if !APPLYING.load(Ordering::Relaxed) {
+        if APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::SelectionChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
@@ -498,13 +1039,52 @@ pub fn register_hooks() {
     });
 }
 
+/// Terminal focus notifications (no work unless subscribed).
+pub fn focus_changed(focused: bool) {
+    queue(if focused {
+        Event::FocusGained
+    } else {
+        Event::FocusLost
+    });
+}
+
+/// Called by the editor's existing idle timer. Dispatch immediately: adding
+/// another debounce timer here would wake the editor again while idle.
+pub fn editor_idle(editor: &mut Editor) {
+    if wants(EventKind::EditorIdle) {
+        deliver_event(editor, Event::EditorIdle);
+    }
+}
+
+fn refresh_wanted() {
+    let (mask, disabled) = with_host(|host| {
+        let mask = EVENT_KINDS
+            .into_iter()
+            .filter(|kind| host.wants(*kind))
+            .map(event_bit)
+            .fold(0, |mask, bit| mask | bit);
+        let disabled: Vec<_> = host
+            .plugins()
+            .iter()
+            .filter(|plugin| plugin.disabled().is_some())
+            .map(|plugin| plugin.name().to_owned())
+            .collect();
+        (mask, disabled)
+    })
+    .unwrap_or_default();
+    WANTED.store(mask, Ordering::Relaxed);
+    for plugin in disabled {
+        process::kill_plugin(&plugin);
+    }
+}
+
 /// A document was written to disk.
 pub fn document_saved(doc: DocumentId) {
     queue(Event::DocumentSave(plugin_doc_id(doc)));
 }
 
 fn queue(event: Event) {
-    if !with_host(|host| host.wants(event.kind())).unwrap_or(false) {
+    if WANTED.load(Ordering::Relaxed) & event_bit(event.kind()) == 0 {
         return;
     }
     let mut pending = PENDING.lock();
@@ -532,24 +1112,33 @@ pub fn deliver_events(editor: &mut Editor) {
         std::mem::take(&mut pending.events)
     };
     for event in events {
-        if let Event::DocumentChange(doc)
-        | Event::DocumentOpen(doc)
-        | Event::DocumentSave(doc)
-        | Event::SelectionChange(doc) = event
-        {
-            if editor_doc_id(editor, doc).is_none() {
-                continue; // closed in the meantime
-            }
-        }
-        let snapshot = snapshot(editor);
-        let Some(results) = with_host(|host| host.dispatch(event, &snapshot)) else {
+        deliver_event(editor, event);
+    }
+}
+
+fn deliver_event(editor: &mut Editor, event: Event) {
+    if let Event::DocumentChange(doc)
+    | Event::DocumentOpen(doc)
+    | Event::DocumentSave(doc)
+    | Event::SelectionChange(doc) = &event
+    {
+        if editor_doc_id(editor, *doc).is_none() {
             return;
-        };
-        for (_plugin, result) in results {
-            match result {
-                Ok(actions) => apply(editor, None, actions),
-                Err(err) => editor.set_error(err.to_string()),
+        }
+    }
+    let Some(plugins) = with_host(|host| host.subscribers(event.kind())) else {
+        return;
+    };
+    for plugin in plugins {
+        let snapshot = snapshot(editor);
+        let result = with_host(|host| host.dispatch_to(&plugin, event.clone(), &snapshot));
+        match result.flatten() {
+            Some(Ok(actions)) => apply(editor, None, actions),
+            Some(Err(error)) => {
+                refresh_wanted();
+                editor.set_error(error.to_string());
             }
+            None => {}
         }
     }
 }
@@ -588,6 +1177,34 @@ pub fn describe() -> String {
         {
             out.push_str(&format!("files: {}\n", plugin.files));
         }
+        if let Some(keys) = &plugin.keys {
+            let mut bound = Vec::new();
+            fn walk(prefix: &str, table: &toml::Table, out: &mut Vec<String>) {
+                for (key, value) in table {
+                    let keys = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix} {key}")
+                    };
+                    match value {
+                        toml::Value::Table(table) => walk(&keys, table, out),
+                        value => out.push(format!("`{keys}` {}", value.as_str().unwrap_or("?"))),
+                    }
+                }
+            }
+            for (mode, table) in keys {
+                let Some(table) = table.as_table() else {
+                    continue;
+                };
+                let prefix = if mode == "normal" {
+                    String::new()
+                } else {
+                    format!("({mode})")
+                };
+                walk(&prefix, table, &mut bound);
+            }
+            out.push_str(&format!("keys (if free): {}\n", bound.join(", ")));
+        }
         for command in &plugin.commands {
             out.push_str(&format!(
                 "- `{}/{}` {}\n",
@@ -601,5 +1218,104 @@ pub fn describe() -> String {
 
 /// Whether any plugin subscribes to events of `kind`.
 pub fn wants(kind: EventKind) -> bool {
-    with_host(|host| host.wants(kind)).unwrap_or(false)
+    WANTED.load(Ordering::Relaxed) & event_bit(kind) != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_grants_require_a_project_outside_home_config_and_data() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let home = root.path().join("home");
+        let config = home.join(".config/helix");
+        let data = home.join(".local/share/helix");
+        let check = |cwd: &Path| file_workspace_in(cwd, Some(&home), &config, &data);
+        assert_eq!(
+            check(&project),
+            None,
+            "unmarked directories are not projects"
+        );
+        std::fs::create_dir(project.join(".git")).unwrap();
+        assert_eq!(check(&project), Some(project.clone()));
+        std::fs::create_dir_all(home.join(".git")).unwrap();
+        assert_eq!(check(&home), None, "even a HOME with a marker is refused");
+        assert_eq!(check(Path::new("/")), None);
+        assert_eq!(
+            file_workspace_in(&project, Some(&home), &project.join("config"), &data),
+            None
+        );
+        assert_eq!(
+            file_workspace_in(&project, Some(&home), &config, &project.join("data")),
+            None
+        );
+    }
+
+    #[test]
+    fn boolean_false_disables_a_plugin_without_disabling_others() {
+        let settings = toml::from_str("one = false\n[two]\nsetting = 42").unwrap();
+        assert!(plugin_settings(&settings, "one").is_none());
+        assert_eq!(
+            plugin_settings(&settings, "two").unwrap().unwrap().config,
+            r#"{"setting":42}"#
+        );
+    }
+
+    // The integration feature gives Application a terminal test backend.
+    #[cfg(feature = "integration")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_background_load_cannot_replace_a_reload() {
+        let mut app = crate::application::Application::new(
+            crate::args::Args::default(),
+            crate::config::Config::default(),
+            helix_core::syntax::Loader::default(),
+            helix_loader::workspace_trust::WorkspaceTrust::fully_trusted(),
+        )
+        .unwrap();
+        let old = GENERATION.load(Ordering::Relaxed);
+        let empty = tempfile::tempdir().unwrap();
+        let newer_settings = toml::from_str("[newer]\nallow-process = [\"rg\"]\n").unwrap();
+        load_from(&mut app.editor, empty.path(), &newer_settings);
+        install(
+            &mut app.editor,
+            Some(PluginHost::new(None).unwrap()),
+            vec![],
+            vec![],
+        );
+        app.editor.set_status("newer load");
+        install_background(
+            &mut app.editor,
+            old,
+            None,
+            vec![Action::Status("stale init".into())],
+            vec![anyhow::anyhow!("stale error")],
+            (empty.path().join("stale"), toml::Table::new()),
+        );
+        assert_eq!(
+            *LOADED.lock(),
+            Some((empty.path().to_path_buf(), newer_settings)),
+            "stale settings must not replace the reload's grants or directory"
+        );
+        assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "newer load");
+        assert!(
+            with_host(|_| ()).is_some(),
+            "stale load must not replace the current host"
+        );
+        install_background(
+            &mut app.editor,
+            GENERATION.load(Ordering::Relaxed),
+            None,
+            vec![Action::Status("current init".into())],
+            vec![],
+            (empty.path().join("current"), toml::Table::new()),
+        );
+        assert_eq!(app.editor.get_status().unwrap().0.as_ref(), "current init");
+        assert_eq!(
+            *LOADED.lock(),
+            Some((empty.path().join("current"), toml::Table::new()))
+        );
+    }
 }

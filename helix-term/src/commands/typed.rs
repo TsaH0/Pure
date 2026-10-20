@@ -1331,6 +1331,7 @@ fn apply_directory_change(cx: &mut compositor::Context, dir: &Path) -> anyhow::R
             dir.display()
         )
     })?;
+    crate::plugins::directory_changed(cx.editor);
 
     cx.editor.set_status(format!(
         "Current working directory is now {}",
@@ -2980,6 +2981,48 @@ fn plugin_list(
     Ok(())
 }
 
+fn plugin_install(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        crate::plugins::install_command(cx.editor, args[0].to_string());
+    }
+    Ok(())
+}
+
+fn plugin_update(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        let names = args.iter().map(|arg| arg.to_string()).collect();
+        crate::plugins::update_command(cx.editor, names);
+    }
+    Ok(())
+}
+
+fn plugin_remove(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let name = args[0].to_string();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |_editor: &mut Editor, compositor: &mut Compositor| {
+                crate::plugins::remove_command(compositor, name)
+            },
+        )))
+    });
+    Ok(())
+}
+
 fn plugin_log(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -3018,7 +3061,7 @@ fn plugin_reload(
     cx.editor.clear_status();
     crate::plugins::load(cx.editor);
     if cx.editor.get_status().is_none() {
-        let count = crate::plugins::with_host(|host| host.plugins().len()).unwrap_or(0);
+        let count = crate::plugins::count();
         cx.editor.set_status(format!("Loaded {count} plugin(s)"));
     }
     Ok(())
@@ -4490,6 +4533,39 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
+        name: "plugin-install",
+        aliases: &[],
+        doc: "Install a plugin from a git URL or a directory (it must have a committed component); asks first.",
+        fun: plugin_install,
+        completer: CommandCompleter::positional(&[completers::directory]),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-update",
+        aliases: &[],
+        doc: "Update plugins installed with :plugin-install (all, or the ones named); asks before new permissions.",
+        fun: plugin_update,
+        completer: CommandCompleter::all(completers::plugin_name),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-remove",
+        aliases: &[],
+        doc: "Remove a plugin (asks first).",
+        fun: plugin_remove,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "plugin-log",
         aliases: &[],
         doc: "Show the latest lines a plugin logged in a new buffer: `:plugin-log <plugin>`.",
@@ -4713,6 +4789,11 @@ fn execute_command_line(
 
     match typed::TYPABLE_COMMAND_MAP.get(command) {
         Some(cmd) => execute_command(cx, cmd, rest, event),
+        // `:plugin/command args` runs a plugin command.
+        None if command.contains('/') => {
+            let cmd = TYPABLE_COMMAND_MAP.get("plugin-run").unwrap();
+            execute_command(cx, cmd, &format!("{command} {rest}"), event)
+        }
         None if event == PromptEvent::Validate => Err(anyhow!("no such command: '{command}'")),
         None => Ok(()),
     }
@@ -4845,13 +4926,17 @@ fn complete_command_line(editor: &Editor, input: &str) -> Vec<ui::prompt::Comple
     let (command, rest, complete_command) = command_line::split(input);
 
     if complete_command {
+        let plugin_commands = crate::plugins::command_names();
         fuzzy_match(
             input,
-            TYPABLE_COMMAND_LIST.iter().map(|command| command.name),
+            TYPABLE_COMMAND_LIST
+                .iter()
+                .map(|command| command.name)
+                .chain(plugin_commands.iter().map(String::as_str)),
             false,
         )
         .into_iter()
-        .map(|(name, _)| (0.., name.into()))
+        .map(|(name, _)| (0.., name.to_string().into()))
         .collect()
     } else {
         TYPABLE_COMMAND_MAP

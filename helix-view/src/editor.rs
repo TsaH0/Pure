@@ -804,6 +804,9 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+
+    /// Text plugins put in the statusline (`set-statusline`)
+    Plugins,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs
@@ -909,6 +912,8 @@ pub enum GutterType {
     Diff,
     /// Indicator for when code actions are available
     CodeActionHint,
+    /// Signs from plugins (`set-signs`)
+    Plugins,
 }
 
 impl std::str::FromStr for GutterType {
@@ -921,8 +926,9 @@ impl std::str::FromStr for GutterType {
             "line-numbers" => Ok(Self::LineNumbers),
             "diff" => Ok(Self::Diff),
             "code-action-hint" => Ok(Self::CodeActionHint),
+            "plugins" => Ok(Self::Plugins),
             _ => anyhow::bail!(
-                "Gutter type can only be `diagnostics`, `spacer`, `line-numbers` or `diff`."
+                "Gutter type can only be `diagnostics`, `spacer`, `line-numbers`, `diff`, `code-action-hint` or `plugins`."
             ),
         }
     }
@@ -1321,6 +1327,9 @@ pub struct Editor {
     pub last_completion: Option<CompleteAction>,
     pub last_cwd: Option<PathBuf>,
     pub dir_stack: VecDeque<PathBuf>,
+    /// Statusline text from plugins, by `plugin/segment` (the `plugins`
+    /// statusline element).
+    pub plugin_statusline: BTreeMap<String, String>,
 
     pub exit_code: i32,
 
@@ -1467,6 +1476,7 @@ impl Editor {
             mouse_down_range: None,
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
+            plugin_statusline: BTreeMap::new(),
             workspace_trust,
         }
     }

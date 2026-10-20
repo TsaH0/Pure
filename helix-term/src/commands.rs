@@ -543,6 +543,7 @@ impl MappableCommand {
         shrink_selection, "Shrink selection to previously expanded syntax node",
         select_next_sibling, "Select next sibling in the syntax tree",
         select_prev_sibling, "Select previous sibling the in syntax tree",
+        select_inside_next_pair, "Select inside the next bracket or quote pair on the line",
         select_all_siblings, "Select all siblings of the current node",
         select_all_children, "Select all children of the current node",
         jump_forward, "Jump forward on jumplist",
@@ -666,6 +667,15 @@ impl std::str::FromStr for MappableCommand {
         if let Some(suffix) = s.strip_prefix(':') {
             let (name, args, _) = command_line::split(suffix);
             ensure!(!name.is_empty(), "Expected typable command name");
+            // `:plugin/command`: plugins load after the keymap, so any such
+            // name is accepted here and checked when it runs.
+            if name.contains('/') && !typed::TYPABLE_COMMAND_MAP.contains_key(name) {
+                return Ok(MappableCommand::Typable {
+                    name: "plugin-run".to_owned(),
+                    doc: format!(":{suffix}"),
+                    args: format!("{name} {args}").trim_end().to_owned(),
+                });
+            }
             typed::TYPABLE_COMMAND_MAP
                 .get(name)
                 .map(|cmd| {
@@ -3690,18 +3700,36 @@ pub fn command_palette(cx: &mut Context) {
                 [&cx.editor.mode]
                 .reverse_map();
 
-            let commands = MappableCommand::STATIC_COMMAND_LIST.iter().cloned().chain(
-                typed::TYPABLE_COMMAND_LIST
+            let plugin_commands = crate::plugins::commands_with_docs();
+            let commands =
+                MappableCommand::STATIC_COMMAND_LIST
                     .iter()
-                    .map(|cmd| MappableCommand::Typable {
-                        name: cmd.name.to_owned(),
-                        args: String::new(),
-                        doc: cmd.doc.to_owned(),
-                    }),
-            );
+                    .cloned()
+                    .chain(
+                        typed::TYPABLE_COMMAND_LIST
+                            .iter()
+                            .map(|cmd| MappableCommand::Typable {
+                                name: cmd.name.to_owned(),
+                                args: String::new(),
+                                doc: cmd.doc.to_owned(),
+                            }),
+                    )
+                    // Plugin commands, with their docs.
+                    .chain(plugin_commands.into_iter().map(|(name, doc)| {
+                        MappableCommand::Typable {
+                            name: "plugin-run".to_owned(),
+                            args: name,
+                            doc,
+                        }
+                    }));
 
             let columns = [
                 ui::PickerColumn::new("name", |item, _| match item {
+                    MappableCommand::Typable { name, args, .. }
+                        if name == "plugin-run" && !args.is_empty() =>
+                    {
+                        format!(":{args}").into()
+                    }
                     MappableCommand::Typable { name, .. } => format!(":{name}").into(),
                     MappableCommand::Static { name, .. } => (*name).into(),
                     MappableCommand::Macro { .. } => {
@@ -6022,6 +6050,23 @@ fn select_next_sibling(cx: &mut Context) {
 
 fn select_prev_sibling(cx: &mut Context) {
     select_sibling_impl(cx, object::select_prev_sibling)
+}
+
+/// Select inside the nearest bracket or quote pair on the line: the next one
+/// to the right, else the nearest to the left, else the one around the
+/// cursor. Pressing it again steps into the next pair.
+fn select_inside_next_pair(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        match helix_core::surround::find_next_pair_on_line(text, range.from()) {
+            Some((open, close)) if close > open + 1 => Range::new(open + 1, close),
+            // Empty pair: put the cursor between the delimiters.
+            Some((open, _)) => Range::point(open + 1),
+            None => range,
+        }
+    });
+    doc.set_selection(view.id, selection);
 }
 
 fn move_node_bound_impl(cx: &mut Context, dir: Direction, movement: Movement) {

@@ -14,9 +14,11 @@
 //! or runs out of time is disabled.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,12 +31,12 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 
-use api::{v0_1, v0_2, Instance};
+use api::{v0_1, v0_2, v0_3, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.2";
+pub const API_VERSION: &str = "0.3";
 
 pub type DocumentId = u32;
 
@@ -147,7 +149,37 @@ pub enum EventKind {
     DocumentSave,
     DocumentClose,
     SelectionChange,
+    /// API 0.3 and later.
+    PostCommand,
+    FocusGained,
+    FocusLost,
+    EditorIdle,
 }
+
+/// What a [`Action::Decorate`] sets, validated against the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decorations {
+    /// `(char range, theme scope)`.
+    Highlights(Vec<(std::ops::Range<usize>, String)>),
+    /// `(char position, text, theme scope)`.
+    Annotations(Vec<(usize, String, String)>),
+    /// `(char position, text drawn over the chars from there, theme scope)`.
+    Overlays(Vec<(usize, String, String)>),
+    /// `(char position of the line start, one-char text, theme scope)`.
+    Signs(Vec<(usize, String, String)>),
+    /// Not a replacement: whether the layer is hidden on the cursor's line.
+    RawOnCursorLine(bool),
+}
+
+/// Most background tasks a plugin may have at once, and their default time
+/// limit ([`Limits::background`]).
+pub const MAX_BACKGROUND: usize = 4;
+pub const BACKGROUND_LIMIT: Duration = Duration::from_secs(30);
+
+/// Most decorations in one layer.
+pub const MAX_DECORATIONS: usize = 100_000;
+/// Longest statusline segment, in chars.
+pub const MAX_STATUSLINE: usize = 200;
 
 /// Most programs a plugin may run at once.
 pub const MAX_PROCESSES: usize = 16;
@@ -174,6 +206,10 @@ pub struct Manifest {
     /// The component, relative to the plugin's directory.
     #[serde(default = "default_wasm")]
     pub wasm: PathBuf,
+    /// Default key bindings, like `config.toml`'s `[keys]`, whose values are
+    /// the plugin's command names. They only bind keys nothing else binds.
+    #[serde(default)]
+    pub keys: Option<toml::Table>,
 }
 
 fn default_wasm() -> PathBuf {
@@ -189,9 +225,9 @@ impl Manifest {
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure supports 0.1 and 0.2",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
                 manifest.name,
                 manifest.api
             );
@@ -258,6 +294,13 @@ pub enum Action {
         selection: Selection,
     },
     OpenFile(PathBuf),
+    /// Open in a selected split with a 1-based position (API 0.3).
+    OpenFileAt {
+        path: PathBuf,
+        action: OpenAction,
+        line: Option<u32>,
+        column: Option<u32>,
+    },
     RunCommand(String),
     Status(String),
     Error(String),
@@ -270,6 +313,7 @@ pub enum Action {
         cwd: Option<PathBuf>,
         stdin: Option<String>,
         timeout: Duration,
+        stream: bool,
     },
     /// Hand the terminal to a program, then deliver
     /// [`Callback::ProcessDone`].
@@ -291,21 +335,54 @@ pub enum Action {
         plugin: String,
         id: u32,
         picker: PickerSpec,
+        generation: Option<u64>,
     },
     /// Add items to an open picker.
     PushItems {
         plugin: String,
         id: u32,
         items: Vec<PickerItem>,
+        generation: Option<u64>,
     },
     /// Replace the items of an open picker.
     SetItems {
         plugin: String,
         id: u32,
         items: Vec<PickerItem>,
+        generation: Option<u64>,
     },
     /// Show markdown in a popup.
-    Popup(String),
+    Popup {
+        markdown: String,
+        centered: bool,
+        owner: Option<(String, u32)>,
+    },
+    ClosePopup {
+        plugin: String,
+        id: u32,
+    },
+    /// Replace one of `plugin`'s decoration layers on `doc`.
+    Decorate {
+        plugin: String,
+        doc: DocumentId,
+        layer: String,
+        decorations: Decorations,
+    },
+    /// Run `task` in the plugin's background instance
+    /// ([`PluginHost::run_background`]) and deliver
+    /// [`Callback::BackgroundDone`].
+    RunBackground {
+        plugin: String,
+        id: u32,
+        task: String,
+        input: String,
+    },
+    /// Set (or, empty, remove) a statusline segment.
+    StatusLine {
+        plugin: String,
+        segment: String,
+        text: String,
+    },
     /// Ask for a line of text and deliver [`Callback::PromptDone`].
     ShowPrompt {
         plugin: String,
@@ -331,11 +408,18 @@ pub enum PendingKind {
     Process,
     Picker,
     Prompt,
+    Popup,
+    Background,
 }
 
 /// A result delivered after the original plugin call returned.
 #[derive(Debug, Clone)]
 pub enum Callback {
+    /// A batch of stdout lines; the process request remains open.
+    ProcessOutput {
+        id: u32,
+        chunk: String,
+    },
     ProcessDone {
         id: u32,
         result: Result<ProcessOutput, String>,
@@ -353,22 +437,35 @@ pub enum Callback {
     PickerQuery {
         id: u32,
         query: String,
+        generation: Option<u64>,
+    },
+    PopupClosed {
+        id: u32,
+    },
+    /// What the plugin's background instance returned.
+    BackgroundDone {
+        id: u32,
+        result: Result<String, String>,
     },
 }
 
 impl Callback {
     fn request(&self) -> (u32, PendingKind) {
         match self {
-            Self::ProcessDone { id, .. } => (*id, PendingKind::Process),
+            Self::ProcessDone { id, .. } | Self::ProcessOutput { id, .. } => {
+                (*id, PendingKind::Process)
+            }
             Self::PickerDone { id, .. } | Self::PickerQuery { id, .. } => {
                 (*id, PendingKind::Picker)
             }
             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
+            Self::PopupClosed { id } => (*id, PendingKind::Popup),
+            Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
         }
     }
 
     fn completes(&self) -> bool {
-        !matches!(self, Self::PickerQuery { .. })
+        !matches!(self, Self::PickerQuery { .. } | Self::ProcessOutput { .. })
     }
 }
 
@@ -391,7 +488,7 @@ impl CallContext {
 static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 
 /// What happened in the editor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     DocumentOpen(DocumentId),
     DocumentChange(DocumentId),
@@ -399,6 +496,10 @@ pub enum Event {
     DocumentSave(DocumentId),
     DocumentClose(DocumentId),
     SelectionChange(DocumentId),
+    PostCommand(String),
+    FocusGained,
+    FocusLost,
+    EditorIdle,
 }
 
 impl Event {
@@ -410,6 +511,10 @@ impl Event {
             Event::DocumentSave(_) => EventKind::DocumentSave,
             Event::DocumentClose(_) => EventKind::DocumentClose,
             Event::SelectionChange(_) => EventKind::SelectionChange,
+            Event::PostCommand(_) => EventKind::PostCommand,
+            Event::FocusGained => EventKind::FocusGained,
+            Event::FocusLost => EventKind::FocusLost,
+            Event::EditorIdle => EventKind::EditorIdle,
         }
     }
 }
@@ -425,6 +530,8 @@ pub struct Limits {
     pub event: Duration,
     /// Maximum linear memory of a plugin, in bytes.
     pub memory: usize,
+    /// Maximum time for a background task (`run-background`).
+    pub background: Duration,
 }
 
 impl Default for Limits {
@@ -434,6 +541,7 @@ impl Default for Limits {
             command: Duration::from_secs(2),
             event: Duration::from_millis(250),
             memory: 256 << 20,
+            background: BACKGROUND_LIMIT,
         }
     }
 }
@@ -450,6 +558,9 @@ struct State {
     context: CallContext,
     next_id: &'static AtomicU32,
     pending: HashMap<u32, PendingKind>,
+    picker_items: HashMap<u32, usize>,
+    picker_generations: HashMap<u32, u64>,
+    streaming: HashSet<u32>,
     process: ProcessGrant,
     files: FileGrant,
     /// The plugin's own directory (`data-dir`), preopened read-write.
@@ -460,6 +571,36 @@ struct State {
 
 /// `log` lines kept per plugin.
 const LOG_LINES: usize = 1000;
+
+impl State {
+    /// For a background instance: no permissions, grants, files or snapshot.
+    fn background(plugin: &str, memory: usize) -> Self {
+        Self {
+            wasi: WasiCtx::builder().build(),
+            table: ResourceTable::new(),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(memory)
+                .instances(16)
+                .tables(64)
+                .memories(16)
+                .build(),
+            plugin: plugin.to_string(),
+            permissions: HashSet::new(),
+            snapshot: Snapshot::default(),
+            actions: Vec::new(),
+            context: CallContext::Init,
+            next_id: &NEXT_REQUEST_ID,
+            pending: HashMap::new(),
+            picker_items: HashMap::new(),
+            picker_generations: HashMap::new(),
+            streaming: HashSet::new(),
+            process: ProcessGrant::None,
+            files: FileGrant::None,
+            data_dir: None,
+            log: Default::default(),
+        }
+    }
+}
 
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -624,6 +765,26 @@ impl State {
         Ok(())
     }
 
+    fn open_file_at(
+        &mut self,
+        path: String,
+        action: OpenAction,
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Result<(), String> {
+        self.need(Permission::OpenFiles)?;
+        if path.is_empty() {
+            return Err("empty path".into());
+        }
+        self.actions.push(Action::OpenFileAt {
+            path: path.into(),
+            action,
+            line,
+            column,
+        });
+        Ok(())
+    }
+
     fn run_command(&mut self, command: String) -> Result<(), String> {
         self.need(Permission::RunCommands)?;
         if !self.context.allows_ui() {
@@ -694,6 +855,7 @@ impl State {
         cwd: Option<String>,
         stdin: Option<String>,
         timeout_ms: Option<u32>,
+        stream: bool,
     ) -> Result<u32, String> {
         self.need_process(&argv)?;
         let timeout = timeout_ms
@@ -701,6 +863,9 @@ impl State {
             .unwrap_or(DEFAULT_PROCESS_TIMEOUT)
             .min(MAX_PROCESS_TIMEOUT);
         let id = self.request(PendingKind::Process)?;
+        if stream {
+            self.streaming.insert(id);
+        }
         self.actions.push(Action::Spawn {
             plugin: self.plugin.clone(),
             id,
@@ -708,6 +873,7 @@ impl State {
             cwd: cwd.map(PathBuf::from),
             stdin,
             timeout,
+            stream,
         });
         Ok(id)
     }
@@ -742,7 +908,7 @@ impl State {
         }
     }
 
-    fn show_picker(&mut self, picker: PickerSpec) -> Result<u32, String> {
+    fn show_picker(&mut self, picker: PickerSpec, generations: bool) -> Result<u32, String> {
         self.need_ui("show-picker")?;
         if picker.columns.is_empty() || picker.columns.len() > MAX_PICKER_COLUMNS {
             return Err(format!(
@@ -756,50 +922,287 @@ impl State {
             ));
         }
         let id = self.request(PendingKind::Picker)?;
+        self.picker_items.insert(id, picker.items.len());
+        let generation = generations.then_some(0);
+        if let Some(generation) = generation {
+            self.picker_generations.insert(id, generation);
+        }
         self.actions.push(Action::ShowPicker {
             plugin: self.plugin.clone(),
             id,
             picker,
+            generation,
         });
         Ok(id)
     }
 
-    fn push_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
+    fn accepts_picker_items(&self, id: u32, generation: Option<u64>) -> Result<bool, String> {
         if self.pending.get(&id) != Some(&PendingKind::Picker) {
             return Err(format!("no open picker with id {id}"));
+        }
+        match (self.picker_generations.get(&id), generation) {
+            (Some(current), Some(generation)) => Ok(*current == generation),
+            (Some(_), None) => Err("live picker updates need a query generation".into()),
+            (None, Some(_)) => Err("query generations require a live API 0.3 picker".into()),
+            (None, None) => Ok(true),
+        }
+    }
+
+    fn push_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<PickerItem>,
+    ) -> Result<(), String> {
+        if !self.accepts_picker_items(id, generation)? {
+            return Ok(());
         }
         if self.context == CallContext::Init {
             return Err("push-items can't be used from init".into());
         }
+        let count = self.picker_items.get(&id).copied().unwrap_or(0);
+        let total = count
+            .checked_add(items.len())
+            .filter(|total| *total <= MAX_PICKER_ITEMS)
+            .ok_or_else(|| format!("a picker can have at most {MAX_PICKER_ITEMS} items"))?;
+        self.picker_items.insert(id, total);
         self.actions.push(Action::PushItems {
             plugin: self.plugin.clone(),
             id,
             items,
+            generation,
         });
         Ok(())
     }
 
-    fn set_items(&mut self, id: u32, items: Vec<PickerItem>) -> Result<(), String> {
-        if self.pending.get(&id) != Some(&PendingKind::Picker) {
-            return Err(format!("no open picker with id {id}"));
+    fn set_items(
+        &mut self,
+        id: u32,
+        generation: Option<u64>,
+        items: Vec<PickerItem>,
+    ) -> Result<(), String> {
+        if !self.accepts_picker_items(id, generation)? {
+            return Ok(());
         }
         if items.len() > MAX_PICKER_ITEMS {
             return Err(format!(
                 "a picker can have at most {MAX_PICKER_ITEMS} items"
             ));
         }
+        self.picker_items.insert(id, items.len());
         self.actions.push(Action::SetItems {
             plugin: self.plugin.clone(),
             id,
             items,
+            generation,
+        });
+        Ok(())
+    }
+
+    /// Validate a layer name, a document and the number of decorations.
+    fn need_layer(&self, doc: DocumentId, layer: &str, count: usize) -> Result<usize, String> {
+        if layer.is_empty() || layer.len() > 64 || layer.contains('/') {
+            return Err(format!("invalid layer name '{layer}': 1-64 chars, no '/'"));
+        }
+        if count > MAX_DECORATIONS {
+            return Err(format!(
+                "a layer can have at most {MAX_DECORATIONS} decorations"
+            ));
+        }
+        Ok(self.document(doc)?.text.len_chars())
+    }
+
+    fn decorate(&mut self, doc: DocumentId, layer: String, decorations: Decorations) {
+        self.actions.push(Action::Decorate {
+            plugin: self.plugin.clone(),
+            doc,
+            layer,
+            decorations,
+        });
+    }
+
+    fn set_highlights(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        highlights: Vec<(u32, u32, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, highlights.len())?;
+        let mut ranges = Vec::with_capacity(highlights.len());
+        for (from, to, scope) in highlights {
+            let (from, to) = (from as usize, to as usize);
+            if from > to || to > len {
+                return Err(format!(
+                    "invalid range {from}..{to} for a document of {len} chars"
+                ));
+            }
+            ranges.push((from..to, scope));
+        }
+        self.decorate(doc, layer, Decorations::Highlights(ranges));
+        Ok(())
+    }
+
+    fn set_annotations(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        annotations: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, annotations.len())?;
+        let mut checked = Vec::with_capacity(annotations.len());
+        for (position, text, scope) in annotations {
+            if position as usize > len {
+                return Err(format!(
+                    "invalid position {position} for a document of {len} chars"
+                ));
+            }
+            if text.contains('\n') {
+                return Err("virtual text can't contain line breaks".into());
+            }
+            checked.push((position as usize, text, scope));
+        }
+        self.decorate(doc, layer, Decorations::Annotations(checked));
+        Ok(())
+    }
+
+    fn set_overlays(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        overlays: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, overlays.len())?;
+        let text = &self.document(doc)?.text;
+        let mut checked = Vec::with_capacity(overlays.len());
+        for (position, overlay, scope) in overlays {
+            let (from, count) = (position as usize, overlay.chars().count());
+            if from + count > len {
+                return Err(format!(
+                    "invalid overlay at {position} for a document of {len} chars"
+                ));
+            }
+            if text
+                .slice(from..from + count)
+                .chars()
+                .any(|c| c == '\n' || c == '\r')
+            {
+                return Err("an overlay can't cover a line break".into());
+            }
+            checked.push((from, overlay, scope));
+        }
+        self.decorate(doc, layer, Decorations::Overlays(checked));
+        Ok(())
+    }
+
+    fn set_signs(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        signs: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, signs.len())?;
+        let text = &self.document(doc)?.text;
+        let lines = text.len_lines();
+        let mut checked = Vec::with_capacity(signs.len());
+        for (line, sign, scope) in signs {
+            if line as usize >= lines {
+                return Err(format!(
+                    "invalid line {line} for a document of {lines} lines"
+                ));
+            }
+            let sign: String = sign.chars().take(1).collect();
+            checked.push((text.line_to_char(line as usize), sign, scope));
+        }
+        self.decorate(doc, layer, Decorations::Signs(checked));
+        Ok(())
+    }
+
+    fn run_background(&mut self, task: String, input: String) -> Result<u32, String> {
+        if self.context == CallContext::Init {
+            return Err("run-background can't be used from init".into());
+        }
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Background)
+            .count();
+        if running >= MAX_BACKGROUND {
+            return Err(format!(
+                "at most {MAX_BACKGROUND} background tasks can run at once"
+            ));
+        }
+        let id = self.request(PendingKind::Background)?;
+        self.actions.push(Action::RunBackground {
+            plugin: self.plugin.clone(),
+            id,
+            task,
+            input,
+        });
+        Ok(id)
+    }
+
+    fn set_raw_on_cursor_line(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        raw: bool,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, 0)?;
+        self.decorate(doc, layer, Decorations::RawOnCursorLine(raw));
+        Ok(())
+    }
+
+    fn set_statusline(&mut self, segment: String, text: String) -> Result<(), String> {
+        if segment.is_empty() || segment.len() > 64 || segment.contains('/') {
+            return Err(format!(
+                "invalid segment name '{segment}': 1-64 chars, no '/'"
+            ));
+        }
+        // One line, bounded: it is drawn on every frame.
+        let text: String = text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .take(MAX_STATUSLINE)
+            .collect();
+        self.actions.push(Action::StatusLine {
+            plugin: self.plugin.clone(),
+            segment,
+            text,
         });
         Ok(())
     }
 
     fn show_popup(&mut self, markdown: String) -> Result<(), String> {
         self.need_ui("show-popup")?;
-        self.actions.push(Action::Popup(markdown));
+        self.actions.push(Action::Popup {
+            markdown,
+            centered: false,
+            owner: None,
+        });
         Ok(())
+    }
+
+    fn show_popup_with_id(&mut self, markdown: String, centered: bool) -> Result<u32, String> {
+        self.need_ui("show-popup")?;
+        let id = self.request(PendingKind::Popup)?;
+        self.actions.push(Action::Popup {
+            markdown,
+            centered,
+            owner: Some((self.plugin.clone(), id)),
+        });
+        Ok(id)
+    }
+
+    fn close_popup(&mut self, id: u32) {
+        if !self.context.allows_ui() {
+            return;
+        }
+        if self.pending.get(&id) == Some(&PendingKind::Popup) {
+            self.actions.push(Action::ClosePopup {
+                plugin: self.plugin.clone(),
+                id,
+            });
+        }
     }
 
     fn show_prompt(&mut self, prompt: PromptSpec) -> Result<u32, String> {
@@ -901,6 +1304,90 @@ pub struct Plugin {
     events: Vec<EventKind>,
     /// Why the plugin was disabled.
     disabled: Option<String>,
+    ticker: Arc<Ticker>,
+    runtime: Arc<CallRuntime>,
+    /// For the background instance (API 0.3), made on first use.
+    component: Component,
+    worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
+}
+
+/// A task for a plugin's background instance.
+struct BackgroundTask {
+    task: String,
+    input: String,
+    done: Box<dyn FnOnce(Result<String, String>) + Send>,
+}
+
+/// The thread running a plugin's background instance: a second instance of
+/// the component with its own memory, no permissions, no snapshot (its host
+/// calls see nothing and change nothing), and `limit` per task.
+/// It ends when the plugin is dropped (the sender goes).
+fn spawn_worker(
+    engine: Engine,
+    linker: Linker<State>,
+    component: Component,
+    ticker: Arc<Ticker>,
+    name: String,
+    memory: usize,
+    limit: Duration,
+) -> std::io::Result<std::sync::mpsc::Sender<BackgroundTask>> {
+    let (sender, tasks) = std::sync::mpsc::channel::<BackgroundTask>();
+    std::thread::Builder::new()
+        .name(format!("plugin-{name}-background"))
+        .spawn(move || {
+            let Ok(runtime) = CallRuntime::new() else {
+                return;
+            };
+            let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
+            let mut instance: Option<(Store<State>, Instance)> = None;
+            while let Ok(job) = tasks.recv() {
+                if instance.is_none() {
+                    let mut store = Store::new(&engine, State::background(&name, memory));
+                    store.limiter(|state| &mut state.limits);
+                    store.set_epoch_deadline(ticks);
+                    let busy = ticker.busy();
+                    let started = runtime.run(limit, async {
+                        v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                            .await
+                            .map(Instance::V0_3)
+                    });
+                    drop(busy);
+                    match started {
+                        Ok(started) => instance = Some((store, started)),
+                        Err(err) => {
+                            (job.done)(Err(format!(
+                                "the background instance failed to start: {err:#}"
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                let (store, guest) = instance.as_mut().unwrap();
+                store.set_epoch_deadline(ticks);
+                let busy = ticker.busy();
+                let result =
+                    runtime.run(limit, guest.call_background(store, &job.task, &job.input));
+                drop(busy);
+                // It has no editor access: what it asked for is dropped.
+                store.data_mut().actions.clear();
+                let result = match result {
+                    Ok(result) => result,
+                    Err(err) => {
+                        // Start a fresh instance for the next task.
+                        instance = None;
+                        Err(match err.downcast_ref::<Trap>() {
+                            Some(Trap::Interrupt) => format!(
+                                "the background task took longer than {} ms",
+                                limit.as_millis()
+                            ),
+                            _ => format!("the background task crashed: {err:#}"),
+                        })
+                    }
+                };
+                (job.done)(result);
+            }
+        })?;
+    Ok(sender)
 }
 
 impl Plugin {
@@ -936,10 +1423,10 @@ impl Plugin {
         snapshot: Snapshot,
         context: CallContext,
         limit: Duration,
-        f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<R> + Send,
+        f: impl for<'a> FnOnce(&'a Instance, &'a mut Store<State>) -> CallFuture<'a, R> + Send,
     ) -> anyhow::Result<(R, Vec<Action>)>
     where
-        R: Send,
+        R: Send + 'static,
     {
         if let Some(reason) = &self.disabled {
             bail!("plugin '{}' is disabled: {reason}", self.manifest.name);
@@ -953,7 +1440,10 @@ impl Plugin {
 
         let guest = &self.instance;
         let store = &mut self.store;
-        let result = outside_async_runtime(move || f(guest, store));
+        let busy = self.ticker.busy();
+        let runtime = &self.runtime;
+        let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
+        drop(busy);
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
@@ -962,6 +1452,9 @@ impl Plugin {
             Ok(value) => Ok((value, actions)),
             Err(err) => {
                 state.pending.clear();
+                state.picker_items.clear();
+                state.picker_generations.clear();
+                state.streaming.clear();
                 let reason = match err.downcast_ref::<Trap>() {
                     Some(Trap::Interrupt) => {
                         format!("it took longer than {} ms", limit.as_millis())
@@ -991,6 +1484,8 @@ pub struct PluginInfo {
     pub disabled: Option<String>,
     pub process: ProcessGrant,
     pub files: FileGrant,
+    /// `[keys]` from `plugin.toml`.
+    pub keys: Option<toml::Table>,
 }
 
 /// Loads and runs plugins.
@@ -1004,12 +1499,72 @@ pub struct PluginHost {
     workspace: Option<PathBuf>,
     /// Plugins get `<data_root>/<name>` as their own directory.
     data_root: Option<PathBuf>,
-    stop_ticker: Arc<AtomicBool>,
+    ticker: Arc<Ticker>,
+    runtime: Arc<CallRuntime>,
+}
+
+/// Advances the engine's epoch so plugin calls can be interrupted, but only
+/// while a call runs: when no plugin runs, the thread sleeps and the editor
+/// has no extra wake-ups.
+struct Ticker {
+    /// Plugin calls running.
+    busy: AtomicUsize,
+    stop: AtomicBool,
+    thread: std::thread::Thread,
+}
+
+impl Ticker {
+    fn start(engine: &Engine) -> anyhow::Result<Arc<Self>> {
+        let engine = engine.weak();
+        let (sender, receiver) = std::sync::mpsc::channel::<Arc<Ticker>>();
+        let handle = std::thread::Builder::new()
+            .name("helix-plugin-epoch".into())
+            .spawn(move || {
+                let Ok(ticker) = receiver.recv() else {
+                    return;
+                };
+                while !ticker.stop.load(Ordering::Relaxed) {
+                    if ticker.busy.load(Ordering::Acquire) == 0 {
+                        // Woken by `busy()` or on drop.
+                        std::thread::park();
+                        continue;
+                    }
+                    std::thread::sleep(EPOCH_TICK);
+                    match engine.upgrade() {
+                        Some(engine) => engine.increment_epoch(),
+                        None => break,
+                    }
+                }
+            })?;
+        let ticker = Arc::new(Self {
+            busy: AtomicUsize::new(0),
+            stop: AtomicBool::new(false),
+            thread: handle.thread().clone(),
+        });
+        let _ = sender.send(ticker.clone());
+        Ok(ticker)
+    }
+
+    /// Tick until the returned guard is dropped.
+    fn busy(self: &Arc<Self>) -> TickerGuard {
+        self.busy.fetch_add(1, Ordering::AcqRel);
+        self.thread.unpark();
+        TickerGuard(self.clone())
+    }
+}
+
+struct TickerGuard(Arc<Ticker>);
+
+impl Drop for TickerGuard {
+    fn drop(&mut self) {
+        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl Drop for PluginHost {
     fn drop(&mut self) {
-        self.stop_ticker.store(true, Ordering::Relaxed);
+        self.ticker.stop.store(true, Ordering::Relaxed);
+        self.ticker.thread.unpark();
     }
 }
 
@@ -1022,29 +1577,18 @@ impl PluginHost {
     pub fn with_limits(cache_dir: Option<PathBuf>, limits: Limits) -> anyhow::Result<Self> {
         let mut config = wasmtime::Config::new();
         config.epoch_interruption(true);
+        config.async_support(true);
         config.wasm_component_model(true);
         let engine = Engine::new(&config)?;
 
         let mut linker = Linker::new(&engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
-        // Advance the epoch regularly so calls can be interrupted.
-        let stop_ticker = Arc::new(AtomicBool::new(false));
-        let ticker_engine = engine.weak();
-        let stop = stop_ticker.clone();
-        std::thread::Builder::new()
-            .name("helix-plugin-epoch".into())
-            .spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
-                    std::thread::sleep(EPOCH_TICK);
-                    match ticker_engine.upgrade() {
-                        Some(engine) => engine.increment_epoch(),
-                        None => break,
-                    }
-                }
-            })?;
+        let runtime = Arc::new(CallRuntime::new()?);
+        let ticker = Ticker::start(&engine)?;
 
         Ok(Self {
             engine,
@@ -1054,7 +1598,8 @@ impl PluginHost {
             cache_dir,
             workspace: None,
             data_root: None,
-            stop_ticker,
+            ticker,
+            runtime,
         })
     }
 
@@ -1079,6 +1624,7 @@ impl PluginHost {
                 disabled: plugin.disabled.clone(),
                 process: plugin.store.data().process.clone(),
                 files: plugin.store.data().files,
+                keys: plugin.manifest.keys.clone(),
             })
             .collect()
     }
@@ -1094,6 +1640,11 @@ impl PluginHost {
     pub fn set_dirs(&mut self, workspace: Option<PathBuf>, data_root: Option<PathBuf>) {
         self.workspace = workspace;
         self.data_root = data_root;
+    }
+
+    /// The workspace plugins with `allow-files` were given (see `set_dirs`).
+    pub fn workspace(&self) -> Option<&Path> {
+        self.workspace.as_deref()
     }
 
     /// Load every plugin in the subdirectories of `dir`. `settings` gives the
@@ -1116,6 +1667,7 @@ impl PluginHost {
             .filter(|path| path.join("plugin.toml").is_file())
             .collect();
         dirs.sort();
+        let mut enabled = Vec::new();
         for dir in dirs {
             let manifest = match read_manifest(&dir) {
                 Ok(manifest) => manifest,
@@ -1124,10 +1676,33 @@ impl PluginHost {
                     continue;
                 }
             };
-            let Some(settings) = settings(&manifest.name) else {
-                continue;
-            };
-            match self.load_with_manifest(&dir, manifest, settings) {
+            if let Some(settings) = settings(&manifest.name) {
+                enabled.push((dir, manifest, settings));
+            }
+        }
+        // Compiling (on a cold cache) is the slow part: do it in parallel,
+        // then load in order.
+        let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
+        let components: Vec<_> = std::thread::scope(|scope| {
+            let compiling: Vec<_> = enabled
+                .iter()
+                .map(|(dir, manifest, _)| {
+                    scope.spawn(move || {
+                        compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+                    })
+                })
+                .collect();
+            compiling
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err(anyhow!("compiling the plugin panicked")))
+                })
+                .collect()
+        });
+        for ((dir, manifest, settings), component) in enabled.into_iter().zip(components) {
+            match self.load_compiled(&dir, manifest, settings, component) {
                 Ok(init_actions) => actions.extend(init_actions),
                 Err(err) => errors.push(err),
             }
@@ -1159,6 +1734,7 @@ impl PluginHost {
         files: FileGrant,
     ) -> anyhow::Result<(WasiCtx, Option<PathBuf>)> {
         let mut wasi = WasiCtx::builder();
+        wasi.allow_blocking_current_thread(false);
         let data_dir = match &self.data_root {
             Some(root) => {
                 let dir = root.join(name);
@@ -1198,14 +1774,32 @@ impl PluginHost {
         manifest: Manifest,
         settings: PluginSettings,
     ) -> anyhow::Result<Vec<Action>> {
+        let component = compile(
+            &self.engine,
+            self.cache_dir.as_deref(),
+            &manifest.name,
+            &dir.join(&manifest.wasm),
+        );
+        self.load_compiled(dir, manifest, settings, component)
+    }
+
+    fn load_compiled(
+        &mut self,
+        dir: &Path,
+        manifest: Manifest,
+        settings: PluginSettings,
+        component: anyhow::Result<Component>,
+    ) -> anyhow::Result<Vec<Action>> {
         let name = manifest.name.clone();
         if self.plugin(&name).is_some() {
             bail!("plugin '{name}' is already loaded");
         }
-        let wasm = dir.join(&manifest.wasm);
-        let component = self
-            .compile(&name, &wasm)
-            .with_context(|| format!("failed to load plugin '{name}' from {}", wasm.display()))?;
+        let component = component.with_context(|| {
+            format!(
+                "failed to load plugin '{name}' from {}",
+                dir.join(&manifest.wasm).display()
+            )
+        })?;
 
         let (wasi, data_dir) = self.wasi(&name, &manifest, settings.files)?;
         let state = State {
@@ -1224,6 +1818,9 @@ impl PluginHost {
             context: CallContext::Init,
             next_id: &NEXT_REQUEST_ID,
             pending: HashMap::new(),
+            picker_items: HashMap::new(),
+            picker_generations: HashMap::new(),
+            streaming: HashSet::new(),
             process: settings.process,
             files: settings.files,
             data_dir,
@@ -1235,15 +1832,25 @@ impl PluginHost {
             (self.limits.init.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64,
         );
         let linker = &self.linker;
-        let instance =
-            outside_async_runtime(|| match manifest.api.as_str() {
-                "0.1" => v0_1::HelixPlugin::instantiate(&mut store, &component, linker)
-                    .map(Instance::V0_1),
-                "0.2" => v0_2::HelixPlugin::instantiate(&mut store, &component, linker)
-                    .map(Instance::V0_2),
-                _ => unreachable!("manifest API was validated"),
+        let busy = self.ticker.busy();
+        let instance = outside_async_runtime(|| {
+            self.runtime.run(self.limits.init, async {
+                match manifest.api.as_str() {
+                    "0.1" => v0_1::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_1),
+                    "0.2" => v0_2::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_2),
+                    "0.3" => v0_3::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(Instance::V0_3),
+                    _ => unreachable!("manifest API was validated"),
+                }
             })
-            .with_context(|| format!("failed to start plugin '{name}'"))?;
+        })
+        .with_context(|| format!("failed to start plugin '{name}'"))?;
+        drop(busy);
 
         let mut plugin = Plugin {
             manifest,
@@ -1253,12 +1860,17 @@ impl PluginHost {
             commands: Vec::new(),
             events: Vec::new(),
             disabled: None,
+            ticker: self.ticker.clone(),
+            runtime: self.runtime.clone(),
+            component: component.clone(),
+            worker: None,
         };
+        let config = settings.config;
         let (registration, actions) = plugin.call(
             Snapshot::default(),
             CallContext::Init,
             self.limits.init,
-            |guest, store| guest.call_init(store, &settings.config),
+            move |guest, store| Box::pin(async move { guest.call_init(store, &config).await }),
         )?;
         let (commands, events) =
             registration.map_err(|err| anyhow!("plugin '{name}' failed to start: {err}"))?;
@@ -1275,58 +1887,6 @@ impl PluginHost {
         plugin.events.dedup();
         self.plugins.push(plugin);
         Ok(actions)
-    }
-
-    /// Compile a component, using the cache when possible.
-    fn compile(&self, name: &str, wasm: &Path) -> anyhow::Result<Component> {
-        let bytes = std::fs::read(wasm)?;
-        let cache_file = self.cache_dir.as_ref().map(|dir| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            self.engine
-                .precompile_compatibility_hash()
-                .hash(&mut hasher);
-            dir.join(format!("{name}-{:016x}.cwasm", hasher.finish()))
-        });
-        if let Some(cache_file) = &cache_file {
-            // Read into memory rather than `deserialize_file`, which maps the
-            // file: if the file was changed in place while mapped (by another
-            // program, or an older Helix), accessing the code would crash.
-            if let Ok(cached) = std::fs::read(cache_file) {
-                // SAFETY: the file was written by `Component::serialize` below
-                // for this engine configuration (its name includes a hash of
-                // the configuration) and lives in the user's own cache
-                // directory. Wasmtime still checks the header and version.
-                match unsafe { Component::deserialize(&self.engine, &cached) } {
-                    Ok(component) => return Ok(component),
-                    Err(err) => {
-                        log::warn!("ignoring cached plugin {}: {err:#}", cache_file.display())
-                    }
-                }
-            }
-        }
-        let component = Component::new(&self.engine, &bytes)?;
-        if let Some(cache_file) = &cache_file {
-            let write = || -> anyhow::Result<()> {
-                std::fs::create_dir_all(cache_file.parent().unwrap())?;
-                // Write to a temporary file first so a crash can't leave a
-                // truncated file behind.
-                static COUNTER: std::sync::atomic::AtomicUsize =
-                    std::sync::atomic::AtomicUsize::new(0);
-                let tmp = cache_file.with_extension(format!(
-                    "tmp{}-{}",
-                    std::process::id(),
-                    COUNTER.fetch_add(1, Ordering::Relaxed)
-                ));
-                std::fs::write(&tmp, component.serialize()?)?;
-                std::fs::rename(tmp, cache_file)?;
-                Ok(())
-            };
-            if let Err(err) = write() {
-                log::warn!("failed to cache plugin '{name}': {err:#}");
-            }
-        }
-        Ok(component)
     }
 
     /// All commands of enabled plugins, as `(plugin, command)`.
@@ -1367,18 +1927,29 @@ impl PluginHost {
         }
         let name = plugin.manifest.name.clone();
         let pending = plugin.store.data().pending.clone();
-        let (result, actions) =
-            plugin.call(snapshot, CallContext::Command, limit, |guest, store| {
-                guest.call_run_command(store, command, &args)
-            })?;
+        let picker_items = plugin.store.data().picker_items.clone();
+        let picker_generations = plugin.store.data().picker_generations.clone();
+        let streaming = plugin.store.data().streaming.clone();
+        let command_name = command.to_owned();
+        let (result, actions) = plugin.call(
+            snapshot,
+            CallContext::Command,
+            limit,
+            move |guest, store| {
+                Box::pin(async move { guest.call_run_command(store, &command_name, &args).await })
+            },
+        )?;
         if let Err(err) = result {
             plugin.store.data_mut().pending = pending;
+            plugin.store.data_mut().picker_items = picker_items;
+            plugin.store.data_mut().picker_generations = picker_generations;
+            plugin.store.data_mut().streaming = streaming;
             bail!("{name}/{command}: {err}");
         }
         Ok(actions)
     }
 
-    /// Reserve a result id for an API 0.2 host operation, as the host
+    /// Reserve a result id for an API 0.2 or newer host operation, as the host
     /// functions do. For tests; ids are never reused after reload.
     #[doc(hidden)]
     pub fn register_request(&mut self, plugin: &str, kind: PendingKind) -> anyhow::Result<u32> {
@@ -1387,8 +1958,11 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if plugin.manifest.api != "0.2" || plugin.disabled.is_some() {
-            bail!("requests require an enabled API 0.2 plugin");
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3") || plugin.disabled.is_some() {
+            bail!("requests require an enabled API 0.2 or newer plugin");
+        }
+        if kind == PendingKind::Popup && plugin.manifest.api != "0.3" {
+            bail!("popup requests require API 0.3");
         }
         plugin
             .store
@@ -1412,6 +1986,77 @@ impl PluginHost {
         }
     }
 
+    /// Whether deferred work still belongs to an enabled, outstanding request.
+    pub fn has_request(&self, owner: &str, id: u32, kind: PendingKind) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.name() == owner
+                && plugin.disabled.is_none()
+                && plugin.store.data().pending.get(&id) == Some(&kind)
+        })
+    }
+
+    /// Invalidate live results as soon as input changes, before debounce.
+    /// This updates host bookkeeping without calling the guest.
+    pub fn set_picker_generation(&mut self, owner: &str, id: u32, generation: u64) {
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.name() == owner && plugin.disabled.is_none())
+        else {
+            return;
+        };
+        let state = plugin.store.data_mut();
+        if let Some(current) = state.picker_generations.get_mut(&id) {
+            if *current != generation {
+                *current = generation;
+                state.picker_items.insert(id, 0);
+            }
+        }
+    }
+
+    /// Run `plugin`'s background request `id` in its background instance;
+    /// `done` gets the result (on the worker thread). Starts the instance's
+    /// thread on first use.
+    pub fn run_background(
+        &mut self,
+        plugin: &str,
+        id: u32,
+        task: String,
+        input: String,
+        done: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) {
+        let (memory, limit) = (self.limits.memory, self.limits.background);
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none())
+        else {
+            return;
+        };
+        if plugin.store.data().pending.get(&id) != Some(&PendingKind::Background) {
+            return;
+        }
+        if plugin.worker.is_none() {
+            match spawn_worker(
+                self.engine.clone(),
+                self.linker.clone(),
+                plugin.component.clone(),
+                plugin.ticker.clone(),
+                plugin.manifest.name.clone(),
+                memory,
+                limit,
+            ) {
+                Ok(worker) => plugin.worker = Some(worker),
+                Err(err) => return done(Err(format!("failed to start a worker: {err}"))),
+            }
+        }
+        let job = BackgroundTask { task, input, done };
+        if let Err(std::sync::mpsc::SendError(job)) = plugin.worker.as_ref().unwrap().send(job) {
+            plugin.worker = None;
+            (job.done)(Err("the background worker stopped".into()));
+        }
+    }
+
     /// Deliver a completion with the command time limit and a fresh snapshot.
     /// Unknown, duplicate, wrong-kind and late results are ignored.
     pub fn callback(
@@ -1431,15 +2076,30 @@ impl PluginHost {
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
         }
+        if let Callback::PickerQuery { generation, .. } = &callback {
+            if plugin.store.data().picker_generations.get(&id).copied() != *generation {
+                return Ok(Vec::new());
+            }
+        }
+        if matches!(callback, Callback::ProcessOutput { .. })
+            && !plugin.store.data().streaming.contains(&id)
+        {
+            return Ok(Vec::new());
+        }
         if callback.completes() {
             plugin.store.data_mut().pending.remove(&id);
+            plugin.store.data_mut().picker_items.remove(&id);
+            plugin.store.data_mut().picker_generations.remove(&id);
+            plugin.store.data_mut().streaming.remove(&id);
         }
         plugin
             .call(
                 snapshot.clone(),
                 CallContext::Callback,
                 self.limits.command,
-                |guest, store| guest.call_callback(store, &callback),
+                move |guest, store| {
+                    Box::pin(async move { guest.call_callback(store, &callback).await })
+                },
             )
             .map(|((), actions)| actions)
     }
@@ -1451,23 +2111,48 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Vec<(String, anyhow::Result<Vec<Action>>)> {
-        let limit = self.limits.event;
-        let kind = event.kind();
-        self.plugins
-            .iter_mut()
-            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
-            .map(|plugin| {
-                let result = plugin
-                    .call(
-                        snapshot.clone(),
-                        CallContext::Event,
-                        limit,
-                        |guest, store| guest.call_event(store, event),
-                    )
-                    .map(|((), actions)| actions);
-                (plugin.manifest.name.clone(), result)
+        self.subscribers(event.kind())
+            .into_iter()
+            .filter_map(|name| {
+                let result = self.dispatch_to(&name, event.clone(), snapshot)?;
+                Some((name, result))
             })
             .collect()
+    }
+
+    /// The enabled plugins subscribed to events of `kind`.
+    pub fn subscribers(&self, kind: EventKind) -> Vec<String> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .map(|plugin| plugin.manifest.name.clone())
+            .collect()
+    }
+
+    /// Send `event` to `plugin` only (if it is enabled and subscribed), so
+    /// the editor can apply each plugin's actions before the next plugin
+    /// sees the state.
+    pub fn dispatch_to(
+        &mut self,
+        plugin: &str,
+        event: Event,
+        snapshot: &Snapshot,
+    ) -> Option<anyhow::Result<Vec<Action>>> {
+        let limit = self.limits.event;
+        let kind = event.kind();
+        let plugin = self.plugins.iter_mut().find(|p| {
+            p.manifest.name == plugin && p.disabled.is_none() && p.events.contains(&kind)
+        })?;
+        Some(
+            plugin
+                .call(
+                    snapshot.clone(),
+                    CallContext::Event,
+                    limit,
+                    move |guest, store| Box::pin(guest.call_event(store, event)),
+                )
+                .map(|((), actions)| actions),
+        )
     }
 
     /// Whether any enabled plugin listens to events of `kind`.
@@ -1478,12 +2163,143 @@ impl PluginHost {
     }
 }
 
-/// Run `f` on a thread without an entered async runtime.
-///
-/// The synchronous WASI implementation drives its I/O (a plugin writing to
-/// stderr, e.g. when it panics) with `Handle::block_on` when a Tokio runtime is
-/// entered, which panics when called from within the runtime, as the editor
-/// does. On a fresh thread WASI uses its own runtime instead.
+/// Compile a component, using the cache when possible.
+fn compile(
+    engine: &Engine,
+    cache_dir: Option<&Path>,
+    name: &str,
+    wasm: &Path,
+) -> anyhow::Result<Component> {
+    let bytes = std::fs::read(wasm)?;
+    let cache_file = cache_dir.map(|dir| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        engine.precompile_compatibility_hash().hash(&mut hasher);
+        dir.join(format!("{name}-{:016x}.cwasm", hasher.finish()))
+    });
+    if let Some(cache_file) = &cache_file {
+        // Read into memory rather than `deserialize_file`, which maps the
+        // file: if the file was changed in place while mapped (by another
+        // program, or an older Helix), accessing the code would crash.
+        if let Ok(cached) = std::fs::read(cache_file) {
+            // SAFETY: the file was written by `Component::serialize` below
+            // for this engine configuration (its name includes a hash of
+            // the configuration) and lives in the user's own cache
+            // directory. Wasmtime still checks the header and version.
+            match unsafe { Component::deserialize(engine, &cached) } {
+                Ok(component) => {
+                    prune_cache(cache_file, name);
+                    return Ok(component);
+                }
+                Err(err) => {
+                    log::warn!("ignoring cached plugin {}: {err:#}", cache_file.display())
+                }
+            }
+        }
+    }
+    let component = Component::new(engine, &bytes)?;
+    if let Some(cache_file) = &cache_file {
+        let write = || -> anyhow::Result<()> {
+            std::fs::create_dir_all(cache_file.parent().unwrap())?;
+            // Write to a temporary file first so a crash can't leave a
+            // truncated file behind.
+            static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let tmp = cache_file.with_extension(format!(
+                "tmp{}-{}",
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            let temporary = CacheTemp(tmp);
+            std::fs::write(&temporary.0, component.serialize()?)?;
+            std::fs::rename(&temporary.0, cache_file)?;
+            prune_cache(cache_file, name);
+            Ok(())
+        };
+        if let Err(err) = write() {
+            log::warn!("failed to cache plugin '{name}': {err:#}");
+        }
+    }
+    Ok(component)
+}
+
+/// Remove obsolete compiled versions of this plugin after a successful
+/// load/write. Loading reads the compiled bytes into memory, so another
+/// editor using an older version does not retain a mapping of these files.
+fn prune_cache(current: &Path, name: &str) {
+    let Some(parent) = current.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let prefix = format!("{name}-");
+    for entry in entries.flatten() {
+        let filename = entry.file_name();
+        let Some(hash) = filename
+            .to_str()
+            .and_then(|name| name.strip_prefix(&prefix))
+            .and_then(|name| name.strip_suffix(".cwasm"))
+        else {
+            continue;
+        };
+        if hash.len() == 16
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && entry.path() != current
+        {
+            if let Err(error) = std::fs::remove_file(entry.path()) {
+                log::debug!("could not remove obsolete plugin cache: {error}");
+            }
+        }
+    }
+}
+
+/// Clean up an unfinished cache write on serialization, I/O or rename errors.
+struct CacheTemp(PathBuf);
+impl Drop for CacheTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+type CallFuture<'a, R> = Pin<Box<dyn Future<Output = wasmtime::Result<R>> + Send + 'a>>;
+
+/// One parked runtime per host. Only a plugin call drives its timer and I/O.
+/// Shutdown must not wait for an uncancellable OS operation (e.g. opening a
+/// FIFO): WASI runs those on Tokio's blocking pool, outside the editor thread.
+struct CallRuntime(Option<tokio::runtime::Runtime>);
+
+impl CallRuntime {
+    fn new() -> anyhow::Result<Self> {
+        Ok(Self(Some(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
+        )))
+    }
+
+    fn run<R>(
+        &self,
+        limit: Duration,
+        future: impl Future<Output = wasmtime::Result<R>>,
+    ) -> wasmtime::Result<R> {
+        self.0.as_ref().unwrap().block_on(async {
+            tokio::time::timeout(limit, future)
+                .await
+                .map_err(|_| anyhow!(Trap::Interrupt))?
+        })
+    }
+}
+
+impl Drop for CallRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// Run a bounded async plugin call outside the editor's entered runtime.
+/// The current-thread runtime advances only while this scoped thread runs.
 fn outside_async_runtime<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     std::thread::scope(|scope| match scope.spawn(f).join() {
         Ok(result) => result,

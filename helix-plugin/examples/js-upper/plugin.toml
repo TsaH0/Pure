@@ -1,0 +1,6 @@
+name = "js-upper"
+version = "0.1.0"
+api = "0.3"
+description = "Uppercase selections, written in JavaScript"
+permissions = ["read-buffers", "edit-buffers"]
+wasm = "plugin.wasm"

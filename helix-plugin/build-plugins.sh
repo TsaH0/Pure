@@ -3,6 +3,8 @@
 # into its own directory, ready to be copied into ~/.config/helix/plugins). The
 # tests load them. Needs the wasm32-wasip2 target:
 #   rustup target add wasm32-wasip2
+# Version-suffixed compatibility components are frozen. Never overwrite them
+# here: API 0.1/0.2 tests intentionally run components built before SDK changes.
 set -eu
 cd "$(dirname "$0")"
 # Keep machine-specific paths out of the committed components.
@@ -13,8 +15,11 @@ build() {
 }
 build tests/plugins/testplugin testplugin testplugin
 build tests/plugins/testplugin2 testplugin2 testplugin2
+build tests/plugins/testplugin3 testplugin3 testplugin3
 # Every example, into its own directory.
 for example in examples/*/; do
+    # Rust examples; others (js-upper) build with their own tools.
+    [ -f "$example/Cargo.toml" ] || continue
     name=$(basename "$example")
     (cd "$example" && cargo build --locked --release --target wasm32-wasip2)
     cp "$example/target/wasm32-wasip2/release/$(echo "$name" | tr - _).wasm" "$example/plugin.wasm"

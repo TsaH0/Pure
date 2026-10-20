@@ -3,11 +3,16 @@ use super::{types, CommandInfo, DocumentId, Event, EventKind, State};
 use wasmtime::{Result, Store};
 
 pub(crate) mod v0_1 {
-    wasmtime::component::bindgen!({ path: "wit/v0.1", world: "helix-plugin" });
+    wasmtime::component::bindgen!({ path: "wit/v0.1", world: "helix-plugin", exports: { default: async } });
 }
 pub(crate) mod v0_2 {
-    wasmtime::component::bindgen!({ path: "wit/v0.2", world: "helix-plugin" });
+    wasmtime::component::bindgen!({ path: "wit/v0.2", world: "helix-plugin", exports: { default: async } });
 }
+
+pub(crate) mod v0_3 {
+    wasmtime::component::bindgen!({ path: "wit/v0.3", world: "helix-plugin", exports: { default: async } });
+}
+mod api03;
 
 impl types::Host for State {}
 impl v0_2::helix::plugin::types::Host for State {}
@@ -170,7 +175,14 @@ impl process::Host for State {
         argv: Vec<String>,
         options: process::SpawnOptions,
     ) -> std::result::Result<u32, String> {
-        State::spawn(self, argv, options.cwd, options.stdin, options.timeout_ms)
+        State::spawn(
+            self,
+            argv,
+            options.cwd,
+            options.stdin,
+            options.timeout_ms,
+            false,
+        )
     }
     fn run_interactive(
         &mut self,
@@ -191,13 +203,13 @@ impl process::Host for State {
 }
 impl ui::Host for State {
     fn show_picker(&mut self, picker: ui::Picker) -> std::result::Result<u32, String> {
-        State::show_picker(self, picker)
+        State::show_picker(self, picker, false)
     }
     fn push_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
-        State::push_items(self, id, items)
+        State::push_items(self, id, None, items)
     }
     fn set_items(&mut self, id: u32, items: Vec<ui::Item>) -> std::result::Result<(), String> {
-        State::set_items(self, id, items)
+        State::set_items(self, id, None, items)
     }
     fn show_popup(&mut self, markdown: String) -> std::result::Result<(), String> {
         State::show_popup(self, markdown)
@@ -218,141 +230,201 @@ fn to_v2_mode(mode: Mode) -> v0_2::helix::plugin::types::Mode {
 pub(crate) enum Instance {
     V0_1(v0_1::HelixPlugin),
     V0_2(v0_2::HelixPlugin),
+    V0_3(v0_3::HelixPlugin),
 }
 impl Instance {
     /// `init`: the plugin's commands and the events it subscribes to.
     #[allow(clippy::type_complexity)]
-    pub fn call_init(
+    pub async fn call_init(
         &self,
         store: &mut Store<State>,
         config: &str,
     ) -> Result<std::result::Result<(Vec<CommandInfo>, Vec<EventKind>), String>> {
         match self {
-            Self::V0_1(instance) => {
-                instance
-                    .helix_plugin_plugin()
-                    .call_init(store, config)
-                    .map(|r| {
-                        r.map(|r| {
-                            let events = r
-                                .events
-                                .into_iter()
-                                .map(|e| match e {
-                                    types::EventKind::DocumentOpen => EventKind::DocumentOpen,
-                                    types::EventKind::DocumentChange => EventKind::DocumentChange,
-                                    types::EventKind::ModeSwitch => EventKind::ModeSwitch,
-                                })
-                                .collect();
-                            (r.commands, events)
-                        })
+            Self::V0_3(instance) => api03::init(instance, store, config).await,
+            Self::V0_1(instance) => instance
+                .helix_plugin_plugin()
+                .call_init(store, config)
+                .await
+                .map(|r| {
+                    r.map(|r| {
+                        let events = r
+                            .events
+                            .into_iter()
+                            .map(|e| match e {
+                                types::EventKind::DocumentOpen => EventKind::DocumentOpen,
+                                types::EventKind::DocumentChange => EventKind::DocumentChange,
+                                types::EventKind::ModeSwitch => EventKind::ModeSwitch,
+                            })
+                            .collect();
+                        (r.commands, events)
                     })
-            }
-            Self::V0_2(instance) => {
-                instance
-                    .helix_plugin_plugin()
-                    .call_init(store, config)
-                    .map(|r| {
-                        r.map(|r| {
-                            use v0_2::helix::plugin::types::EventKind as E;
-                            let commands = r
-                                .commands
-                                .into_iter()
-                                .map(|c| CommandInfo {
-                                    name: c.name,
-                                    doc: c.doc,
-                                })
-                                .collect();
-                            let events = r
-                                .events
-                                .into_iter()
-                                .map(|e| match e {
-                                    E::DocumentOpen => EventKind::DocumentOpen,
-                                    E::DocumentChange => EventKind::DocumentChange,
-                                    E::ModeSwitch => EventKind::ModeSwitch,
-                                    E::DocumentSave => EventKind::DocumentSave,
-                                    E::DocumentClose => EventKind::DocumentClose,
-                                    E::SelectionChange => EventKind::SelectionChange,
-                                })
-                                .collect();
-                            (commands, events)
-                        })
+                }),
+            Self::V0_2(instance) => instance
+                .helix_plugin_plugin()
+                .call_init(store, config)
+                .await
+                .map(|r| {
+                    r.map(|r| {
+                        use v0_2::helix::plugin::types::EventKind as E;
+                        let commands = r
+                            .commands
+                            .into_iter()
+                            .map(|c| CommandInfo {
+                                name: c.name,
+                                doc: c.doc,
+                            })
+                            .collect();
+                        let events = r
+                            .events
+                            .into_iter()
+                            .map(|e| match e {
+                                E::DocumentOpen => EventKind::DocumentOpen,
+                                E::DocumentChange => EventKind::DocumentChange,
+                                E::ModeSwitch => EventKind::ModeSwitch,
+                                E::DocumentSave => EventKind::DocumentSave,
+                                E::DocumentClose => EventKind::DocumentClose,
+                                E::SelectionChange => EventKind::SelectionChange,
+                            })
+                            .collect();
+                        (commands, events)
                     })
-            }
+                }),
         }
     }
-    pub fn call_run_command(
+    pub async fn call_run_command(
         &self,
         store: &mut Store<State>,
         name: &str,
         args: &[String],
     ) -> Result<std::result::Result<(), String>> {
         match self {
-            Self::V0_1(instance) => instance
-                .helix_plugin_plugin()
-                .call_run_command(store, name, args),
-            Self::V0_2(instance) => instance
-                .helix_plugin_plugin()
-                .call_run_command(store, name, args),
+            Self::V0_3(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
+            Self::V0_1(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
+            Self::V0_2(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
         }
     }
-    pub fn call_callback(
+    pub async fn call_callback(
         &self,
         store: &mut Store<State>,
         callback: &super::Callback,
     ) -> Result<()> {
+        if let Self::V0_3(instance) = self {
+            return api03::callback(instance, store, callback).await;
+        }
         let Self::V0_2(instance) = self else {
             anyhow::bail!("callbacks require API 0.2")
         };
         let callbacks = instance.helix_plugin_callbacks();
         match callback {
-            super::Callback::ProcessDone { id, result } => callbacks.call_on_process_done(
-                store,
-                *id,
-                result.as_ref().map_err(|err| err.as_str()),
-            ),
+            super::Callback::ProcessOutput { .. } => anyhow::bail!("streaming requires API 0.3"),
+            super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
+            super::Callback::BackgroundDone { .. } => {
+                anyhow::bail!("background tasks require API 0.3")
+            }
+            super::Callback::ProcessDone { id, result } => {
+                callbacks
+                    .call_on_process_done(store, *id, result.as_ref().map_err(|err| err.as_str()))
+                    .await
+            }
             super::Callback::PickerDone { id, result } => {
-                callbacks.call_on_picker_done(store, *id, result)
+                callbacks.call_on_picker_done(store, *id, result).await
             }
             super::Callback::PromptDone { id, result } => {
-                callbacks.call_on_prompt_done(store, *id, result.as_deref())
+                callbacks
+                    .call_on_prompt_done(store, *id, result.as_deref())
+                    .await
             }
-            super::Callback::PickerQuery { id, query } => {
-                callbacks.call_on_picker_query(store, *id, query)
+            super::Callback::PickerQuery { id, query, .. } => {
+                callbacks.call_on_picker_query(store, *id, query).await
             }
         }
     }
 
-    pub fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
+    /// The `background.run` export (API 0.3).
+    pub async fn call_background(
+        &self,
+        store: &mut Store<State>,
+        task: &str,
+        input: &str,
+    ) -> Result<std::result::Result<String, String>> {
+        let Self::V0_3(instance) = self else {
+            anyhow::bail!("background tasks require API 0.3")
+        };
+        instance
+            .helix_plugin_background()
+            .call_run(store, task, input)
+            .await
+    }
+
+    pub async fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {
         match self {
+            Self::V0_3(instance) => api03::event(instance, store, event).await,
             Self::V0_1(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {
-                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
-                    Event::ModeSwitch { old, new } => guest.call_on_mode_switch(store, old, new),
+                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
+                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
+                    Event::ModeSwitch { old, new } => {
+                        guest.call_on_mode_switch(store, old, new).await
+                    }
                     // 0.1 plugins can't subscribe to these.
                     Event::DocumentSave(_)
                     | Event::DocumentClose(_)
-                    | Event::SelectionChange(_) => Ok(()),
+                    | Event::SelectionChange(_)
+                    | Event::PostCommand(_)
+                    | Event::FocusGained
+                    | Event::FocusLost
+                    | Event::EditorIdle => Ok(()),
                 }
             }
             Self::V0_2(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {
-                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc),
-                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc),
+                    Event::DocumentOpen(doc) => guest.call_on_document_open(store, doc).await,
+                    Event::DocumentChange(doc) => guest.call_on_document_change(store, doc).await,
                     Event::ModeSwitch { old, new } => {
-                        guest.call_on_mode_switch(store, to_v2_mode(old), to_v2_mode(new))
+                        guest
+                            .call_on_mode_switch(store, to_v2_mode(old), to_v2_mode(new))
+                            .await
                     }
-                    Event::DocumentSave(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_document_save(store, doc),
-                    Event::DocumentClose(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_document_close(store, doc),
-                    Event::SelectionChange(doc) => instance
-                        .helix_plugin_events()
-                        .call_on_selection_change(store, doc),
+                    Event::DocumentSave(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_document_save(store, doc)
+                            .await
+                    }
+                    Event::DocumentClose(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_document_close(store, doc)
+                            .await
+                    }
+                    Event::SelectionChange(doc) => {
+                        instance
+                            .helix_plugin_events()
+                            .call_on_selection_change(store, doc)
+                            .await
+                    }
+                    Event::PostCommand(_)
+                    | Event::FocusGained
+                    | Event::FocusLost
+                    | Event::EditorIdle => Ok(()),
                 }
             }
         }

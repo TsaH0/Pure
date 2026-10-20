@@ -141,10 +141,11 @@ impl Application {
 
         let jobs = Jobs::new();
 
-        // Before opening files, so plugins see them being opened. Tests load
-        // their plugins explicitly instead of the user's.
+        // In the background, so plugins never delay startup; they hear about
+        // the files opened meanwhile once loaded. Tests load their plugins
+        // explicitly instead of the user's.
         if !cfg!(feature = "integration") {
-            crate::plugins::load(&mut editor);
+            crate::plugins::load_in_background();
         }
 
         if args.load_tutor {
@@ -386,6 +387,8 @@ impl Application {
 
     pub fn handle_config_events(&mut self, config_event: ConfigEvent) {
         let old_editor_config = self.editor.config();
+        // The keymap may change: refill plugin keys on the next key.
+        crate::keymap::forget_filled_keymap();
 
         match config_event {
             ConfigEvent::Refresh => self.refresh_config(),
@@ -697,6 +700,7 @@ impl Application {
             EditorEvent::IdleTimer => {
                 self.editor.clear_idle_timer();
                 self.handle_idle_timeout().await;
+                crate::plugins::editor_idle(&mut self.editor);
 
                 #[cfg(feature = "integration")]
                 {
@@ -777,7 +781,15 @@ impl Application {
             }) => false,
             #[cfg(not(windows))]
             event if event.is_escape() => false,
-            event => self.compositor.handle_event(&event.into(), &mut cx),
+            event => {
+                let event = event.into();
+                match event {
+                    Event::FocusGained => crate::plugins::focus_changed(true),
+                    Event::FocusLost => crate::plugins::focus_changed(false),
+                    _ => {}
+                }
+                self.compositor.handle_event(&event, &mut cx)
+            }
         };
 
         if should_redraw && !self.editor.should_close() {
@@ -1281,6 +1293,13 @@ impl Application {
         lsp::ShowDocumentResult { success: true }
     }
 
+    /// Drop the program queued to take the terminal, as if it never ran.
+    /// Tests can't hand over a terminal.
+    #[cfg(feature = "integration")]
+    pub fn drop_queued_program(&mut self) -> bool {
+        self.compositor.interactive.take().is_some()
+    }
+
     async fn run_interactive(&mut self, interactive: crate::interactive::Interactive) {
         let crate::interactive::Interactive {
             mut command,
@@ -1289,7 +1308,10 @@ impl Application {
             clear_screen,
             banner,
             wait_for_key,
+            before_run: _,
+            on_cancel,
         } = interactive;
+        on_cancel.disarm();
         use helix_view::graphics::CursorKind;
         self.terminal
             .backend_mut()
@@ -1402,6 +1424,9 @@ impl Application {
                 break;
             }
             if let Some(interactive) = self.compositor.interactive.take() {
+                if !interactive.can_run() {
+                    continue;
+                }
                 // Dropping the stream stops its reader thread, otherwise it
                 // would compete with the program for terminal input.
                 drop(input_stream);

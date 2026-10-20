@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-helix-plugin-api = { path = "../../../sdk" }
+helix-plugin-api = { path = "../../../sdk", features = ["api-v0-2"] }
 
 [profile.release]
 opt-level = "s"

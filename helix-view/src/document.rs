@@ -153,6 +153,8 @@ pub struct Document {
     pub(crate) jump_labels: HashMap<ViewId, Vec<Overlay>>,
     /// LSP document highlights for each view, stored as char ranges.
     pub(crate) document_highlights: HashMap<ViewId, DocumentHighlights>,
+    /// Highlights, virtual text and gutter signs from plugins.
+    pub plugin_decorations: crate::plugin_decorations::PluginDecorations,
     /// LSP code action hints for each view.
     pub(crate) code_action_hints: HashSet<ViewId>,
     /// Set to `true` when the document is updated, reset to `false` on the next inlay hints
@@ -771,6 +773,7 @@ impl Document {
             name: None,
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
+            plugin_decorations: Default::default(),
             code_action_hints: HashSet::new(),
             color_swatches: None,
             document_links: Vec::new(),
@@ -1600,6 +1603,10 @@ impl Document {
             apply_inlay_hint_changes(parameter_inlay_hints);
             apply_inlay_hint_changes(other_inlay_hints);
             apply_inlay_hint_changes(padding_after_inlay_hints);
+        }
+
+        if !self.plugin_decorations.is_empty() {
+            self.plugin_decorations.map(changes, self.text.len_chars());
         }
 
         for highlights in self.document_highlights.values_mut() {

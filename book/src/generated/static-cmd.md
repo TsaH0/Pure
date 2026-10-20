@@ -120,7 +120,7 @@
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
 | `normal_mode_or_close_compilation` | Close the *compilation* buffer if it is open, otherwise enter normal mode | normal: `` <esc> `` |
-| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>z ``, select: `` <space>z `` |
+| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` ! ``, select: `` ! `` |
 | `quickfix_next` | Go to the next quickfix entry | normal: `` ]q ``, select: `` ]q `` |
 | `quickfix_prev` | Go to the previous quickfix entry | normal: `` [q ``, select: `` [q `` |
 | `quickfix_first` | Go to the first quickfix entry | normal: `` [Q ``, select: `` [Q `` |
@@ -237,6 +237,7 @@
 | `shrink_selection` | Shrink selection to previously expanded syntax node | normal: `` <A-i> ``, `` <A-down> ``, select: `` <A-i> ``, `` <A-down> `` |
 | `select_next_sibling` | Select next sibling in the syntax tree | normal: `` <A-n> ``, `` <A-right> ``, select: `` <A-n> ``, `` <A-right> `` |
 | `select_prev_sibling` | Select previous sibling the in syntax tree | normal: `` <A-p> ``, `` <A-left> ``, select: `` <A-p> ``, `` <A-left> `` |
+| `select_inside_next_pair` | Select inside the next bracket or quote pair on the line | normal: `` <A-m> ``, select: `` <A-m> `` |
 | `select_all_siblings` | Select all siblings of the current node | normal: `` <A-a> ``, select: `` <A-a> `` |
 | `select_all_children` | Select all children of the current node | normal: `` <A-I> ``, `` <S-A-down> ``, select: `` <A-I> ``, `` <S-A-down> `` |
 | `jump_forward` | Jump forward on jumplist | normal: `` <C-i> ``, `` <tab> ``, select: `` <C-i> ``, `` <tab> `` |
@@ -308,7 +309,7 @@
 | `dap_disable_exceptions` | Disable exception breakpoints | normal: `` <space>GE ``, select: `` <space>GE `` |
 | `shell_pipe` | Pipe selections through shell command | normal: `` \| ``, select: `` \| `` |
 | `shell_pipe_to` | Pipe selections into shell command ignoring output | normal: `` <A-\|> ``, select: `` <A-\|> `` |
-| `shell_insert_output` | Insert shell command output before selections | normal: `` ! ``, select: `` ! `` |
+| `shell_insert_output` | Insert shell command output before selections | normal: `` <space>z ``, select: `` <space>z `` |
 | `shell_append_output` | Append shell command output after selections | normal: `` <A-!> ``, select: `` <A-!> `` |
 | `shell_keep_pipe` | Filter selections with shell predicate | normal: `` $ ``, select: `` $ `` |
 | `suspend` | Suspend and return to shell | normal: `` <C-z> ``, select: `` <C-z> `` |

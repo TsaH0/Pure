@@ -6,23 +6,42 @@ use helix_plugin_api::{
 };
 
 thread_local! {
+    static SLEEP_ON_OPEN: Cell<bool> = const { Cell::new(false) };
+    static APPEND_ON_OPEN: Cell<bool> = const { Cell::new(false) };
     static EVENT_UI: Cell<bool> = const { Cell::new(false) };
+    static FAILED_PICKER: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
 struct TestPlugin;
 impl Plugin for TestPlugin {
     fn init(config: String) -> Result<Registration, String> {
+        if config.contains("sleep-init") {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+        SLEEP_ON_OPEN.set(config.contains("sleep-on-open"));
         EVENT_UI.set(config.contains("event-ui"));
+        APPEND_ON_OPEN.set(config.contains("append-on-open"));
         editor::set_status(&format!("0.2 init:{config}"));
         Ok(Registration {
             commands: [
                 "inspect",
+                "sleep",
+                "edit-close",
+                "recursive",
+                "ordered-picker",
+                "two-pickers",
                 "arm-process",
                 "arm-picker",
                 "spawn",
                 "interactive",
                 "picker",
+                "data-picker",
                 "push-items",
+                "push-items-fail",
+                "set-items-fail",
+                "mixed-items-fail",
+                "live-fail",
+                "query-failed",
                 "kill",
                 "popup",
                 "prompt",
@@ -31,6 +50,8 @@ impl Plugin for TestPlugin {
                 "read-file",
                 "write-data",
                 "log",
+                "text-preview",
+                "fuzz",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -50,6 +71,48 @@ impl Plugin for TestPlugin {
 
     fn run_command(name: &str, args: Vec<String>) -> Result<(), String> {
         match name {
+            "sleep" => {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                editor::set_status("sleep returned");
+            }
+            "edit-close" => {
+                let doc = editor::current_document().ok_or("no document")?;
+                editor::apply_edits(
+                    doc,
+                    &[Edit {
+                        from: 0,
+                        to: 0,
+                        text: "edited".into(),
+                    }],
+                )?;
+                editor::run_command(":buffer-close!")?;
+            }
+            "recursive" => {
+                editor::run_command(":plugin-run testplugin2/recursive")?;
+            }
+            "ordered-picker" => {
+                let id = editor::pick(
+                    Picker::new("Ordered", vec![Item::text("initial")]),
+                    |choice| {
+                        editor::set_status(&format!(
+                            "ordered:{:?}",
+                            choice.items.iter().map(|i| &i.data).collect::<Vec<_>>()
+                        ));
+                        Ok(())
+                    },
+                )?;
+                editor::set_items(id, vec![Item::text("replacement")])?;
+                editor::push_items(id, vec![Item::text("last")])?;
+            }
+            "two-pickers" => {
+                for title in ["first", "second"] {
+                    editor::pick(Picker::new(title, vec![Item::text(title)]), move |choice| {
+                        editor::log(&format!("{title}:{:?}", choice.action));
+                        editor::set_status(&format!("{title}:{:?}", choice.action));
+                        Ok(())
+                    })?;
+                }
+            }
             "inspect" => {
                 let doc = editor::current_document().ok_or("no document")?;
                 let text = editor::text(doc)?;
@@ -79,6 +142,9 @@ impl Plugin for TestPlugin {
                             }
                             "command" => return editor::run_command("goto_line_end"),
                             "fail" => return Err("callback failed on purpose".into()),
+                            "sleep" => {
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
                             "spin" => loop {
                                 std::hint::spin_loop();
                             },
@@ -119,23 +185,110 @@ impl Plugin for TestPlugin {
                     },
                 )?;
             }
-            "picker" => {
-                editor::pick(
+            "picker" | "data-picker" => {
+                let data = name == "data-picker";
+                let id = editor::pick(
                     Picker::new("Test", args.into_iter().map(Item::text).collect()),
-                    |choice| {
-                        editor::set_status(&format!(
-                            "choice:{:?}:{:?}",
-                            choice.indices, choice.action
-                        ));
+                    move |choice| {
+                        if data {
+                            editor::set_status(&format!(
+                                "data:{:?}",
+                                choice
+                                    .items
+                                    .iter()
+                                    .map(|item| item.data.as_str())
+                                    .collect::<Vec<_>>()
+                            ));
+                        } else {
+                            editor::set_status(&format!(
+                                "choice:{:?}:{:?}",
+                                choice.indices, choice.action
+                            ));
+                        }
                         Ok(())
                     },
                 )?;
+                if data {
+                    editor::set_status(&format!("data-picker:{id}"));
+                }
+            }
+            "push-items-fail" => {
+                editor::push_items(request_id(&args)?, vec![Item::text("discarded")])?;
+                return Err("failed after push".into());
+            }
+            "set-items-fail" | "mixed-items-fail" => {
+                let id = request_id(&args)?;
+                if name == "mixed-items-fail" {
+                    editor::push_items(id, vec![Item::text("discarded push")])?;
+                }
+                editor::set_items(id, vec![Item::text("discarded replacement")])?;
+                editor::push_items(id, vec![Item::text("discarded after replacement")])?;
+                return Err("failed after replacement".into());
+            }
+            "live-fail" => {
+                let id = editor::pick_live(
+                    Picker::new("Failed", vec![Item::text("leaked")]),
+                    |_, _| {
+                        editor::log("leaked query handler called");
+                        Ok(Some(vec![]))
+                    },
+                    |_| Ok(()),
+                )?;
+                FAILED_PICKER.set(Some(id));
+                return Err("failed after live picker".into());
+            }
+            "query-failed" => {
+                requests::picker_query(
+                    FAILED_PICKER.get().ok_or("no failed picker")?,
+                    "query".into(),
+                );
+                editor::set_status("checked");
             }
             "push-items" => {
                 editor::push_items(request_id(&args)?, vec![Item::text("new item")])?;
             }
             "kill" => editor::kill(request_id(&args)?),
             "popup" => editor::popup(&args.join(" "))?,
+            // Random edits, selections and reads through the real ABI, from
+            // a seed. Errors are expected; the host must not crash.
+            "fuzz" => {
+                let mut seed: u64 = request_id(&args)?.into();
+                let mut next = move |max: u32| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed % (max as u64 + 1)) as u32
+                };
+                let doc = editor::current_document().ok_or("no document")?;
+                for _ in 0..20 {
+                    let len = editor::text(doc)?.chars().count() as u32;
+                    let edits: Vec<Edit> = (0..next(3))
+                        .map(|_| Edit {
+                            from: next(len + 2),
+                            to: next(len + 2),
+                            text: ["", "x", "é", "\n", "ab\r\n"][next(4) as usize].into(),
+                        })
+                        .collect();
+                    let _ = editor::apply_edits(doc, &edits);
+                    let ranges: Vec<helix_plugin_api::Range> = (0..next(3))
+                        .map(|_| helix_plugin_api::Range {
+                            anchor: next(len + 2),
+                            head: next(len + 2),
+                        })
+                        .collect();
+                    let _ = editor::set_selections(doc, &ranges);
+                    let _ = editor::text_range(doc, next(len + 2), next(len + 2));
+                }
+            }
+            "text-preview" => {
+                let items = args
+                    .iter()
+                    .map(|arg| {
+                        Item::text(arg.as_str()).with_text_preview(format!("PREVIEW {arg}\nline 2"))
+                    })
+                    .collect();
+                editor::pick(Picker::new("Text", items), |_| Ok(()))?;
+            }
             "log" => {
                 for line in &args {
                     editor::log(line);
@@ -153,7 +306,9 @@ impl Plugin for TestPlugin {
                     Picker::new("Live", vec![]),
                     |_id, query| {
                         Ok(Some(
-                            (1..=3).map(|n| Item::text(format!("{query}-{n}"))).collect(),
+                            (1..=3)
+                                .map(|n| Item::text(format!("{query}-{n}")))
+                                .collect(),
                         ))
                     },
                     |choice| {
@@ -199,7 +354,21 @@ impl Plugin for TestPlugin {
     }
 
     fn on_document_open(doc: DocumentId) {
-        if EVENT_UI.get() {
+        if SLEEP_ON_OPEN.get() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+        if APPEND_ON_OPEN.get() {
+            let text = editor::text(doc).unwrap();
+            editor::apply_edits(
+                doc,
+                &[Edit {
+                    from: text.chars().count() as u32,
+                    to: text.chars().count() as u32,
+                    text: format!("[{}]", text.chars().count()),
+                }],
+            )
+            .unwrap();
+        } else if EVENT_UI.get() {
             let interactive =
                 editor::run_interactive(&["true"], InteractiveOptions::default(), |_| Ok(()));
             let picker = editor::pick(Picker::new("Event", vec![]), |_| Ok(()));

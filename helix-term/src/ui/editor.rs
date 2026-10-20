@@ -145,6 +145,23 @@ impl EditorView {
 
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
+        if !doc.plugin_decorations.is_empty() {
+            let text = doc.text().slice(..);
+            let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
+            let last = (first + inner.height as usize * 2).min(text.len_lines() - 1);
+            let end = text.line_to_char(last + 1).min(text.len_chars());
+            let cursor_line = doc.plugin_decorations.wants_cursor_line().then(|| {
+                let line = text.char_to_line(doc.selection(view.id).primary().cursor(text));
+                text.line_to_char(line)..text.line_to_char((line + 1).min(text.len_lines()))
+            });
+            doc.plugin_decorations.overlays_into(
+                theme,
+                text.line_to_char(first)..end,
+                cursor_line,
+                &mut overlays,
+            );
+        }
+
         if is_focused {
             if config.lsp.auto_document_highlight {
                 if let Some(overlay) = Self::doc_document_highlights(doc, view, theme) {

@@ -578,6 +578,89 @@ pub fn get_surround_pos(
     Ok(change_pos)
 }
 
+/// All delimiter pairs on the line of `pos`, as `(open, close)` positions:
+/// brackets matched by nesting, quotes paired left to right.
+fn pairs_on_line(text: RopeSlice, pos: usize) -> Vec<(usize, usize)> {
+    let line = text.char_to_line(pos);
+    let start = text.line_to_char(line);
+    let end = start + text.line(line).len_chars();
+    let mut pairs = Vec::new();
+    for quote in ['"', '\'', '`'] {
+        pairs.extend(quote_pairs_in(text, quote, start, end));
+    }
+    let mut stack: Vec<(char, usize)> = Vec::new();
+    for (offset, ch) in text.slice(start..end).chars().enumerate() {
+        let pos = start + offset;
+        match ch {
+            '(' | '[' | '{' | '<' => stack.push((ch, pos)),
+            ')' | ']' | '}' | '>' => {
+                let open = get_pair(ch).0;
+                if let Some(i) = stack.iter().rposition(|(c, _)| *c == open) {
+                    let (_, open_pos) = stack[i];
+                    stack.truncate(i);
+                    pairs.push((open_pos, pos));
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs
+}
+
+/// The pair `alt-m` selects inside of, relative to `from` (the start of the
+/// selection): the nearest pair on the line opening at or after `from`, else
+/// the nearest one closing before it, else the innermost one around it.
+pub fn find_next_pair_on_line(text: RopeSlice, from: usize) -> Option<(usize, usize)> {
+    if text.len_chars() == 0 {
+        return None;
+    }
+    let from = from.min(text.len_chars() - 1);
+    let pairs = pairs_on_line(text, from);
+    let right = pairs
+        .iter()
+        .filter(|(open, _)| *open >= from)
+        .min_by_key(|(open, close)| (*open, std::cmp::Reverse(*close)));
+    let left = || {
+        pairs
+            .iter()
+            .filter(|(_, close)| *close < from)
+            .max_by_key(|(open, close)| (*close, *open))
+    };
+    let around = || {
+        pairs
+            .iter()
+            .filter(|(open, close)| *open < from && from <= *close)
+            .min_by_key(|(open, close)| close - open)
+    };
+    right.or_else(left).or_else(around).copied()
+}
+
+#[cfg(test)]
+mod next_pair_test {
+    use super::*;
+
+    fn inside(text: &str, from: usize) -> Option<&str> {
+        let rope = ropey::Rope::from(text);
+        let (open, close) = find_next_pair_on_line(rope.slice(..), from)?;
+        Some(&text[open + 1..close])
+    }
+
+    #[test]
+    fn next_pair_on_the_line() {
+        // To the right first, outermost when two open at the same place.
+        assert_eq!(inside("x = (\"hello\")", 0), Some("\"hello\""));
+        assert_eq!(inside("x = (\"hello\")", 5), Some("hello"));
+        // Then to the left.
+        assert_eq!(inside("f(a) + b", 6), Some("a"));
+        // Then around the cursor.
+        assert_eq!(inside("[abc]", 2), Some("abc"));
+        assert_eq!(inside("say 'it' and [x]", 0), Some("it"));
+        // Only the cursor's line.
+        assert_eq!(inside("no pairs\n(x)", 0), None);
+        assert_eq!(inside("", 0), None);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

@@ -1,0 +1,12 @@
+{
+  "name": "js-upper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "jco componentize plugin.js --wit ../../wit/v0.3 --world-name helix-plugin --disable http --disable fetch-event -o plugin.wasm"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "1.39.0",
+    "@bytecodealliance/componentize-js": "0.23.0"
+  }
+}

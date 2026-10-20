@@ -144,6 +144,16 @@ impl Compositor {
         self.layers
             .retain(|component| component.type_name() != type_name);
     }
+    /// Remove components of a type whose owner-specific identity matches.
+    pub fn remove_matching<T: Component>(&mut self, mut matches: impl FnMut(&T) -> bool) {
+        self.layers.retain(|component| {
+            !component
+                .as_any()
+                .downcast_ref::<T>()
+                .is_some_and(&mut matches)
+        });
+    }
+
     pub fn handle_event(&mut self, event: &Event, cx: &mut Context) -> bool {
         // If it is a key event, a macro is being recorded, and a macro isn't being replayed,
         // push the key event to the recording.

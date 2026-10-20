@@ -185,6 +185,13 @@ Install `cargo-deb`, the tool used for building the `.deb` file:
 cargo install cargo-deb
 ```
 
+To build without plugin support (no Wasmtime: a smaller binary and a faster
+build), disable the default `plugins` feature:
+
+```sh
+cargo install --path helix-term --locked --no-default-features --features git
+```
+
 After cloning and entering the Pure repository as previously described,
 use the following command to build the release binary and package it into a `.deb` file in a single step.
 

@@ -1,6 +1,6 @@
 name = "yazi"
 version = "0.1.0"
-api = "0.2"
+api = "0.3"
 description = "Pick files with the yazi file manager"
 permissions = ["read-buffers", "open-files", "process"]
 wasm = "plugin.wasm"

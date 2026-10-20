@@ -108,7 +108,7 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | ------  | -----------                                                                      | -------               |
 | <code>&#124;</code>     | Pipe each selection through shell command, replacing with output                 | `shell_pipe`          |
 | <code>Alt-&#124;</code> | Pipe each selection into shell command, ignoring output                          | `shell_pipe_to`       |
-| `!`     | Run shell command, inserting output before each selection                        | `shell_insert_output` |
+| `!`     | Run a shell command like Vim's `:!` (on a cleared screen), press any key to return | `run_and_wait` |
 | `Alt-!` | Run shell command, appending output after each selection                         | `shell_append_output` |
 | `$`     | Pipe each selection into shell command, keep selections where command returned 0 | `shell_keep_pipe`     |
 
@@ -121,6 +121,7 @@ Normal mode is the default mode when you launch helix. You can return to it from
 | `S`                      | Split selection into sub selections on regex matches              | `split_selection`                    |
 | `Alt-s`                  | Split selection on newlines                                       | `split_selection_on_newline`         |
 | `Alt-minus`              | Merge selections                                                  | `merge_selections`                   |
+| `Alt-m`                  | Select inside the next bracket or quote pair on the line (again: the next pair inside) | `select_inside_next_pair` |
 | `Alt-_`                  | Merge consecutive selections                                      | `merge_consecutive_selections`       |
 | `&`                      | Align selection in columns                                        | `align_selections`                   |
 | `_`                      | Trim whitespace from the selection                                | `trim_selections`                    |
@@ -312,7 +313,7 @@ This layer is a kludge of mappings, mostly pickers.
 | `'`     | Open last fuzzy picker                                                  | `last_picker`                              |
 | `x`     | Run a shell command, output in `*compilation*` (Emacs `M-x compile`)    | `compile`                                  |
 | `X`     | Show or hide `*compilation*` (`C-j` hides it, `Esc` closes it)          | `toggle_compilation`                       |
-| `z`     | Run a shell command like Vim's `:!`, press any key to return            | `run_and_wait`                             |
+| `z`     | Run shell command, inserting output before each selection                | `shell_insert_output`                      |
 | `q`     | Open the quickfix list (`]q`/`[q` to step through it)                   | `quickfix_picker`                          |
 | `v`     | `:s/\v` on the selections (or the line): a very magic substitute         | `substitute_very_magic`                    |
 | `w`     | Enter [window mode](#window-mode)                                       | N/A                                        |

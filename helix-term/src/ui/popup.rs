@@ -36,6 +36,7 @@ pub struct Popup<T: Component> {
     position_bias: Open,
     scroll_half_pages: usize,
     auto_close: bool,
+    centered: bool,
     ignore_escape_key: bool,
     id: &'static str,
     has_scrollbar: bool,
@@ -50,6 +51,7 @@ impl<T: Component> Popup<T> {
             area: Rect::new(0, 0, 0, 0),
             scroll_half_pages: 0,
             auto_close: false,
+            centered: false,
             ignore_escape_key: false,
             id,
             has_scrollbar: true,
@@ -80,6 +82,12 @@ impl<T: Component> Popup<T> {
 
     pub fn auto_close(mut self, auto_close: bool) -> Self {
         self.auto_close = auto_close;
+        self
+    }
+
+    /// Place the popup in the center of the viewport instead of at its anchor.
+    pub fn centered(mut self, centered: bool) -> Self {
+        self.centered = centered;
         self
     }
 
@@ -166,9 +174,13 @@ impl<T: Component> Popup<T> {
         };
 
         // compute maximum space available for child
-        let mut max_height = match final_pos {
-            Open::Above => rel_y,
-            Open::Below => viewport.height.saturating_sub(1 + rel_y),
+        let mut max_height = if self.centered {
+            viewport.height
+        } else {
+            match final_pos {
+                Open::Above => rel_y,
+                Open::Below => viewport.height.saturating_sub(1 + rel_y),
+            }
         };
         max_height = max_height.min(MAX_HEIGHT);
         let mut max_width = viewport.width.saturating_sub(2).min(MAX_WIDTH);
@@ -193,20 +205,31 @@ impl<T: Component> Popup<T> {
         if render_borders {
             width += 2;
         }
-        if viewport.width <= rel_x + width + 2 {
+        if !self.centered && viewport.width <= rel_x + width + 2 {
             rel_x = viewport.width.saturating_sub(width + 2);
             width = viewport.width.saturating_sub(rel_x + 2)
         }
 
-        let area = match final_pos {
-            Open::Above => {
-                rel_y = rel_y.saturating_sub(height);
-                Rect::new(rel_x, rel_y, width, position.row as u16 - rel_y)
-            }
-            Open::Below => {
-                rel_y += 1;
-                let y_max = viewport.bottom().min(height + rel_y);
-                Rect::new(rel_x, rel_y, width, y_max - rel_y)
+        let area = if self.centered {
+            let width = width.min(viewport.width);
+            let height = height.min(viewport.height);
+            Rect::new(
+                viewport.x + (viewport.width - width) / 2,
+                viewport.y + (viewport.height - height) / 2,
+                width,
+                height,
+            )
+        } else {
+            match final_pos {
+                Open::Above => {
+                    rel_y = rel_y.saturating_sub(height);
+                    Rect::new(rel_x, rel_y, width, position.row as u16 - rel_y)
+                }
+                Open::Below => {
+                    rel_y += 1;
+                    let y_max = viewport.bottom().min(height + rel_y);
+                    Rect::new(rel_x, rel_y, width, y_max - rel_y)
+                }
             }
         };
         RenderInfo {

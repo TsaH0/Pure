@@ -45,6 +45,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("read", "Read the current document's text"),
     ("events", "Show the events received so far"),
     ("loop", "Loop forever"),
+    ("sleep", "Block in a WASI timer"),
     ("panic", "Panic"),
     ("alloc", "Allocate memory until it runs out"),
 ];
@@ -88,6 +89,7 @@ impl Plugin for TestPlugin {
     fn run_command(name: &str, args: Vec<String>) -> Result<(), String> {
         let joined = args.join(" ");
         match name {
+            "sleep" => std::thread::sleep(std::time::Duration::from_secs(60)),
             "status" => editor::set_status(&joined),
             "set-error" => editor::set_error(&joined),
             "fail" => return Err(format!("failed: {joined}")),

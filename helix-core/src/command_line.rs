@@ -826,7 +826,7 @@ impl<'a> Args<'a> {
     /// Once all arguments have been added, `Self::finish` should be called to perform any
     /// closing validations.
     pub fn push(&mut self, arg: Cow<'a, str>) -> Result<(), ParseArgsError<'a>> {
-        if !self.only_positionals && arg == "--" {
+        if !self.only_positionals && !self.signature.flags.is_empty() && arg == "--" {
             // "--" marks the end of flags, everything after is a positional even if it starts
             // with '-'.
             self.only_positionals = true;
@@ -1145,8 +1145,11 @@ mod test {
             positionals: (1, None),
             ..Signature::DEFAULT
         };
-        let args = parse_signature("sh -c --x", signature).unwrap();
-        assert_eq!(args.iter().collect::<Vec<_>>(), ["sh", "-c", "--x"]);
+        let args = parse_signature("sh -c --x -- -y", signature).unwrap();
+        assert_eq!(
+            args.iter().collect::<Vec<_>>(),
+            ["sh", "-c", "--x", "--", "-y"]
+        );
     }
 
     #[test]

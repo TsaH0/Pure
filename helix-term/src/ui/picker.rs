@@ -64,6 +64,8 @@ pub const MAX_FILE_SIZE_FOR_PREVIEW: u64 = 10 * 1024 * 1024;
 pub enum PathOrId<'a> {
     Id(DocumentId),
     Path(&'a Path),
+    /// Text that isn't a file (e.g. from a plugin), shown without a path.
+    Text(&'a str),
 }
 
 impl<'a> From<&'a Path> for PathOrId<'a> {
@@ -186,6 +188,23 @@ impl<T, D> Injector<T, D> {
 
 type ColumnFormatFn<T, D> = for<'a> fn(&'a T, &'a D) -> Cell<'a>;
 
+fn redraw_callback() -> Arc<dyn Fn() + Send + Sync> {
+    #[cfg(feature = "integration")]
+    {
+        // Nucleo invokes this on Rayon threads. Integration notifications are
+        // local to a Tokio runtime, so retain the owning application's context.
+        let runtime = tokio::runtime::Handle::current();
+        Arc::new(move || {
+            let _entered = runtime.enter();
+            helix_event::request_redraw();
+        })
+    }
+    #[cfg(not(feature = "integration"))]
+    {
+        Arc::new(helix_event::request_redraw)
+    }
+}
+
 pub struct Column<T, D> {
     name: Arc<str>,
     format: ColumnFormatFn<T, D>,
@@ -261,17 +280,23 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     on_close: Option<PickerCloseCallback>,
     /// Whether `space '` can reopen the picker after it closes.
     reopenable: bool,
+    /// Shown in the top border, if set.
+    title: Option<Arc<str>>,
     default_action: Action,
 
     pub truncate_start: bool,
     /// Caches paths to documents
     preview_cache: HashMap<Arc<Path>, CachedPreview>,
+    /// The last `PathOrId::Text` preview, by a hash of its text.
+    text_preview: Option<(u64, CachedPreview)>,
     read_buffer: Vec<u8>,
     /// Given an item in the picker, return the file path and line number to display.
     file_fn: Option<FileCallback<T>>,
     /// An event handler for syntax highlighting the currently previewed file.
     preview_highlight_handler: Sender<Arc<Path>>,
     dynamic_query_handler: Option<Sender<DynamicQueryChange>>,
+    query_generation: Option<u64>,
+    on_query_generation: Option<fn(&mut Self, u64)>,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -282,12 +307,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let columns: Arc<[_]> = columns.into_iter().collect();
         let matcher_columns = columns.iter().filter(|col| col.filter).count() as u32;
         assert!(matcher_columns > 0);
-        let matcher = Nucleo::new(
-            Config::DEFAULT,
-            Arc::new(helix_event::request_redraw),
-            None,
-            matcher_columns,
-        );
+        let matcher = Nucleo::new(Config::DEFAULT, redraw_callback(), None, matcher_columns);
         let streamer = Injector {
             dst: matcher.injector(),
             columns,
@@ -317,12 +337,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .filter(|col: &&Column<T, D>| col.filter)
             .count() as u32;
         assert!(matcher_columns > 0);
-        let matcher = Nucleo::new(
-            Config::DEFAULT,
-            Arc::new(helix_event::request_redraw),
-            None,
-            matcher_columns,
-        );
+        let matcher = Nucleo::new(Config::DEFAULT, redraw_callback(), None, matcher_columns);
         let injector = matcher.injector();
         for item in options {
             inject_nucleo_item(&injector, &columns, item, &editor_data);
@@ -391,14 +406,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             callback_fn: Box::new(callback_fn),
             on_close: None,
             reopenable: true,
+            title: None,
             default_action: Action::Replace,
             completion_height: 0,
             widths,
             preview_cache: HashMap::new(),
+            text_preview: None,
             read_buffer: Vec::with_capacity(1024),
             file_fn: None,
             preview_highlight_handler: PreviewHighlightHandler::<T, D>::default().spawn(),
             dynamic_query_handler: None,
+            query_generation: None,
+            on_query_generation: None,
         }
     }
 
@@ -411,12 +430,27 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         self.injector()
     }
 
+    /// Clear items and the selectable snapshot immediately, cancelling old injectors.
+    pub fn clear_items(&mut self) {
+        self.version.fetch_add(1, atomic::Ordering::Relaxed);
+        // A stale snapshot must not remain selectable during debounce.
+        self.matcher.restart(true);
+        self.cursor = 0;
+    }
+
     pub fn editor_data(&self) -> &D {
         &self.editor_data
     }
 
     /// Don't keep the picker for `space '` (`last_picker`) once it closes,
     /// e.g. when choosing from it twice makes no sense.
+    /// A title in the picker's top border.
+    pub fn with_title(mut self, title: impl Into<Arc<str>>) -> Self {
+        let title: Arc<str> = title.into();
+        self.title = (!title.is_empty()).then_some(title);
+        self
+    }
+
     pub fn not_reopenable(mut self) -> Self {
         self.reopenable = false;
         self
@@ -469,14 +503,29 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         callback: DynQueryCallback<T, D>,
         debounce_ms: Option<u64>,
     ) -> Self {
-        let handler = DynamicQueryHandler::new(callback, debounce_ms).spawn();
+        let handler = DynamicQueryHandler::new(
+            callback,
+            debounce_ms,
+            self.query_generation,
+            self.version.clone(),
+        )
+        .spawn();
         let event = DynamicQueryChange {
             query: self.primary_query(),
             // Treat the initial query as a paste.
             is_paste: true,
+            generation: self.query_generation,
         };
         helix_event::send_blocking(&handler, event);
         self.dynamic_query_handler = Some(handler);
+        self
+    }
+
+    /// Opt in to invalidating results immediately on primary-query changes,
+    /// including queries that revert before the debounce finishes.
+    pub fn with_query_generations(mut self, on_change: fn(&mut Self, u64)) -> Self {
+        self.query_generation = Some(0);
+        self.on_query_generation = Some(on_change);
         self
     }
 
@@ -570,6 +619,17 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         }
         // If the query has meaningfully changed, reset the cursor to the top of the results.
         self.cursor = 0;
+        if let Some(generation) = self.query_generation {
+            let primary = &self.columns[self.primary_column].name;
+            if self.query.get(primary) != old_query.get(primary) {
+                let generation = generation.wrapping_add(1);
+                self.query_generation = Some(generation);
+                self.clear_items();
+                if let Some(on_change) = self.on_query_generation {
+                    on_change(self, generation);
+                }
+            }
+        }
         // Have nucleo reparse each changed column.
         for (i, column) in self
             .columns
@@ -605,6 +665,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             let event = DynamicQueryChange {
                 query: self.primary_query(),
                 is_paste,
+                generation: self.query_generation,
             };
             helix_event::send_blocking(handler, event);
         }
@@ -707,6 +768,23 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 let doc = editor.documents.get(&id).unwrap();
                 Some((Preview::EditorDocument(doc), range))
             }
+            PathOrId::Text(text) => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                text.hash(&mut hasher);
+                let hash = hasher.finish();
+                if self.text_preview.as_ref().map(|(cached, _)| *cached) != Some(hash) {
+                    let doc = Document::from(
+                        helix_core::Rope::from(text),
+                        None,
+                        editor.config.clone(),
+                        editor.syn_loader.clone(),
+                    );
+                    self.text_preview = Some((hash, CachedPreview::Document(Box::new(doc))));
+                }
+                let (_, preview) = self.text_preview.as_ref()?;
+                Some((Preview::Cached(preview), range))
+            }
         }
     }
 
@@ -728,12 +806,15 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         let background = cx.editor.theme.get("ui.background");
         surface.clear_with(area, background);
 
-        const BLOCK: Block<'_> = Block::bordered();
+        let block = match &self.title {
+            Some(title) => Block::bordered().title(format!(" {title} ")),
+            None => Block::bordered(),
+        };
 
         // calculate the inner area inside the box
-        let inner = BLOCK.inner(area);
+        let inner = block.inner(area);
 
-        BLOCK.render(area, surface);
+        block.render(area, surface);
 
         // -- Render the input bar:
 
@@ -1148,6 +1229,10 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                 }
                 if let Some(option) = self.selection() {
                     (self.callback_fn)(ctx, option, self.default_action);
+                    // A picker that can only be answered once is done.
+                    if !self.reopenable {
+                        return close_fn(self, ctx, false);
+                    }
                 }
             }
             key!(Enter) => {
