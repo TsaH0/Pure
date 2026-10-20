@@ -3592,3 +3592,107 @@ fn markdown_cost() {
         started.elapsed().as_secs_f64() * 1000.0 / rounds as f64
     );
 }
+
+/// Load `examples/<name>` with `config`.
+fn load_example(host: &mut PluginHost, root: &Path, name: &str, config: &str) {
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(fixture(&format!("examples/{name}/{file}")), dir.join(file)).unwrap();
+    }
+    host.load(&dir, config).unwrap();
+}
+
+#[test]
+fn lint_example_reports_diagnostics() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_example(&mut host, root.path(), "lint", "{\"max-line\":5}");
+    let results = host.dispatch(Event::DocumentOpen(1), &snapshot("ok \nlonger line\n", 0, 0));
+    let actions = results[0].1.as_ref().unwrap();
+    let [Action::Diagnostics { diagnostics, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    let found: Vec<_> = diagnostics
+        .iter()
+        .map(|d| (d.code.as_deref().unwrap(), d.range.clone()))
+        .collect();
+    assert_eq!(found, [("trailing-space", 2..3), ("line-length", 9..15)]);
+}
+
+#[test]
+fn emoji_example_completes_after_a_colon() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_example(&mut host, root.path(), "emoji", "{}");
+    let (id, actions) = host
+        .request_completion("emoji", 1, 8, &snapshot("say :roc", 8, 8))
+        .unwrap();
+    let actions = actions.unwrap();
+    let [Action::Completions { id: answered, items, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    assert_eq!(*answered, id);
+    assert_eq!(items[0].label, ":rocket");
+    assert_eq!(items[0].insert.as_deref(), Some("🚀"));
+    assert_eq!(items[0].replace_from, Some(4));
+    // Without a `:name`, an empty answer.
+    let (_, actions) = host
+        .request_completion("emoji", 1, 3, &snapshot("say", 3, 3))
+        .unwrap();
+    assert!(matches!(&actions.unwrap()[..], [Action::Completions { items, .. }] if items.is_empty()));
+}
+
+#[test]
+fn pomodoro_example_ticks_with_timers() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_example(&mut host, root.path(), "pomodoro", "{\"work\":2,\"rest\":1}");
+    let actions = host
+        .run_command("pomodoro", "start", vec![], Snapshot::default())
+        .unwrap();
+    let timer = actions
+        .iter()
+        .find_map(|action| match action {
+            Action::SetTimer { id, delay, .. } => Some((*id, *delay)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(timer.1, Duration::from_secs(60));
+    assert!(actions.iter().any(
+        |action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 2m")
+    ));
+    let actions = host
+        .callback("pomodoro", Callback::Timer { id: timer.0 }, &Snapshot::default())
+        .unwrap();
+    assert!(actions.iter().any(
+        |action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 1m")
+    ));
+    let actions = host
+        .run_command("pomodoro", "stop", vec![], Snapshot::default())
+        .unwrap();
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::StatusLine { text, .. } if text.is_empty())));
+}
+
+#[test]
+fn yank_history_example_remembers_yanks() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_example(&mut host, root.path(), "yank-history", "{}");
+    let mut snap = Snapshot::default();
+    snap.registers.insert('"', vec!["first".into()]);
+    host.dispatch(Event::PostCommand("yank".into()), &snap);
+    snap.registers.insert('"', vec!["second".into()]);
+    host.dispatch(Event::PostCommand("move_char_left".into()), &snap);
+    let actions = host
+        .run_command("yank-history", "list", vec![], snap)
+        .unwrap();
+    let Some(Action::ShowPicker { picker, .. }) = actions.first() else {
+        panic!("{actions:?}");
+    };
+    // Only the yank was remembered.
+    assert_eq!(picker.items.len(), 1);
+    assert_eq!(picker.items[0].columns, ["first"]);
+}

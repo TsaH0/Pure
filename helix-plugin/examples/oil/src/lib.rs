@@ -15,7 +15,9 @@
 //! In directory buffers: `enter` opens, `-` goes up, `_` to the working
 //! directory, `ctrl-s`/`ctrl-h` open in a split, `ctrl-p` previews, `ctrl-l`
 //! refreshes, `ctrl-c` closes, `g.` shows hidden files, `gs` changes the
-//! sort order, `gc` shows sizes and times, `g?` shows these keys.
+//! sort order, `gc` shows sizes and times, `` ` `` makes the directory the
+//! working directory, `gy` yanks the entry's path, `gx` opens it with the
+//! system's default program, `g?` shows these keys.
 //!
 //! Each line starts with the entry's id (`/001 `), drawn as its icon: it is
 //! how the plugin knows a renamed or moved line is the same entry. Keep it.
@@ -30,7 +32,12 @@
 //! hidden = false               # show dot files
 //! details = false              # show sizes and modification times
 //! icons = "unicode"            # or "nerd" (a Nerd Font) or "none"
+//! allow-process = ["xdg-open"] # for `gx` (`open` on macOS)
 //! ```
+//!
+//! Not (yet) possible: a trash (deleting is final, after the confirmation),
+//! Unix permissions as a column (WASI doesn't expose them), and opening
+//! directories given on the command line (Pure opens its file picker).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -706,7 +713,8 @@ const HELP: &str = "**oil** — edit, then `:w` to apply\n\n\
 | `ctrl-s` / `ctrl-h` | open in a vertical / horizontal split |\n\
 | `ctrl-p` | preview |\n| `ctrl-l` | refresh |\n| `ctrl-c` | close |\n\
 | `g.` | show hidden files |\n| `gs` | sort by name, size, time |\n\
-| `gc` | sizes and times |\n| `g?` | this help |";
+| `gc` | sizes and times |\n| `` ` `` | make it the working directory |\n\
+| `gy` | yank the path |\n| `gx` | open with the system |\n| `g?` | this help |";
 
 /// On `:w`: plan the changes of all modified directory buffers, confirm,
 /// apply.
@@ -797,6 +805,9 @@ impl Plugin for OilPlugin {
             ("cycle-sort", "Sort by name, size or modification time"),
             ("toggle-details", "Show or hide sizes and modification times"),
             ("help", "Show the keys of directory buffers"),
+            ("cd", "Make the current directory the working directory"),
+            ("yank-path", "Yank the path of the entry under the cursor"),
+            ("open-external", "Open the entry with the system's default program"),
         ];
         Ok(Registration {
             commands: commands
@@ -870,6 +881,31 @@ impl Plugin for OilPlugin {
                 Ok(())
             }
             "help" => editor::popup(HELP).map(|_| ()),
+            "cd" => {
+                let doc = editor::current_document().ok_or("no document")?;
+                let dir = buffer_dir(doc).ok_or("not a directory buffer")?;
+                editor::run_command(&format!(":cd {}", dir.display()))
+            }
+            "yank-path" => {
+                let (_, dir, line) = current_line()?;
+                let path = dir.join(&line.name).to_string_lossy().into_owned();
+                editor::set_register('"', std::slice::from_ref(&path))?;
+                editor::set_status(&format!("yanked {path}"));
+                Ok(())
+            }
+            "open-external" => {
+                let (_, dir, line) = current_line()?;
+                let path = dir.join(&line.name).to_string_lossy().into_owned();
+                let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                editor::spawn(&[opener, path.as_str()], Default::default(), |result| {
+                    match result {
+                        Ok(output) if output.exit_code == Some(0) => Ok(()),
+                        Ok(output) => Err(output.stderr.trim().to_string()),
+                        Err(err) => Err(err),
+                    }
+                })
+                .map(|_| ())
+            }
             _ => Err(format!("unknown command {name}")),
         }
     }

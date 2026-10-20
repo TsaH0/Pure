@@ -23,7 +23,9 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 - **Plugins written while working (to try an API) are kept** as opt-in
   examples in `helix-plugin/examples/<name>/` (source, `plugin.toml` and the
   built `plugin.wasm`), so users can copy them into their plugins directory.
-  Never delete them; `build-plugins.sh` rebuilds every example.
+  Never delete them unless the owner asks; `build-plugins.sh` rebuilds every
+  example. (The owner asked to stop shipping the `yazi` example; `oil`, an
+  oil.nvim-style file manager, replaced it.)
 
 ---
 
@@ -499,15 +501,48 @@ and uses native positioned opens, including byte-to-character column conversion.
 The guide documents all versions and migration. The old host diff in
 `docs/drafts/` remains a historical design reference.
 
-## Later: APIs for file-manager style plugins
+## M12. More kinds of plugins (done)
 
-Pure won't ship a file manager (see Scope), but users should be able to write
-one. A persistent tree panel (nvim-tree / oil) needs plugin-defined views that
-upstream Helix doesn't have. After M2 (pickers), M3 (prompts), M4 (file
-access) and M5 (decorations) the remaining piece is either an "oil-style"
-editable buffer API (a scratch document the plugin fills and reads back on
-save) or a `ui` component API. Start with a research task: compare both and
-estimate the upstream diff.
+The owner asked which kinds of plugins could not be built and to add what
+they need. Everything below is in API 0.3, with an example each.
+
+- [x] **Linters:** `diagnostics.set-diagnostics`, a `DiagnosticProvider::Plugin`
+  in `helix-core`; plugin diagnostics go through the language-server path
+  (`Editor::set_plugin_diagnostics`, UTF-32 positions) so the gutter,
+  inline text, `]d`, pickers and statusline counts work. `examples/lint`.
+- [x] **Completion sources:** `event-kind.completion`, `events.on-completion`
+  and `completion.complete`; `handlers/completion/plugin.rs` turns answers
+  into menu items (`CompletionProvider::Plugin`), waiting up to 1 s.
+  `examples/emoji`.
+- [x] **Timers:** `timers.set-timer` / `cancel-timer`, `callbacks.on-timer`
+  (a sleeping tokio task per timer; nothing when none is set).
+  `examples/pomodoro`.
+- [x] **Buffers:** `host.open-scratch`; plugin-owned buffers
+  (`open-buffer`, `buffer-name`, `mark-saved`, `events.on-buffer-write`)
+  whose `:write` (and `:wa`) goes to the plugin; `[keys.buffer]` bindings
+  that apply only in them; they are kept when hidden (jumplist).
+- [x] **Registers:** `host.register` / `set-register` (`registers`
+  permission; snapshots include registers only while such a plugin is
+  loaded; no clipboard reads). `examples/yank-history`.
+- [x] **File managers:** `files.create-path` / `rename-path` /
+  `delete-path` through `Editor::create_path` / `move_path` /
+  `delete_path` (buffers and language servers follow), `files.roots`, and
+  the `allow-dirs` grant for directories outside the workspace. Paths are
+  checked against the real (symlink-resolved) roots. `examples/oil`.
+
+What plugins still can't do, and why:
+
+| Kind | Status |
+| --- | --- |
+| Sidebars, file trees, panels (nvim-tree, outline, undotree panes) | Not possible: Helix has no plugin-defined views or panes. Pickers, popups and plugin buffers in splits cover most uses. |
+| Embedded terminals (toggleterm) | Not possible: no terminal emulator in Helix. `run-interactive` hands over the whole terminal instead. |
+| Conceal (hide `**`, link URLs) | TODO below: needs `DocumentFormatter` support. |
+| Folding | Not possible: Helix has no folds. |
+| Custom UI components (dashboards with layout) | Not possible beyond popups (markdown) and pickers. |
+| Debug adapters, language servers | Use Helix's own DAP and LSP support (`languages.toml`). |
+| Network access | Not in the sandbox; run a program (`curl`) with `allow-process`. |
+| Format on save | Use `formatter` in `languages.toml`; a plugin can offer a format command. |
+| Opening a directory given on the command line (`pure .` → oil) | Not yet: Pure opens its file picker; a "directory open" event would be needed. |
 
 ---
 
@@ -589,6 +624,14 @@ Small, self-contained; each one is a good single task.
 - [ ] **Full-line backgrounds:** a highlight that extends to the window's
   edge (heading and code-block backgrounds), e.g. a line-level style in
   `PluginDecorations` applied in `render_view`.
+- [ ] **Directory arguments for file-manager plugins:** an event (or a
+  setting naming a plugin command) when Pure is started on a directory, so
+  `pure .` can open `oil` instead of the file picker.
+- [ ] **Trash for `oil`:** deleting is final today. A `trash` setting could
+  move entries to the XDG trash (`~/.local/share/Trash`, needs `allow-dirs`)
+  with `.trashinfo` files.
+- [ ] **Incremental Markdown rendering:** re-render only the changed lines
+  (see the overhead numbers in `plugin-progress.md`).
 
 ## Guidelines for agents (lessons from earlier work)
 

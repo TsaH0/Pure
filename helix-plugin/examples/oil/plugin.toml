@@ -2,7 +2,7 @@ name = "oil"
 version = "0.1.0"
 api = "0.3"
 description = "Edit directories like buffers (like oil.nvim): rename, move, copy, create and delete by editing text"
-permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands", "filesystem"]
+permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands", "filesystem", "registers", "process"]
 wasm = "plugin.wasm"
 
 # Default binding: only used where nothing else binds the key.
@@ -19,9 +19,12 @@ C-h = "select-hsplit"
 C-p = "preview"
 C-l = "refresh"
 C-c = "close"
+"`" = "cd"
 
 [keys.buffer.normal.g]
 "." = "toggle-hidden"
 s = "cycle-sort"
 c = "toggle-details"
 "?" = "help"
+y = "yank-path"
+x = "open-external"
