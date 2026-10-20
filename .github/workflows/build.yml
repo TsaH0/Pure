@@ -66,6 +66,36 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
 
+  plugins:
+    name: Plugins (SDK, examples, plugin-less build)
+    runs-on: ubuntu-latest
+    if: github.repository == 'helix-editor/helix' || github.event_name != 'schedule'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.MSRV }}
+          cache-key: plugins
+
+      - name: Build without plugin support
+        run: cargo check -p helix-term --no-default-features --features git
+
+      - name: Native tests of the examples and test plugins
+        run: |
+          for dir in helix-plugin/examples/*/ helix-plugin/tests/plugins/*/; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            (cd "$dir" && cargo test --locked)
+          done
+
+      - name: Every example has a component
+        run: |
+          for dir in helix-plugin/examples/*/; do
+            test -f "$dir/plugin.toml" && test -f "$dir/plugin.wasm" || { echo "missing in $dir"; exit 1; }
+          done
+
   lints:
     name: Lints
     runs-on: ubuntu-latest
