@@ -33,6 +33,7 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
+    time::SystemTime,
 };
 
 use tokio::{
@@ -365,6 +366,11 @@ pub struct Config {
     pub directory_handler: Option<String>,
     /// How the command line (and other prompts) look.
     pub cmdline: CmdlineConfig,
+    /// Reload files changed on disk by other programs, like Vim's
+    /// `autoread`: buffers without unsaved changes are reloaded, the others
+    /// get a warning. Checked every second and when the terminal regains
+    /// focus. Defaults to true.
+    pub auto_reload: bool,
     /// `true` if helix should automatically add a line comment token if you're currently in a comment
     /// and press `enter`.
     pub continue_comments: bool,
@@ -1178,6 +1184,9 @@ pub enum CmdlineStyle {
     /// A box in the middle of the screen, completions in a list below the
     /// input (like noice.nvim).
     Popup,
+    /// On the last line like `bottom`, completions in a box above the
+    /// statusline, one per row with their category and what they do.
+    Panel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1271,6 +1280,7 @@ impl Default for Config {
             completion_replace: false,
             directory_handler: None,
             cmdline: CmdlineConfig::default(),
+            auto_reload: true,
             continue_comments: true,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),
@@ -1398,6 +1408,9 @@ pub struct Editor {
     pub mouse_down_range: Option<Range>,
     pub cursor_cache: CursorCache,
     pub workspace_trust: WorkspaceTrust,
+    /// Modified documents already warned about a change on disk, with the
+    /// file's modification time they were warned for (`auto-reload`).
+    disk_change_warned: HashMap<DocumentId, SystemTime>,
 }
 
 pub type Motion = Box<dyn Fn(&mut Editor)>;
@@ -1525,7 +1538,94 @@ impl Editor {
             plugin_statusline: BTreeMap::new(),
             sidebar: None,
             workspace_trust,
+            disk_change_warned: HashMap::new(),
         }
+    }
+
+    /// Reloads documents whose file changed on disk since it was loaded or
+    /// saved (`editor.auto-reload`). Documents with unsaved changes are
+    /// left alone; the user is warned once per change instead. Returns true
+    /// if anything was reloaded or reported.
+    pub fn reload_changed_documents(&mut self) -> bool {
+        // A save in flight changes the file before `last_saved_time` is set.
+        if !self.config().auto_reload || self.write_count > 0 {
+            return false;
+        }
+        self.disk_change_warned
+            .retain(|id, _| self.documents.contains_key(id));
+
+        let changed: Vec<(DocumentId, SystemTime)> = self
+            .documents
+            .values()
+            .filter_map(|doc| {
+                let mtime = doc.path()?.metadata().ok()?.modified().ok()?;
+                (mtime != doc.last_saved_time()).then_some((doc.id(), mtime))
+            })
+            .collect();
+        if changed.is_empty() {
+            return false;
+        }
+
+        let mut reloaded = Vec::new();
+        let mut warned = Vec::new();
+        for (doc_id, mtime) in changed {
+            let doc = self.documents.get_mut(&doc_id).unwrap();
+            if doc.is_modified() {
+                if self.disk_change_warned.insert(doc_id, mtime) != Some(mtime) {
+                    warned.push(doc.display_name().into_owned());
+                }
+                continue;
+            }
+            self.disk_change_warned.remove(&doc_id);
+
+            let view_id = doc
+                .selections()
+                .keys()
+                .copied()
+                .find(|id| self.tree.contains(*id))
+                .unwrap_or(self.tree.focus);
+            doc.ensure_view_init(view_id);
+            let view = self.tree.get_mut(view_id);
+            view.sync_changes(doc);
+            let trust_full = self
+                .workspace_trust
+                .query(doc.workspace_root(), TrustQuery::Git)
+                .is_trusted();
+            let before = doc.text().clone();
+            if let Err(err) = doc.reload(view, &self.diff_providers, trust_full) {
+                log::warn!("auto-reload of {}: {err}", doc.display_name());
+                continue;
+            }
+            if let Some(path) = doc.path() {
+                self.language_servers
+                    .file_event_handler
+                    .file_changed(path.to_path_buf());
+            }
+            if *doc.text() != before {
+                reloaded.push(doc_id);
+            }
+        }
+
+        let scrolloff = self.config().scrolloff;
+        for (view, _) in self.tree.views_mut() {
+            if reloaded.contains(&view.doc) {
+                let doc = self.documents.get_mut(&view.doc).unwrap();
+                view.ensure_cursor_in_view(doc, scrolloff);
+            }
+        }
+
+        if let Some(name) = warned.first() {
+            self.set_warning(format!(
+                "{name} changed on disk: :reload to load it, :w! to overwrite it"
+            ));
+        } else if let Some(doc_id) = reloaded.first() {
+            let name = self.documents[doc_id].display_name().into_owned();
+            match reloaded.len() {
+                1 => self.set_status(format!("{name} changed on disk, reloaded")),
+                n => self.set_status(format!("{n} files changed on disk, reloaded")),
+            }
+        }
+        !reloaded.is_empty() || !warned.is_empty()
     }
 
     pub fn popup_border(&self) -> bool {

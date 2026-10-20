@@ -79,6 +79,8 @@ pub struct Application {
     lsp_progress: LspProgressMap,
 
     theme_mode: Option<theme::Mode>,
+    /// Checks for files changed on disk (`editor.auto-reload`).
+    auto_reload_timer: tokio::time::Interval,
 }
 
 #[cfg(feature = "integration")]
@@ -263,6 +265,11 @@ impl Application {
             jobs,
             lsp_progress: LspProgressMap::new(),
             theme_mode,
+            auto_reload_timer: {
+                let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
+                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                timer
+            },
         };
 
         Ok(app)
@@ -362,6 +369,11 @@ impl Application {
                         self.jobs.add(job);
                     }
                     self.render().await;
+                }
+                _ = self.auto_reload_timer.tick() => {
+                    if self.editor.reload_changed_documents() {
+                        self.render().await;
+                    }
                 }
                 event = self.editor.wait_event() => {
                     let _idle_handled = self.handle_editor_event(event).await;
@@ -787,7 +799,10 @@ impl Application {
             event => {
                 let event = event.into();
                 match event {
-                    Event::FocusGained => crate::plugins::focus_changed(true),
+                    Event::FocusGained => {
+                        cx.editor.reload_changed_documents();
+                        crate::plugins::focus_changed(true)
+                    }
                     Event::FocusLost => crate::plugins::focus_changed(false),
                     _ => {}
                 }
