@@ -31,12 +31,12 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 
-use api::{v0_1, v0_2, v0_3, Instance};
+use api::{v0_1, v0_2, v0_3, v0_4, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.3";
+pub const API_VERSION: &str = "0.4";
 
 pub type DocumentId = u32;
 
@@ -213,6 +213,20 @@ pub struct PluginDiagnostic {
     pub source: Option<String>,
 }
 
+/// A file operation of `files.apply` (API 0.4); paths are checked against
+/// the plugin's grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOp {
+    Create { path: String, directory: bool },
+    Rename { from: String, to: String },
+    Copy { from: String, to: String },
+    Delete(String),
+    Trash(String),
+}
+
+/// Most operations in one `files.apply`.
+pub const MAX_FILE_OPS: usize = 1000;
+
 /// A completion from a plugin. `replace_from` is a char offset, checked by
 /// the editor against the cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,6 +279,11 @@ fn default_wasm() -> PathBuf {
 }
 
 impl Manifest {
+    /// API 0.3 or later (plugin buffers, background tasks, popups ids, ...).
+    pub fn at_least_0_3(&self) -> bool {
+        matches!(self.api.as_str(), "0.3" | "0.4")
+    }
+
     pub fn parse(source: &str) -> anyhow::Result<Self> {
         let manifest: Manifest = toml::from_str(source)?;
         if !is_valid_name(&manifest.name) {
@@ -273,7 +292,7 @@ impl Manifest {
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4") {
             bail!(
                 "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
                 manifest.name,
@@ -452,6 +471,13 @@ pub enum Action {
         to: PathBuf,
     },
     DeletePath(PathBuf),
+    /// Carry out `ops` (checked, absolute paths) in order, stopping at the
+    /// first failure, and deliver [`Callback::FilesDone`].
+    FileOps {
+        plugin: String,
+        id: u32,
+        ops: Vec<FileOp>,
+    },
     SetRegister {
         name: char,
         values: Vec<String>,
@@ -510,6 +536,7 @@ pub enum PendingKind {
     Background,
     Timer,
     Completion,
+    Files,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -550,6 +577,11 @@ pub enum Callback {
     Timer {
         id: u32,
     },
+    /// One result per operation of a `files.apply` (API 0.4).
+    FilesDone {
+        id: u32,
+        results: Vec<Result<(), String>>,
+    },
 }
 
 impl Callback {
@@ -565,6 +597,7 @@ impl Callback {
             Self::PopupClosed { id } => (*id, PendingKind::Popup),
             Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
             Self::Timer { id } => (*id, PendingKind::Timer),
+            Self::FilesDone { id, .. } => (*id, PendingKind::Files),
         }
     }
 
@@ -1340,6 +1373,47 @@ impl State {
         }
     }
 
+    fn apply_files(&mut self, ops: Vec<FileOp>) -> Result<u32, String> {
+        if self.context == CallContext::Init {
+            return Err("files.apply can't be used from init".into());
+        }
+        if ops.len() > MAX_FILE_OPS {
+            return Err(format!("at most {MAX_FILE_OPS} file operations at once"));
+        }
+        let ops = ops
+            .into_iter()
+            .map(|op| {
+                let check = |path: &str| {
+                    self.writable(path)
+                        .map(|path| path.to_string_lossy().into_owned())
+                };
+                Ok(match op {
+                    FileOp::Create { path, directory } => FileOp::Create {
+                        path: check(&path)?,
+                        directory,
+                    },
+                    FileOp::Rename { from, to } => FileOp::Rename {
+                        from: check(&from)?,
+                        to: check(&to)?,
+                    },
+                    FileOp::Copy { from, to } => FileOp::Copy {
+                        from: check(&from)?,
+                        to: check(&to)?,
+                    },
+                    FileOp::Delete(path) => FileOp::Delete(check(&path)?),
+                    FileOp::Trash(path) => FileOp::Trash(check(&path)?),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let id = self.request(PendingKind::Files)?;
+        self.actions.push(Action::FileOps {
+            plugin: self.plugin.clone(),
+            id,
+            ops,
+        });
+        Ok(id)
+    }
+
     fn create_path(&mut self, path: String, directory: bool) -> Result<(), String> {
         let path = self.writable(&path)?;
         self.actions.push(Action::CreatePath { path, directory });
@@ -1677,10 +1751,11 @@ fn spawn_worker(
     linker: Linker<State>,
     component: Component,
     ticker: Arc<Ticker>,
-    name: String,
+    manifest: &Manifest,
     memory: usize,
     limit: Duration,
 ) -> std::io::Result<std::sync::mpsc::Sender<BackgroundTask>> {
+    let (name, api) = (manifest.name.clone(), manifest.api.clone());
     let (sender, tasks) = std::sync::mpsc::channel::<BackgroundTask>();
     std::thread::Builder::new()
         .name(format!("plugin-{name}-background"))
@@ -1697,9 +1772,15 @@ fn spawn_worker(
                     store.set_epoch_deadline(ticks);
                     let busy = ticker.busy();
                     let started = runtime.run(limit, async {
-                        v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
-                            .await
-                            .map(|instance| Instance::V0_3(Box::new(instance)))
+                        if api == "0.3" {
+                            v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_3(Box::new(instance)))
+                        } else {
+                            v0_4::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_4(Box::new(instance)))
+                        }
                     });
                     drop(busy);
                     match started {
@@ -1936,6 +2017,7 @@ impl PluginHost {
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_4::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
@@ -2199,6 +2281,9 @@ impl PluginHost {
                     "0.3" => v0_3::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
                         .map(|instance| Instance::V0_3(Box::new(instance))),
+                    "0.4" => v0_4::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(|instance| Instance::V0_4(Box::new(instance))),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -2312,10 +2397,12 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3") || plugin.disabled.is_some() {
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4")
+            || plugin.disabled.is_some()
+        {
             bail!("requests require an enabled API 0.2 or newer plugin");
         }
-        if kind == PendingKind::Popup && plugin.manifest.api != "0.3" {
+        if kind == PendingKind::Popup && !plugin.manifest.at_least_0_3() {
             bail!("popup requests require API 0.3");
         }
         plugin
@@ -2396,7 +2483,7 @@ impl PluginHost {
                 self.linker.clone(),
                 plugin.component.clone(),
                 plugin.ticker.clone(),
-                plugin.manifest.name.clone(),
+                &plugin.manifest,
                 memory,
                 limit,
             ) {
@@ -2504,7 +2591,7 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Option<anyhow::Result<Vec<Action>>> {
-        self.dispatch_if(plugin, event, snapshot, |p| p.manifest.api == "0.3")
+        self.dispatch_if(plugin, event, snapshot, |p| p.manifest.at_least_0_3())
     }
 
     fn dispatch_if(
@@ -2567,7 +2654,7 @@ impl PluginHost {
         let plugin = self
             .plugins
             .iter_mut()
-            .find(|p| p.name() == plugin && p.disabled.is_none() && p.manifest.api == "0.3")
+            .find(|p| p.name() == plugin && p.disabled.is_none() && p.manifest.at_least_0_3())
             .ok_or_else(|| anyhow!("the plugin owning this buffer isn't running"))?;
         plugin
             .call(

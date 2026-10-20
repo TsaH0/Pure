@@ -1,6 +1,6 @@
 name = "yank-history"
 version = "0.1.0"
-api = "0.3"
+api = "0.4"
 description = "Remember yanks and pick one to paste again (registers)"
 permissions = ["registers"]
 wasm = "plugin.wasm"

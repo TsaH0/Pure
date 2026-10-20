@@ -1,5 +1,5 @@
 //! A direct-bindings fixture for the API 0.3 world, independent of the SDK.
-wit_bindgen::generate!({ path: "../../../wit/v0.3", world: "helix-plugin" });
+wit_bindgen::generate!({ path: "../../../wit/v0.4", world: "helix-plugin" });
 use helix::plugin::{host, types};
 use std::cell::{Cell, RefCell};
 thread_local! {
@@ -62,6 +62,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "buffer",
                 "registers",
                 "read-clipboard",
+                "files",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -319,6 +320,31 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 Ok(())
             }
             "read-clipboard" => host::register('+').map(|_| ()),
+            // `files create:<path>` `rename:<from>:<to>` `copy:<from>:<to>`
+            // `delete:<path>` `trash:<path>`, in order.
+            "files" => {
+                use helix::plugin::files::{self, CreateOp, FileOp, MoveOp};
+                let ops = args
+                    .iter()
+                    .map(|arg| {
+                        let mut parts = arg.splitn(3, ':');
+                        let kind = parts.next().unwrap_or_default();
+                        let a = parts.next().unwrap_or_default().to_string();
+                        let b = parts.next().unwrap_or_default().to_string();
+                        match kind {
+                            "create" => FileOp::Create(CreateOp { path: a, directory: false }),
+                            "mkdir" => FileOp::Create(CreateOp { path: a, directory: true }),
+                            "rename" => FileOp::Rename(MoveOp { from: a, to: b }),
+                            "copy" => FileOp::Copy(MoveOp { from: a, to: b }),
+                            "delete" => FileOp::Delete(a),
+                            _ => FileOp::Trash(a),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let id = files::apply(&ops)?;
+                host::log(&format!("files:{id}"));
+                Ok(())
+            }
             _ => Err("unknown command".into()),
         }
     }
@@ -384,6 +410,17 @@ impl exports::helix::plugin::callbacks::Guest for TestPlugin {
         host::set_status(&format!("popup-closed:{id}"));
     }
     fn on_prompt_done(_id: u32, _answer: Option<String>) {}
+    fn on_files_done(id: u32, results: Vec<Result<(), String>>) {
+        let results: Vec<String> = results
+            .into_iter()
+            .map(|result| match result {
+                Ok(()) => "ok".to_string(),
+                Err(err) => format!("err({err})"),
+            })
+            .collect();
+        host::log(&format!("files-done:{id}:{}", results.join(";")));
+        host::set_status(&format!("files-done:{}", results.join(";")));
+    }
     fn on_timer(id: u32) {
         host::log(&format!("timer-fired:{id}"));
         host::set_status(&format!("timer-fired:{id}"));

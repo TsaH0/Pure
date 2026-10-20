@@ -195,15 +195,19 @@ The versioned WIT files are the complete API reference.
 
 ## API versions and SDK callbacks
 
-Pure accepts `api = "0.1"`, `api = "0.2"` and `api = "0.3"` side by side.
-Existing 0.1/0.2 components load without rebuilding. SDK 0.3 generates the
-0.3 ABI by default; set `api = "0.3"` in the plugin manifest. To rebuild an
-older component, select exactly one legacy feature and keep its manifest API:
+Pure accepts `api = "0.1"` to `api = "0.4"` side by side. Existing
+components load without rebuilding. SDK 0.4 generates the 0.4 ABI by
+default; set `api = "0.4"` in the plugin manifest. To rebuild an older
+component, select exactly one legacy feature and keep its manifest API:
 
 ```toml
-# For api = "0.2" (use api-v0-1 for api = "0.1"):
-helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-2"] }
+# For api = "0.3" (api-v0-2 for "0.2", api-v0-1 for "0.1"):
+helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-3"] }
 ```
+
+0.4 differs from 0.3 only in `files`: 0.3's `create_path`, `rename_path`
+and `delete_path` became `files::apply`, which reports results (and can copy
+and trash); plugins export one more callback (the SDK does that).
 
 The SDK exports callback bindings automatically. `editor::spawn` and
 `editor::run_interactive` accept a one-shot closure receiving `Result<Output,
@@ -231,8 +235,9 @@ editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
 
 UI (`run-interactive`, `pick`, popups, `run-command`) is restricted to plugin commands
 and callbacks, so events cannot interrupt typing. API 0.1's
-WIT remains at [`wit/v0.1/`](wit/v0.1/) and 0.2 at
-[`wit/v0.2/`](wit/v0.2/); released interfaces are never extended in place.
+WIT remains at [`wit/v0.1/`](wit/v0.1/), 0.2 at [`wit/v0.2/`](wit/v0.2/)
+and 0.3 at [`wit/v0.3/`](wit/v0.3/). A released version may gain host
+functions (imports: old components don't use them), never exports.
 
 ## Running programs
 
@@ -385,22 +390,37 @@ allow-files = "write"
 allow-dirs = ["~", "/tmp"]
 ```
 
-### Changing files through the editor (API 0.3)
+### Changing files through the editor (API 0.4)
 
 `std::fs` changes files behind the editor's back. `helix_plugin_api::files`
 asks the editor instead, like `:move` does, so buffers follow renamed files
 and language servers hear about it (and can, say, update imports):
 
 ```rust,ignore
-files::create_path("/work/src/new.rs", false)?;      // or true: a directory
-files::rename_path("/work/a.rs", "/work/src/a.rs")?; // its buffer follows
-files::delete_path("/work/old")?;                    // directories recursively
+use helix_plugin_api::files::{self, CreateOp, FileOp, MoveOp};
+
+let ops = [
+    FileOp::Create(CreateOp { path: "/work/src/new.rs".into(), directory: false }),
+    FileOp::Rename(MoveOp { from: "/work/a.rs".into(), to: "/work/src/a.rs".into() }),
+    FileOp::Copy(MoveOp { from: "/work/assets".into(), to: "/work/assets-old".into() }),
+    FileOp::Trash("/work/old".into()), // or Delete: final
+];
+files::apply(&ops, |results| {
+    // One result per operation, in order; after a failure: "skipped".
+    for result in results {
+        result?;
+    }
+    editor::set_status("done");
+    Ok(())
+})?;
 ```
 
-They need `filesystem` and `allow-files = "write"`, take absolute paths
-inside `roots()` (no `..`, and no symlink leading out), and are carried out
-after the call returns, in order; failures are shown to the user. Read the
-result in a later callback, e.g. a 1 ms timer.
+They need `filesystem` and `allow-files = "write"` and take absolute paths
+inside `files::roots()` (no `..`, and no symlink leading out). They run in
+order after the call, off the editor's thread for copies and the trash;
+none overwrites an existing path. `Trash` uses the system's trash and fails
+rather than deleting if it can't. (API 0.3 has fire-and-forget
+`create_path`, `rename_path` and `delete_path` instead.)
 
 ## Events
 

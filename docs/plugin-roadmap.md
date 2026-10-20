@@ -35,7 +35,8 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 
 | Path | What |
 | --- | --- |
-| `helix-plugin/wit/v0.{1,2,3}/helix-plugin.wit` | Versioned APIs (WIT); 0.1/0.2 frozen, 0.3 current |
+| `helix-plugin/wit/v0.{1,2,3,4}/helix-plugin.wit` | Versioned APIs (WIT); 0.1–0.3 frozen (exports), 0.4 current |
+| `helix-plugin/src/api/world.rs` | Host adapters shared by 0.3 and 0.4 (a macro per world) |
 | `helix-plugin/src/lib.rs` | Host: `PluginHost`, `Manifest`, `Permission`, `Snapshot`, `Action`, `Event`, `Limits`, host functions (`impl host::Host for State`) |
 | `helix-plugin/src/test.rs` | Host tests with real components, including frozen compatibility fixtures and current examples |
 | `helix-plugin/tests/plugins/testplugin` | Source of the test plugin (its own cargo workspace) |
@@ -633,9 +634,14 @@ Small, self-contained; each one is a good single task.
   request replaces an earlier one); if the command is missing or fails, the
   file picker opens with an error. Test:
   `directory_handler_opens_directories_with_a_plugin`.
-- [ ] **Trash for `oil`:** deleting is final today. A `trash` setting could
-  move entries to the XDG trash (`~/.local/share/Trash`, needs `allow-dirs`)
-  with `.trashinfo` files.
+- [x] **Trash for `oil`, file results (API 0.4):** `files.apply` runs
+  create/rename/copy/delete/trash in order, stops at the first failure and
+  reports one result per operation (`on-files-done`). Trash uses the `trash`
+  crate (freedesktop trash with metadata and name collisions, macOS,
+  Windows; symlinks themselves); it never falls back to deleting. Oil marks
+  buffers saved only when everything succeeded; otherwise the edits stay
+  and what did succeed isn't repeated. `trash = true` in oil's settings.
+  API 0.3 is frozen (`testplugin3-v0.3.wasm`, `oil-v0.3.wasm`).
 - [ ] **Incremental Markdown rendering:** re-render only the changed lines
   (see the overhead numbers in `plugin-progress.md`).
 

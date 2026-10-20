@@ -667,8 +667,8 @@ fn example_text_tools() {
 }
 
 #[test]
-fn sdk_03_example_text_tools() {
-    check_text_tools("0.3");
+fn sdk_04_example_text_tools() {
+    check_text_tools("0.4");
 }
 
 #[test]
@@ -1072,7 +1072,8 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Popup
         | PendingKind::Background
         | PendingKind::Timer
-        | PendingKind::Completion => unreachable!(),
+        | PendingKind::Completion
+        | PendingKind::Files => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -2247,7 +2248,7 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.3\"");
+        .replace("api = \"0.1\"", "api = \"0.4\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
 }
@@ -2262,7 +2263,7 @@ fn load_v3_with(host: &mut PluginHost, root: &Path, permissions: &[&str], config
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.3\"");
+        .replace("api = \"0.1\"", "api = \"0.4\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, config).unwrap();
 }
@@ -3714,4 +3715,153 @@ fn yank_history_example_remembers_yanks() {
     // Only the yank was remembered.
     assert_eq!(picker.items.len(), 1);
     assert_eq!(picker.items[0].columns, ["first"]);
+}
+
+/// API 0.3 components built before 0.4 keep loading and working.
+#[test]
+fn frozen_api_03_components_still_work() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.3.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.3\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let actions = host
+        .run_command("testplugin3", "diagnose", vec![], snapshot("hello", 0, 0))
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::Diagnostics { .. }]));
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "timer",
+            vec!["5".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let [Action::SetTimer { id, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    let fired = host
+        .callback(
+            "testplugin3",
+            Callback::Timer { id: *id },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(!fired.is_empty());
+    // 0.3 has no file results.
+    assert!(host
+        .register_request("testplugin3", PendingKind::Files)
+        .is_ok());
+
+    // The 0.3 build of oil, with 0.3's file functions.
+    let oil = root.path().join("oil");
+    std::fs::create_dir_all(&oil).unwrap();
+    std::fs::copy(
+        fixture("tests/fixtures/oil-v0.3.wasm"),
+        oil.join("plugin.wasm"),
+    )
+    .unwrap();
+    let manifest = std::fs::read_to_string(fixture("examples/oil/plugin.toml"))
+        .unwrap()
+        .replace("api = \"0.4\"", "api = \"0.3\"");
+    std::fs::write(oil.join("plugin.toml"), manifest).unwrap();
+    host.load(&oil, "{}").unwrap();
+    assert!(host
+        .commands()
+        .iter()
+        .any(|(plugin, c)| plugin == "oil" && c.name == "open"));
+}
+
+#[test]
+fn api_04_file_operations_are_checked_and_answered() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let work = std::fs::canonicalize(root.path()).unwrap().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        &["read-buffers", "filesystem"],
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(
+        &dir,
+        PluginSettings {
+            config: "{}".into(),
+            files: FileGrant::Write,
+            dirs: vec![work.clone()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let a = work.join("a").to_string_lossy().into_owned();
+    let b = work.join("b").to_string_lossy().into_owned();
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "files",
+            vec![
+                format!("create:{a}"),
+                format!("rename:{a}:{b}"),
+                format!("trash:{b}"),
+            ],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let [Action::FileOps { id, ops, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    assert_eq!(
+        ops,
+        &[
+            FileOp::Create {
+                path: a.clone(),
+                directory: false
+            },
+            FileOp::Rename {
+                from: a.clone(),
+                to: b.clone()
+            },
+            FileOp::Trash(b.clone()),
+        ]
+    );
+    // The editor answers with one result per operation.
+    let answered = host
+        .callback(
+            "testplugin3",
+            Callback::FilesDone {
+                id: *id,
+                results: vec![Ok(()), Err("no".into()), Err("skipped".into())],
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(matches!(
+        &answered[..],
+        [Action::Status(status)] if status == "files-done:ok;err(no);err(skipped)"
+    ));
+    // Paths outside the grant are refused before anything happens.
+    let err = host
+        .run_command(
+            "testplugin3",
+            "files",
+            vec!["delete:/etc/passwd".into()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("outside"), "{err}");
 }

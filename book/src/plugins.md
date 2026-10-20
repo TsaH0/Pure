@@ -72,7 +72,7 @@ e = ":oil/open"
 
 ## Decorations
 
-Plugins (API 0.3) can highlight text, add virtual text and set gutter signs
+Plugins (API 0.3 and later) can highlight text, add virtual text and set gutter signs
 and statusline text; the `todos` example does all four. They can also draw
 characters over the text, shown as plain text on the cursor's line while you
 edit it; the `markdown` example renders Markdown that way. Signs and
@@ -110,7 +110,9 @@ it like text and `:w`: change a name to rename, delete a line to delete,
 add a line to create (`name/` for a directory), cut and paste lines between
 directory buffers to move, copy and paste to copy. A list of the changes
 asks for confirmation first. In directory buffers `enter` opens, `-` goes
-up, `ctrl-p` previews, `g?` lists all keys. It needs
+up, `ctrl-p` previews, `g?` lists all keys. With `trash = true` in its
+`plugins.toml` table, deleted entries go to the system's trash. If a change
+fails, the buffer keeps your edits; fix it and `:w` again. It needs
 `allow-files = "write"` (and `allow-dirs` for directories outside the
 project). To have `pure some/dir` and `:open some/dir` open oil instead of
 the file picker:

@@ -869,7 +869,7 @@ fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, temp
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -1592,7 +1592,7 @@ fn app_with_v3_manifest(
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n{extra}"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n{extra}"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -1856,5 +1856,101 @@ async fn directory_handler_opens_directories_with_a_plugin() -> anyhow::Result<(
     let name = helix_view::doc!(app.editor).display_name().to_string();
     assert_eq!(name, format!("oil://{}/", work.display()));
     assert!(text(&app).contains(" a.txt"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    let (mut app, _dir) = app_with_v3_settings(&format!("{ALL}, \"filesystem\""), &settings);
+    let p = |name: &str| work.join(name).display().to_string();
+    let ops = format!(
+        "create:{} rename:{}:{} copy:{}:{} trash:{}",
+        p("a"),
+        p("a"),
+        p("b"),
+        p("b"),
+        p("c"),
+        p("c")
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/files {ops}<ret>"),
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+    assert_eq!(status, "files-done:ok;ok;ok;ok");
+    assert!(!work.join("a").exists());
+    assert!(work.join("b").is_file());
+    assert!(!work.join("c").exists(), "trashed, not left behind");
+
+    // A failure stops the rest; nothing after it happens.
+    app.editor.clear_status();
+    let ops = format!("rename:{}:{} delete:{}", p("missing"), p("x"), p("b"));
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/files {ops}<ret>"),
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+    assert!(
+        status.starts_with("files-done:err(Failed to move"),
+        "{status}"
+    );
+    assert!(
+        status.ends_with(";err(skipped after an earlier failure)"),
+        "{status}"
+    );
+    assert!(
+        work.join("b").is_file(),
+        "the delete after the failure didn't run"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oil_example_can_delete_to_the_trash() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("keep.txt"), "k")?;
+    std::fs::write(work.join("old.txt"), "o")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("keep.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\ntrash = true\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    let listing = text(&app);
+    let kept: String = listing
+        .lines()
+        .filter(|line| !line.ends_with(" old.txt"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    set_text(&mut app, &kept);
+    keys(&mut app, ":w<ret>").await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("oil:")).await;
+    assert!(status.contains("applied"), "{status}");
+    assert!(!work.join("old.txt").exists());
+    assert!(work.join("keep.txt").exists());
+    assert!(!helix_view::doc!(app.editor).is_modified());
     Ok(())
 }

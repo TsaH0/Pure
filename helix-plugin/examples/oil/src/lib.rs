@@ -29,6 +29,7 @@
 //! allow-files = "write"        # needed: the workspace
 //! allow-dirs = ["~"]           # more directories it may show and change
 //! confirm = true               # ask before applying changes
+//! trash = true                 # delete to the system's trash
 //! hidden = false               # show dot files
 //! details = false              # show sizes and modification times
 //! icons = "unicode"            # or "nerd" (a Nerd Font) or "none"
@@ -38,8 +39,11 @@
 //! With `directory-handler = "oil/open"` under `[editor]` in `config.toml`,
 //! `pure some/dir` and `:open some/dir` open oil instead of the file picker.
 //!
-//! Not (yet) possible: a trash (deleting is final, after the confirmation)
-//! and Unix permissions as a column (WASI doesn't expose them).
+//! Deleting is final unless `trash = true`; with it, entries go to the
+//! system's trash (and if the trash can't take one, nothing is deleted).
+//! A failed change leaves the buffer as edited: fix it and `:w` again; what
+//! did succeed isn't repeated. Not possible: Unix permissions as a column
+//! (WASI doesn't expose them).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -112,8 +116,14 @@ struct Oil {
     icons: Icons,
     /// Put the cursor on this entry when its directory's buffer opens.
     focus: Option<(PathBuf, String)>,
-    /// A confirmation is open: further writes wait for it.
+    /// A confirmation is open, or changes are being applied: further
+    /// writes wait.
     confirming: bool,
+    /// Deleting moves to the trash.
+    trash: bool,
+    /// Operations of a failed `:w` that did succeed: not repeated by the
+    /// next one. Cleared when the buffers are read again.
+    applied: Vec<Op>,
 }
 
 thread_local! {
@@ -129,6 +139,8 @@ thread_local! {
         icons: Icons::Unicode,
         focus: None,
         confirming: false,
+        trash: false,
+        applied: Vec::new(),
     });
 }
 
@@ -285,7 +297,8 @@ impl Op {
             Op::Copy { from, to } => format!("COPY   {} → {}", from.display(), to.display()),
             Op::Move { from, to } => format!("MOVE   {} → {}", from.display(), to.display()),
             Op::Delete { path, dir } => {
-                format!("DELETE {}{}", path.display(), if *dir { "/" } else { "" })
+                let verb = if OIL.with_borrow(|oil| oil.trash) { "TRASH " } else { "DELETE" };
+                format!("{verb} {}{}", path.display(), if *dir { "/" } else { "" })
             }
         }
     }
@@ -367,6 +380,8 @@ fn plan(buffers: &[(PathBuf, String, bool)]) -> Result<Vec<Op>, String> {
             }
         }
         ops.extend(creates);
+        // What a failed `:w` already did isn't done again.
+        ops.retain(|op| !oil.applied.contains(op));
         // Nothing may overwrite an existing entry that stays.
         let leaving: HashSet<_> = ops
             .iter()
@@ -388,59 +403,75 @@ fn plan(buffers: &[(PathBuf, String, bool)]) -> Result<Vec<Op>, String> {
     })
 }
 
-fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
-    let meta = std::fs::symlink_metadata(from)?;
-    if meta.is_dir() {
-        std::fs::create_dir_all(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+/// The editor's form of an operation.
+fn file_op(op: &Op) -> files::FileOp {
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    match op {
+        Op::Create { path: p, dir } => files::FileOp::Create(files::CreateOp {
+            path: path(p),
+            directory: *dir,
+        }),
+        Op::Copy { from, to } => files::FileOp::Copy(files::MoveOp {
+            from: path(from),
+            to: path(to),
+        }),
+        Op::Move { from, to } => files::FileOp::Rename(files::MoveOp {
+            from: path(from),
+            to: path(to),
+        }),
+        Op::Delete { path: p, .. } if OIL.with_borrow(|oil| oil.trash) => {
+            files::FileOp::Trash(path(p))
         }
-        Ok(())
-    } else {
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(from, to).map(|_| ())
+        Op::Delete { path: p, .. } => files::FileOp::Delete(path(p)),
     }
 }
 
-/// Apply `ops`, then refresh every directory buffer once the editor has
-/// carried them out.
+/// Apply `ops` through the editor. Only when all succeed are the buffers
+/// read again (and so saved); otherwise the edits stay, the failures are
+/// shown, and what did succeed won't be repeated by the next `:w`.
 fn execute(ops: Vec<Op>) -> Result<(), String> {
-    let mut errors = Vec::new();
+    let mut editor_ops = Vec::new();
     for op in &ops {
-        let result = match op {
-            // Copies happen here, through the plugin's file access.
-            Op::Copy { from, to } => copy_recursive(from, to).map_err(|err| err.to_string()),
-            Op::Move { from, to } => {
-                // Moving into a directory that doesn't exist yet.
-                let parent = to.parent().filter(|parent| !parent.exists());
-                parent
-                    .map_or(Ok(()), |parent| {
-                        files::create_path(&parent.to_string_lossy(), true)
-                    })
-                    .and_then(|()| files::rename_path(&from.to_string_lossy(), &to.to_string_lossy()))
+        // Moving into a directory that doesn't exist yet.
+        if let Op::Move { to, .. } = op {
+            if let Some(parent) = to.parent().filter(|parent| !parent.exists()) {
+                editor_ops.push(Op::Create {
+                    path: parent.to_path_buf(),
+                    dir: true,
+                });
             }
-            Op::Delete { path, .. } => files::delete_path(&path.to_string_lossy()),
-            Op::Create { path, dir } => files::create_path(&path.to_string_lossy(), *dir),
-        };
-        if let Err(err) = result {
-            errors.push(format!("{}: {err}", op.describe()));
         }
+        editor_ops.push(op.clone());
     }
-    // The editor applies the file operations after this call: look again
-    // right after.
-    editor::set_timer(1, || {
-        refresh_all(true)?;
-        Ok(())
-    })?;
-    if errors.is_empty() {
-        editor::set_status(&format!("oil: {} change(s) applied", ops.len()));
-        Ok(())
-    } else {
-        Err(errors.join("; "))
+    let requests: Vec<_> = editor_ops.iter().map(file_op).collect();
+    OIL.with_borrow_mut(|oil| oil.confirming = true);
+    let started = files::apply(&requests, move |results| {
+        OIL.with_borrow_mut(|oil| oil.confirming = false);
+        let mut failed = Vec::new();
+        for (op, result) in editor_ops.iter().zip(&results) {
+            match result {
+                Ok(()) => OIL.with_borrow_mut(|oil| oil.applied.push(op.clone())),
+                Err(err) if err.starts_with("skipped") => {}
+                Err(err) => failed.push(format!("{}: {err}", op.describe())),
+            }
+        }
+        if failed.is_empty() {
+            OIL.with_borrow_mut(|oil| oil.applied.clear());
+            refresh_all(true)?;
+            editor::set_status(&format!("oil: {} change(s) applied", results.len()));
+            Ok(())
+        } else {
+            // Unchanged buffers show what happened; edited ones keep their
+            // edits for another try.
+            refresh_all(false)?;
+            Err(format!("oil: not everything was applied: {}", failed.join("; ")))
+        }
+    });
+    if let Err(err) = started {
+        OIL.with_borrow_mut(|oil| oil.confirming = false);
+        return Err(err);
     }
+    Ok(())
 }
 
 /// Show the current listing in `doc`, keeping the cursor's line.
@@ -784,6 +815,7 @@ impl Plugin for OilPlugin {
             .map(|rest| rest.trim_start().trim_start_matches('"'));
         OIL.with_borrow_mut(|oil| {
             oil.confirm = flag("confirm").unwrap_or(true);
+            oil.trash = flag("trash").unwrap_or(false);
             oil.hidden = flag("hidden").unwrap_or(false);
             oil.details = flag("details").unwrap_or(false);
             oil.icons = match icons {
@@ -850,6 +882,7 @@ impl Plugin for OilPlugin {
             "select-hsplit" => select(OpenAction::Hsplit),
             "preview" => preview(),
             "refresh" => {
+                OIL.with_borrow_mut(|oil| oil.applied.clear());
                 let doc = editor::current_document().ok_or("no document")?;
                 let dir = buffer_dir(doc).ok_or("not a directory buffer")?;
                 refresh(doc, &dir)
@@ -996,6 +1029,15 @@ mod test {
             ]
         );
         assert!(plan(&[("/nonexistent-a".into(), "x\nx\n".into(), true)]).is_err());
+        // What a failed write already did is not planned again.
+        OIL.with_borrow_mut(|oil| oil.applied = vec![ops[1].clone()]);
+        let again = plan(&[
+            ("/nonexistent-a".into(), a.into(), true),
+            ("/nonexistent-b".into(), b.into(), true),
+        ])
+        .unwrap();
+        assert_eq!(again.len(), ops.len() - 1);
+        assert!(!again.contains(&ops[1]));
     }
 
     #[test]

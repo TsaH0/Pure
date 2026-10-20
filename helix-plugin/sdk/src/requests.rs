@@ -29,7 +29,12 @@ enum Completion {
     Background(BackgroundCallback),
     #[cfg(not(feature = "api-v0-2"))]
     Timer(TimerCallback),
+    #[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+    Files(FilesCallback),
 }
+
+#[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+type FilesCallback = Box<dyn FnOnce(Vec<Result<(), String>>) -> Result<(), String>>;
 
 #[cfg(not(feature = "api-v0-2"))]
 type TimerCallback = Box<dyn FnOnce() -> Result<(), String>>;
@@ -562,6 +567,36 @@ pub fn set_timer(
         pending.insert(id, Completion::Timer(Box::new(callback)));
     });
     Ok(id)
+}
+
+/// Change files through the editor (API 0.4): `ops` run in order after
+/// this call, stopping at the first failure, and `callback` gets one result
+/// per operation (those after a failure fail with "skipped").
+#[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+pub fn apply_files(
+    ops: &[crate::bindings::helix::plugin::files::FileOp],
+    callback: impl FnOnce(Vec<Result<(), String>>) -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    let id = crate::bindings::helix::plugin::files::apply(ops)?;
+    PENDING.with_borrow_mut(|pending| {
+        pending.insert(id, Completion::Files(Box::new(callback)));
+    });
+    Ok(id)
+}
+
+#[doc(hidden)]
+#[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+pub fn files_done(id: RequestId, results: Vec<Result<(), String>>) {
+    let callback = PENDING.with_borrow_mut(|pending| {
+        if matches!(pending.get(&id), Some(Completion::Files(_))) {
+            pending.remove(&id)
+        } else {
+            None
+        }
+    });
+    if let Some(Completion::Files(callback)) = callback {
+        report(callback(results));
+    }
 }
 
 /// Stop a timer from [`set_timer`] before it goes off.

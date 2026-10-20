@@ -1063,26 +1063,12 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::RenamePath { from, to } => {
-                // Buffers of files inside a renamed directory follow it too.
-                let inside: Vec<_> = editor
-                    .documents()
-                    .filter_map(|doc| {
-                        let rest = doc.path()?.strip_prefix(&from).ok()?;
-                        (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
-                    })
-                    .collect();
-                match editor.move_path(&from, &to) {
-                    Ok(()) => {
-                        for (doc, path) in inside {
-                            editor.set_doc_path(doc, &path);
-                        }
-                    }
-                    Err(err) => editor.set_error(format!(
-                        "Failed to move {} to {}: {err}",
-                        from.display(),
-                        to.display()
-                    )),
+                if let Err(err) = rename_path(editor, &from, &to) {
+                    editor.set_error(err);
                 }
+            }
+            Action::FileOps { plugin, id, ops } => {
+                tokio::spawn(file_ops::run(plugin, id, ops));
             }
             Action::DeletePath(path) => {
                 if let Err(err) = editor.delete_path(&path, true) {
@@ -1227,6 +1213,156 @@ fn clear_plugin_diagnostics(editor: &mut Editor) {
         .collect();
     for plugin in plugins {
         editor.clear_plugin_diagnostics(&plugin);
+    }
+}
+
+/// Rename through the editor (language servers hear about it); buffers of
+/// the file, or of files inside a renamed directory, follow.
+fn rename_path(editor: &mut Editor, from: &Path, to: &Path) -> Result<(), String> {
+    let inside: Vec<_> = editor
+        .documents()
+        .filter_map(|doc| {
+            let rest = doc.path()?.strip_prefix(from).ok()?;
+            (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
+        })
+        .collect();
+    editor.move_path(from, to).map_err(|err| {
+        format!(
+            "Failed to move {} to {}: {err}",
+            from.display(),
+            to.display()
+        )
+    })?;
+    for (doc, path) in inside {
+        editor.set_doc_path(doc, &path);
+    }
+    Ok(())
+}
+
+/// `files.apply` (API 0.4): operations in order, results to the plugin.
+mod file_ops {
+    use std::path::{Path, PathBuf};
+
+    use helix_plugin::{Callback, FileOp};
+
+    use crate::job;
+
+    pub async fn run(plugin: String, id: u32, ops: Vec<FileOp>) {
+        let mut results = Vec::with_capacity(ops.len());
+        for op in ops {
+            if results.iter().any(Result::is_err) {
+                results.push(Err("skipped after an earlier failure".to_string()));
+                continue;
+            }
+            results.push(run_one(op).await);
+        }
+        super::deliver_async(plugin, Callback::FilesDone { id, results }).await;
+    }
+
+    async fn run_one(op: FileOp) -> Result<(), String> {
+        match op {
+            // These go through the editor, which tells language servers and
+            // moves buffers along.
+            FileOp::Create { path, directory } => {
+                on_editor(move |editor| {
+                    let path = PathBuf::from(path);
+                    if std::fs::symlink_metadata(&path).is_ok() {
+                        return Err(format!("{} already exists", path.display()));
+                    }
+                    editor
+                        .create_path(&path, directory)
+                        .map_err(|err| format!("Failed to create {}: {err}", path.display()))
+                })
+                .await
+            }
+            FileOp::Rename { from, to } => {
+                on_editor(move |editor| {
+                    let to = PathBuf::from(to);
+                    // `move_path` quietly does nothing for a missing file.
+                    if std::fs::symlink_metadata(&from).is_err() {
+                        return Err(format!("Failed to move {from}: it doesn't exist"));
+                    }
+                    if std::fs::symlink_metadata(&to).is_ok() {
+                        return Err(format!("{} already exists", to.display()));
+                    }
+                    super::rename_path(editor, Path::new(&from), &to)
+                })
+                .await
+            }
+            FileOp::Delete(path) => {
+                on_editor(move |editor| {
+                    let path = PathBuf::from(path);
+                    editor
+                        .delete_path(&path, true)
+                        .map_err(|err| format!("Failed to delete {}: {err}", path.display()))
+                })
+                .await
+            }
+            // These can take a while: off the editor's thread.
+            FileOp::Copy { from, to } => {
+                blocking(move || {
+                    let to = PathBuf::from(to);
+                    if std::fs::symlink_metadata(&to).is_ok() {
+                        return Err(format!("{} already exists", to.display()));
+                    }
+                    copy(Path::new(&from), &to)
+                        .map_err(|err| format!("Failed to copy {from} to {}: {err}", to.display()))
+                })
+                .await
+            }
+            FileOp::Trash(path) => {
+                // Never a permanent delete: if the trash fails, so does this.
+                blocking(move || {
+                    trash::delete(&path).map_err(|err| format!("Failed to trash {path}: {err}"))
+                })
+                .await
+            }
+        }
+    }
+
+    async fn on_editor(
+        f: impl FnOnce(&mut helix_view::Editor) -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        job::dispatch(move |editor, _| {
+            let _ = sender.send(f(editor));
+        })
+        .await;
+        receiver
+            .await
+            .unwrap_or_else(|_| Err("the editor stopped".into()))
+    }
+
+    async fn blocking(
+        f: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        tokio::task::spawn_blocking(f)
+            .await
+            .unwrap_or_else(|err| Err(err.to_string()))
+    }
+
+    /// Copy a file or a directory tree; symlinks are copied as links.
+    pub(super) fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+        let meta = std::fs::symlink_metadata(from)?;
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if meta.file_type().is_symlink() {
+            #[cfg(unix)]
+            return std::os::unix::fs::symlink(std::fs::read_link(from)?, to);
+            #[cfg(not(unix))]
+            return std::fs::copy(from, to).map(|_| ());
+        }
+        if meta.is_dir() {
+            std::fs::create_dir(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            Ok(())
+        } else {
+            std::fs::copy(from, to).map(|_| ())
+        }
     }
 }
 

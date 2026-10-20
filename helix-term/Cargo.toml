@@ -36,7 +36,7 @@ unicode-lines = ["helix-core/unicode-lines", "helix-view/unicode-lines"]
 integration = ["helix-event/integration_test"]
 git = ["helix-vcs/git"]
 # WebAssembly plugins (Wasmtime). Without it Pure has no plugin support.
-plugins = ["dep:helix-plugin", "dep:sha2"]
+plugins = ["dep:helix-plugin", "dep:sha2", "dep:trash"]
 
 [[bin]]
 name = "pure"
@@ -91,6 +91,7 @@ serde = { version = "1.0", features = ["derive"] }
 dashmap = "6.2"
 
 parking_lot.workspace = true
+trash = { version = "5.2.9", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 crossterm = { version = "0.28", features = ["event-stream"] }
