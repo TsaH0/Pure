@@ -170,6 +170,30 @@ async fn grep_fills_the_list() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn grep_columns_count_bytes() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // `é` and `✓` are 2 and 3 bytes: ripgrep reports column 7 for `needle`.
+    std::fs::write(dir.path().join("u.txt"), "é ✓ needle\n")?;
+    let mut app = AppBuilder::new().with_input_text("#[a|]#\n").build()?;
+    send_keys(
+        &mut app,
+        &format!(":grep needle {}<ret>", dir.path().display()),
+    )
+    .await;
+    for _ in 0..50 {
+        if status(&app).0.starts_with('(') {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        app.editor.reset_idle_timer();
+        run_event_loop_until_idle(&mut app).await;
+    }
+    // The cursor is on the `n` (char 4), not 2 chars further.
+    assert_eq!(location(&app), ("u.txt".to_string(), 1, 5));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn quickfix_picker_opens() -> anyhow::Result<()> {
     let (mut app, _dir) = setup();
     send_keys(&mut app, ":cbuffer<ret><space>q").await;

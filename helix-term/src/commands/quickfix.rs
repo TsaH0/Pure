@@ -24,8 +24,13 @@ pub struct Entry {
     pub path: PathBuf,
     pub line: usize,
     pub column: usize,
+    /// `column` counts bytes (ripgrep), not characters.
+    pub byte_column: bool,
     pub text: String,
 }
+
+/// Most entries one list keeps.
+pub const MAX_ENTRIES: usize = 100_000;
 
 #[derive(Debug, Default)]
 pub struct List {
@@ -52,6 +57,11 @@ pub fn set(title: impl Into<String>, entries: Vec<Entry>) {
     };
 }
 
+/// How many entries the list has.
+pub fn list_len() -> usize {
+    LIST.lock().entries.len()
+}
+
 /// Run `f` with the quickfix list.
 pub fn with<R>(f: impl FnOnce(&List) -> R) -> R {
     f(&LIST.lock())
@@ -71,10 +81,22 @@ static LOCATION: LazyLock<Regex> = LazyLock::new(|| {
 /// merely look like locations, like times. A location without a message
 /// (rustc's `--> file:line:col`) takes the message from the line before.
 pub fn parse(output: &str, cwd: &Path) -> Vec<Entry> {
+    parse_with(output, cwd, false)
+}
+
+/// Like [`parse`]; `byte_columns` if the producer counts columns in bytes.
+/// At most [`MAX_ENTRIES`].
+pub fn parse_with(output: &str, cwd: &Path, byte_columns: bool) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut previous = "";
+    // Whether each path is a file, asked once per path.
+    let mut files = std::collections::HashMap::new();
     for line in output.lines() {
-        if let Some(entry) = parse_line(line, cwd, previous) {
+        if entries.len() == MAX_ENTRIES {
+            break;
+        }
+        if let Some(mut entry) = parse_line(line, cwd, previous, &mut files) {
+            entry.byte_column = byte_columns;
             if entries.last() != Some(&entry) {
                 entries.push(entry);
             }
@@ -86,7 +108,12 @@ pub fn parse(output: &str, cwd: &Path) -> Vec<Entry> {
     entries
 }
 
-fn parse_line(line: &str, cwd: &Path, previous: &str) -> Option<Entry> {
+fn parse_line(
+    line: &str,
+    cwd: &Path,
+    previous: &str,
+    files: &mut std::collections::HashMap<PathBuf, bool>,
+) -> Option<Entry> {
     let captures = LOCATION.captures(line)?;
     let path = PathBuf::from(captures.name("path")?.as_str().trim());
     let path = if path.is_absolute() {
@@ -94,7 +121,7 @@ fn parse_line(line: &str, cwd: &Path, previous: &str) -> Option<Entry> {
     } else {
         cwd.join(path)
     };
-    if !path.is_file() {
+    if !*files.entry(path.clone()).or_insert_with(|| path.is_file()) {
         return None;
     }
     let line_number: usize = captures.name("line")?.as_str().parse().ok()?;
@@ -111,6 +138,7 @@ fn parse_line(line: &str, cwd: &Path, previous: &str) -> Option<Entry> {
         path: helix_stdx::path::normalize(path),
         line: line_number.saturating_sub(1),
         column: column.saturating_sub(1),
+        byte_column: false,
         text: text.to_string(),
     })
 }
@@ -174,11 +202,15 @@ fn jump(editor: &mut Editor, entry: &Entry, action: Action) {
         return;
     }
     let (view, doc) = current!(editor);
-    let pos = pos_at_coords(
-        doc.text().slice(..),
-        Position::new(entry.line, entry.column),
-        true,
-    );
+    let text = doc.text().slice(..);
+    let column = if entry.byte_column && entry.line < text.len_lines() {
+        // The char at that byte of the line.
+        let line = text.line(entry.line);
+        line.byte_to_char(entry.column.min(line.len_bytes()))
+    } else {
+        entry.column
+    };
+    let pos = pos_at_coords(text, Position::new(entry.line, column), true);
     doc.set_selection(view.id, Selection::point(pos));
     align_view(doc, view, Align::Center);
 }
