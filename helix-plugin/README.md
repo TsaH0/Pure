@@ -426,9 +426,14 @@ files::apply(&ops, |results| {
 They need `filesystem` and `allow-files = "write"` and take absolute paths
 inside `files::roots()` (no `..`, and no symlink leading out). They run in
 order after the call, off the editor's thread for copies and the trash;
-none overwrites an existing path. `Trash` uses the system's trash and fails
-rather than deleting if it can't. (API 0.3 has fire-and-forget
-`create_path`, `rename_path` and `delete_path` instead.)
+none overwrites an existing path (checked by the create or rename itself
+where the system can), and a symlink at the path is never followed. The
+grant is checked again just before each operation runs. Copies take
+regular files, directories and symlinks; FIFOs and devices are refused.
+At most 4 batches of a plugin wait or run at once, and batches run one
+after another. `Trash` uses the system's trash and fails rather than
+deleting if it can't. (API 0.3 has fire-and-forget `create_path`,
+`rename_path` and `delete_path` instead; they don't overwrite either.)
 
 ## Events
 

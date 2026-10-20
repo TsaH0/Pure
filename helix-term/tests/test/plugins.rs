@@ -2067,6 +2067,55 @@ async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn file_operations_never_replace_or_follow_into_existing_files() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let outside = tempfile::tempdir()?;
+    let target = outside.path().join("target.txt");
+    std::fs::write(&target, "keep")?;
+    std::os::unix::fs::symlink(&target, work.join("link"))?;
+    std::fs::write(work.join("x"), "x")?;
+    std::fs::write(work.join("y"), "y")?;
+    assert!(std::process::Command::new("mkfifo")
+        .arg(work.join("fifo"))
+        .status()?
+        .success());
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    let (mut app, _dir) = app_with_v3_settings(&format!("{ALL}, \"filesystem\""), &settings);
+    let p = |name: &str| work.join(name).display().to_string();
+    for (ops, expected) in [
+        // A symlink to a file outside: not followed and emptied.
+        (format!("create:{}", p("link")), "files-done:err("),
+        // An existing destination is never replaced.
+        (format!("rename:{}:{}", p("x"), p("y")), "files-done:err("),
+        (format!("copy:{}:{}", p("x"), p("y")), "files-done:err("),
+        // A FIFO isn't copied (it would block).
+        (format!("copy:{}:{}", p("fifo"), p("z")), "files-done:err("),
+    ] {
+        keys(&mut app, &format!(":plugin-run testplugin3/files {ops}<ret>")).await;
+        let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+        assert!(status.starts_with(expected), "{ops}: {status}");
+        app.editor.clear_status();
+    }
+    assert_eq!(std::fs::read_to_string(&target)?, "keep");
+    assert_eq!(std::fs::read_to_string(work.join("y"))?, "y");
+    assert_eq!(std::fs::read_to_string(work.join("x"))?, "x");
+    assert!(!work.join("z").exists());
+
+    // The editor's own create (LSP CreateFile with overwrite) still empties
+    // a file, but not through a symlink.
+    assert!(app.editor.create_path(&work.join("link"), false).is_err());
+    assert_eq!(std::fs::read_to_string(&target)?, "keep");
+    app.editor.create_path(&work.join("x"), false)?;
+    assert_eq!(std::fs::read_to_string(work.join("x"))?, "");
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn oil_example_can_delete_to_the_trash() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;

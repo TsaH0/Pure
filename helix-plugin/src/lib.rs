@@ -253,6 +253,8 @@ pub enum FileOp {
 
 /// Most operations in one `files.apply`.
 pub const MAX_FILE_OPS: usize = 1000;
+/// File operation batches of one plugin waiting or running at once.
+pub const MAX_FILE_BATCHES: usize = 4;
 
 /// A completion from a plugin. `replace_from` is a char offset, checked by
 /// the editor against the cursor.
@@ -1473,6 +1475,16 @@ impl State {
         }
         if ops.len() > MAX_FILE_OPS {
             return Err(format!("at most {MAX_FILE_OPS} file operations at once"));
+        }
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Files)
+            .count();
+        if running >= MAX_FILE_BATCHES {
+            return Err(format!(
+                "at most {MAX_FILE_BATCHES} files.apply batches can run at once"
+            ));
         }
         let ops = ops
             .into_iter()
@@ -2748,6 +2760,21 @@ impl PluginHost {
             plugin.worker = None;
             (job.done)(Err("the background worker stopped".into()));
         }
+    }
+
+    /// Check again, just before it happens, that `plugin` may still change
+    /// `path`: its grants or a directory on the way may have changed since
+    /// it asked (a reload, a symlink swapped in).
+    pub fn check_writable(&self, plugin: &str, path: &str) -> Result<(), String> {
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|p| p.name() == plugin)
+            .ok_or_else(|| format!("plugin '{plugin}' was unloaded"))?;
+        if let Some(reason) = &plugin.disabled {
+            return Err(format!("plugin '{}' was disabled: {reason}", plugin.name()));
+        }
+        plugin.store.data().writable(path).map(|_| ())
     }
 
     /// Deliver a completion with the command time limit and a fresh snapshot.

@@ -3921,6 +3921,27 @@ fn api_04_file_operations_are_checked_and_answered() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("outside"), "{err}");
+
+    // Checked again when they run: a path that left the grant is refused.
+    assert_eq!(host.check_writable("testplugin3", &a), Ok(()));
+    assert!(host
+        .check_writable("testplugin3", "/etc/passwd")
+        .unwrap_err()
+        .contains("outside"));
+    assert!(host
+        .check_writable("other", &a)
+        .unwrap_err()
+        .contains("unloaded"));
+
+    // Only so many batches at once.
+    for _ in 0..MAX_FILE_BATCHES {
+        host.run_command("testplugin3", "files", vec![format!("create:{a}")], Snapshot::default())
+            .unwrap();
+    }
+    let err = host
+        .run_command("testplugin3", "files", vec![format!("create:{a}")], Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("batches"), "{err}");
 }
 
 #[test]

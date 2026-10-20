@@ -1161,7 +1161,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::CreatePath { path, directory } => {
-                if let Err(err) = editor.create_path(&path, directory) {
+                if let Err(err) = editor.create_new_path(&path, directory) {
                     editor.set_error(format!("Failed to create {}: {err}", path.display()));
                 }
             }
@@ -1391,7 +1391,7 @@ fn rename_path(editor: &mut Editor, from: &Path, to: &Path) -> Result<(), String
             (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
         })
         .collect();
-    editor.move_path(from, to).map_err(|err| {
+    editor.move_path_no_replace(from, to).map_err(|err| {
         format!(
             "Failed to move {} to {}: {err}",
             from.display(),
@@ -1412,16 +1412,37 @@ mod file_ops {
 
     use crate::job;
 
+    /// Batches run one at a time, so two can't race on the same paths.
+    static BATCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     pub async fn run(plugin: String, id: u32, ops: Vec<FileOp>) {
+        let _turn = BATCH.lock().await;
         let mut results = Vec::with_capacity(ops.len());
         for op in ops {
             if results.iter().any(Result::is_err) {
                 results.push(Err("skipped after an earlier failure".to_string()));
                 continue;
             }
-            results.push(run_one(op).await);
+            // Still allowed now, not only when it was asked for?
+            let allowed = paths(&op).into_iter().try_for_each(|path| {
+                super::with_host(|host| host.check_writable(&plugin, path))
+                    .unwrap_or_else(|| Err("the plugins were unloaded".into()))
+            });
+            results.push(match allowed {
+                Ok(()) => run_one(op).await,
+                Err(err) => Err(err),
+            });
         }
         super::deliver_async(plugin, Callback::FilesDone { id, results }).await;
+    }
+
+    fn paths(op: &FileOp) -> Vec<&str> {
+        match op {
+            FileOp::Create { path, .. } | FileOp::Delete(path) | FileOp::Trash(path) => {
+                vec![path]
+            }
+            FileOp::Rename { from, to } | FileOp::Copy { from, to } => vec![from, to],
+        }
     }
 
     async fn run_one(op: FileOp) -> Result<(), String> {
@@ -1435,7 +1456,7 @@ mod file_ops {
                         return Err(format!("{} already exists", path.display()));
                     }
                     editor
-                        .create_path(&path, directory)
+                        .create_new_path(&path, directory)
                         .map_err(|err| format!("Failed to create {}: {err}", path.display()))
                 })
                 .await
@@ -1525,8 +1546,22 @@ mod file_ops {
                 copy(&entry.path(), &to.join(entry.file_name()))?;
             }
             Ok(())
+        } else if meta.is_file() {
+            // Created here, so nothing that appeared meanwhile is replaced.
+            let mut target = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(to)?;
+            let mut source = std::fs::File::open(from)?;
+            std::io::copy(&mut source, &mut target)?;
+            target.set_permissions(meta.permissions())?;
+            Ok(())
         } else {
-            std::fs::copy(from, to).map(|_| ())
+            // FIFOs, sockets and devices would block or never end.
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} is not a regular file", from.display()),
+            ))
         }
     }
 }
