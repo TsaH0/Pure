@@ -1824,3 +1824,37 @@ async fn oil_example_edits_directories_as_buffers() -> anyhow::Result<()> {
     assert_eq!(name, format!("oil://{}/", work.display()));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn directory_handler_opens_directories_with_a_plugin() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    let mut config = test_config();
+    config.editor.directory_handler = Some("oil/open".into());
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, &format!(":open {}<ret>", work.display())).await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    assert!(text(&app).contains(" a.txt"));
+    Ok(())
+}

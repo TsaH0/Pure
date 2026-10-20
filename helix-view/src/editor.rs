@@ -359,6 +359,10 @@ pub struct Config {
     /// Whether to instruct the LSP to replace the entire word when applying a completion
     /// or to only insert new text
     pub completion_replace: bool,
+    /// A plugin command (`plugin/command`) that opens directories given on
+    /// the command line or to `:open`, e.g. `oil/open`, instead of the file
+    /// picker. It gets the directory as its argument.
+    pub directory_handler: Option<String>,
     /// `true` if helix should automatically add a line comment token if you're currently in a comment
     /// and press `enter`.
     pub continue_comments: bool,
@@ -1227,6 +1231,7 @@ impl Default for Config {
             },
             text_width: 80,
             completion_replace: false,
+            directory_handler: None,
             continue_comments: true,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),

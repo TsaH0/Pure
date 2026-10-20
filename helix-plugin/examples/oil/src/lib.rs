@@ -35,9 +35,11 @@
 //! allow-process = ["xdg-open"] # for `gx` (`open` on macOS)
 //! ```
 //!
-//! Not (yet) possible: a trash (deleting is final, after the confirmation),
-//! Unix permissions as a column (WASI doesn't expose them), and opening
-//! directories given on the command line (Pure opens its file picker).
+//! With `directory-handler = "oil/open"` under `[editor]` in `config.toml`,
+//! `pure some/dir` and `:open some/dir` open oil instead of the file picker.
+//!
+//! Not (yet) possible: a trash (deleting is final, after the confirmation)
+//! and Unix permissions as a column (WASI doesn't expose them).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

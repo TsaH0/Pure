@@ -152,6 +152,11 @@ fn open_impl(cx: &mut compositor::Context, args: Args, action: Action) -> anyhow
         // If the path is a directory, open a file picker on that directory and update the status
         // message
         if let Ok(true) = std::fs::canonicalize(&path).map(|p| p.is_dir()) {
+            // A plugin may open directories (`editor.directory-handler`).
+            let dir = helix_stdx::path::canonicalize(&path);
+            if crate::plugins::open_directory(cx.editor, dir) {
+                continue;
+            }
             let callback = async move {
                 let call: job::Callback = job::Callback::EditorCompositor(Box::new(
                     move |editor: &mut Editor, compositor: &mut Compositor| {

@@ -3608,7 +3608,10 @@ fn lint_example_reports_diagnostics() {
     let mut host = host();
     let root = tempfile::tempdir().unwrap();
     load_example(&mut host, root.path(), "lint", "{\"max-line\":5}");
-    let results = host.dispatch(Event::DocumentOpen(1), &snapshot("ok \nlonger line\n", 0, 0));
+    let results = host.dispatch(
+        Event::DocumentOpen(1),
+        &snapshot("ok \nlonger line\n", 0, 0),
+    );
     let actions = results[0].1.as_ref().unwrap();
     let [Action::Diagnostics { diagnostics, .. }] = &actions[..] else {
         panic!("{actions:?}");
@@ -3629,7 +3632,12 @@ fn emoji_example_completes_after_a_colon() {
         .request_completion("emoji", 1, 8, &snapshot("say :roc", 8, 8))
         .unwrap();
     let actions = actions.unwrap();
-    let [Action::Completions { id: answered, items, .. }] = &actions[..] else {
+    let [Action::Completions {
+        id: answered,
+        items,
+        ..
+    }] = &actions[..]
+    else {
         panic!("{actions:?}");
     };
     assert_eq!(*answered, id);
@@ -3640,14 +3648,21 @@ fn emoji_example_completes_after_a_colon() {
     let (_, actions) = host
         .request_completion("emoji", 1, 3, &snapshot("say", 3, 3))
         .unwrap();
-    assert!(matches!(&actions.unwrap()[..], [Action::Completions { items, .. }] if items.is_empty()));
+    assert!(
+        matches!(&actions.unwrap()[..], [Action::Completions { items, .. }] if items.is_empty())
+    );
 }
 
 #[test]
 fn pomodoro_example_ticks_with_timers() {
     let mut host = host();
     let root = tempfile::tempdir().unwrap();
-    load_example(&mut host, root.path(), "pomodoro", "{\"work\":2,\"rest\":1}");
+    load_example(
+        &mut host,
+        root.path(),
+        "pomodoro",
+        "{\"work\":2,\"rest\":1}",
+    );
     let actions = host
         .run_command("pomodoro", "start", vec![], Snapshot::default())
         .unwrap();
@@ -3659,15 +3674,19 @@ fn pomodoro_example_ticks_with_timers() {
         })
         .unwrap();
     assert_eq!(timer.1, Duration::from_secs(60));
-    assert!(actions.iter().any(
-        |action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 2m")
-    ));
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 2m")));
     let actions = host
-        .callback("pomodoro", Callback::Timer { id: timer.0 }, &Snapshot::default())
+        .callback(
+            "pomodoro",
+            Callback::Timer { id: timer.0 },
+            &Snapshot::default(),
+        )
         .unwrap();
-    assert!(actions.iter().any(
-        |action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 1m")
-    ));
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, Action::StatusLine { text, .. } if text == "🍅 1m")));
     let actions = host
         .run_command("pomodoro", "stop", vec![], Snapshot::default())
         .unwrap();

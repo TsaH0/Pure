@@ -158,8 +158,11 @@ impl Application {
 
             // If the first file is a directory, skip it and open a picker
             if let Some((first, _)) = files_it.next_if(|(p, _)| p.is_dir()) {
-                let picker = ui::file_picker(&editor, first);
-                compositor.push(Box::new(overlaid(picker)));
+                // A plugin may open directories (`editor.directory-handler`).
+                if !crate::plugins::open_directory(&editor, first.clone()) {
+                    let picker = ui::file_picker(&editor, first);
+                    compositor.push(Box::new(overlaid(picker)));
+                }
             }
 
             // If there are any more files specified, open them

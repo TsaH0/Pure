@@ -94,3 +94,8 @@ pub struct PluginCompletion {
     pub documentation: Option<String>,
     pub replace_from: Option<usize>,
 }
+
+/// Without plugins there is no directory handler: the file picker opens.
+pub fn open_directory(_editor: &Editor, _dir: PathBuf) -> bool {
+    false
+}

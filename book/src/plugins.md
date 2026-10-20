@@ -112,7 +112,14 @@ directory buffers to move, copy and paste to copy. A list of the changes
 asks for confirmation first. In directory buffers `enter` opens, `-` goes
 up, `ctrl-p` previews, `g?` lists all keys. It needs
 `allow-files = "write"` (and `allow-dirs` for directories outside the
-project).
+project). To have `pure some/dir` and `:open some/dir` open oil instead of
+the file picker:
+
+```toml
+# ~/.config/helix/config.toml
+[editor]
+directory-handler = "oil/open"
+```
 
 ## Settings and permissions
 

@@ -71,6 +71,11 @@ runtime_local! {
     static WANTS_REGISTERS: AtomicBool = AtomicBool::new(false);
     /// Completion requests waiting for a plugin's answer: `(plugin, id)`.
     static COMPLETIONS: Mutex<Vec<(String, u32, tokio::sync::oneshot::Sender<Vec<PluginCompletion>>)>> = Mutex::new(Vec::new());
+    /// A background load is running: directories wait for it.
+    static LOADING: AtomicBool = AtomicBool::new(false);
+    /// The directory to hand to `editor.directory-handler` once the
+    /// background load finishes (the latest request wins).
+    static PENDING_DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
     /// Counts loads, so a slow background load can't replace a newer one.
     static GENERATION: AtomicUsize = AtomicUsize::new(0);
     /// The plugin directory and settings loaded last, to reload them.
@@ -213,6 +218,7 @@ pub fn load_in_background() {
         return;
     }
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    LOADING.store(true, Ordering::Relaxed);
     tokio::spawn(async move {
         let (settings, error) = read_settings();
         let built = tokio::task::spawn_blocking(move || {
@@ -222,6 +228,13 @@ pub fn load_in_background() {
         })
         .await;
         let Ok((host, actions, errors, loaded)) = built else {
+            LOADING.store(false, Ordering::Relaxed);
+            if let Some(dir) = PENDING_DIRECTORY.lock().take() {
+                job::dispatch(move |editor, compositor| {
+                    open_file_picker(editor, compositor, dir, "loading plugins failed")
+                })
+                .await;
+            }
             return;
         };
         job::dispatch(move |editor, _| {
@@ -249,6 +262,48 @@ fn install_background(
     for doc in open {
         queue(Event::DocumentOpen(plugin_doc_id(doc)));
     }
+    LOADING.store(false, Ordering::Relaxed);
+    if let Some(dir) = PENDING_DIRECTORY.lock().take() {
+        if let Some(handler) = editor.config().directory_handler.clone() {
+            run_directory_handler(handler, dir);
+        }
+    }
+}
+
+/// Open `dir` with `editor.directory-handler`, if one is set: now, or once
+/// plugins finished loading. `false` means no handler: the caller opens its
+/// file picker. If the handler fails, the file picker opens instead.
+pub fn open_directory(editor: &Editor, dir: PathBuf) -> bool {
+    let Some(handler) = editor.config().directory_handler.clone() else {
+        return false;
+    };
+    if LOADING.load(Ordering::Relaxed) {
+        *PENDING_DIRECTORY.lock() = Some(dir);
+    } else {
+        run_directory_handler(handler, dir);
+    }
+    true
+}
+
+/// Run `handler` with `dir` once the current event is handled.
+fn run_directory_handler(handler: String, dir: PathBuf) {
+    tokio::spawn(job::dispatch_callback(job::Callback::EditorCompositorJobs(
+        Box::new(move |editor, compositor, jobs| {
+            let arg = dir.to_string_lossy().into_owned();
+            if let Err(err) = run_command(editor, jobs, &handler, vec![arg]) {
+                open_file_picker(editor, compositor, dir, &format!("{handler}: {err}"));
+            }
+        }),
+    )));
+}
+
+/// The fallback when the directory handler can't open `dir`.
+fn open_file_picker(editor: &mut Editor, compositor: &mut Compositor, dir: PathBuf, why: &str) {
+    editor.set_error(format!(
+        "directory-handler failed ({why}); showing the file picker"
+    ));
+    let picker = crate::ui::file_picker(editor, dir);
+    compositor.push(Box::new(crate::ui::overlay::overlaid(picker)));
 }
 
 /// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).

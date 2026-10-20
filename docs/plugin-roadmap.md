@@ -542,7 +542,7 @@ What plugins still can't do, and why:
 | Debug adapters, language servers | Use Helix's own DAP and LSP support (`languages.toml`). |
 | Network access | Not in the sandbox; run a program (`curl`) with `allow-process`. |
 | Format on save | Use `formatter` in `languages.toml`; a plugin can offer a format command. |
-| Opening a directory given on the command line (`pure .` → oil) | Not yet: Pure opens its file picker; a "directory open" event would be needed. |
+| Opening a directory given on the command line (`pure .` → oil) | Done: `editor.directory-handler`. |
 
 ---
 
@@ -626,9 +626,13 @@ Small, self-contained; each one is a good single task.
 - [ ] **Full-line backgrounds:** a highlight that extends to the window's
   edge (heading and code-block backgrounds), e.g. a line-level style in
   `PluginDecorations` applied in `render_view`.
-- [ ] **Directory arguments for file-manager plugins:** an event (or a
-  setting naming a plugin command) when Pure is started on a directory, so
-  `pure .` can open `oil` instead of the file picker.
+- [x] **Directory arguments for file-manager plugins:**
+  `editor.directory-handler = "oil/open"` runs that plugin command with the
+  directory for `pure <dir>` and `:open <dir>`. At startup the request waits
+  for the background plugin load (the first frame is not delayed; a later
+  request replaces an earlier one); if the command is missing or fails, the
+  file picker opens with an error. Test:
+  `directory_handler_opens_directories_with_a_plugin`.
 - [ ] **Trash for `oil`:** deleting is final today. A `trash` setting could
   move entries to the XDG trash (`~/.local/share/Trash`, needs `allow-dirs`)
   with `.trashinfo` files.
