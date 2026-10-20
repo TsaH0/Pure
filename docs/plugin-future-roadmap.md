@@ -42,6 +42,13 @@ application right after the plugin call, on its thread. Programs stay
 behind `allow-process`. Still open in F04: owned-buffer options
 (read-only, append), structured results.
 
+F11's first part is done (the owner's picks): panels docked left, right
+and bottom, one per dock, drawn by the editor from list items
+(text/scope/depth/command), keys to the focused panel until `esc`/`tab`
+(`:panel-focus`, `:panel-close`); the sidebar is the left panel. Not
+done: floating panels, forms, multiline virtual blocks. Trial plugins:
+`competitest` (bottom) and `outline` (right).
+
 Next in the roadmap's order: F03 (views/viewport), F05 (syntax trees),
 F07 (LSP services), F09 (watches). F04, F10 and later touch UI and
 process architecture and need the owner's review first.

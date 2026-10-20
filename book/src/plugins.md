@@ -49,6 +49,11 @@ Ready-made examples are in
 | `tree` | A file tree in a sidebar, like nvim-tree: `space B` shows it; `enter` opens files and folders |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
+| `competitest` | Like competitest.nvim: `space u r` compiles and runs the current file on its testcases and shows the verdicts in a panel below; `space u a` adds a testcase |
+| `outline` | Like aerial.nvim: `space O` shows the file's functions, types and headings in a panel on the right |
+| `harpoon` | Like harpoon: mark files with `space +`, jump with `space 1`–`4`, edit the list with `space =` |
+| `git-blame` | Like git-blame.nvim: who changed the cursor's line, when and why, at its end |
+| `illuminate` | Like vim-illuminate: highlights the other uses of the word under the cursor |
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
@@ -74,6 +79,13 @@ e = ":oil/open"
 | `:plugin-install <url or dir>` | Install a plugin (asks first) |
 | `:plugin-update [names]` | Update installed plugins |
 | `:plugin-remove <name>` | Remove a plugin (asks first) |
+
+## Panels
+
+Plugins can show lists in panels docked left, right or below the views (a
+file tree, an outline, test results). `:panel-focus left`, `right` or
+`bottom` gives a panel the keys (`j`/`k` move, `enter` runs the item, `esc`
+gives the keys back); `:panel-close` closes one.
 
 ## Decorations
 

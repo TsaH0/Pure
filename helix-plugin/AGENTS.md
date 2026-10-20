@@ -552,6 +552,16 @@ keeps scroll and selection. `close()`, `focus(bool)` and
 `j`/`k`/arrows, `ctrl-d`/`ctrl-u`, `g`/`G`; `esc`/`tab` give the keys back,
 and `q` closes the sidebar. See `examples/tree`.
 
+### Panels (added to API 0.4, `panels`)
+
+Same items as the sidebar, docked `Dock::Left` (= the sidebar),
+`Dock::Right` or `Dock::Bottom`: `panels::show(&panels::panel(dock, title,
+items, size))` (size: columns 12–80 for sides, rows 3–40 for bottom),
+`panels::close(dock)`, `panels::focus(dock, bool)`,
+`panels::selected(dock)`. One panel per dock; one has the keys at a time.
+Users have `:panel-focus <dock>` / `:panel-close <dock>`. Capability
+`"panels"`. See `examples/competitest` and `examples/outline`.
+
 ### Background calls (`editor::run_background`)
 
 ```rust

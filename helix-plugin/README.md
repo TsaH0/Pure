@@ -59,6 +59,11 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`oil`](examples/oil) | `open` (`-`): edit directories as buffers like oil.nvim; rename, move, copy, create and delete with `:w` | `[oil]` `allow-files = "write"`, `allow-dirs = ["~"]` |
 | [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
+| [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase | `[competitest]` `allow-process = true`, `allow-files = "write"` |
+| [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps | – |
+| [`harpoon`](examples/harpoon) | like harpoon: `space +` marks a file, `space 1`–`4` jump, `space =` edits the marks | – |
+| [`git-blame`](examples/git-blame) | like git-blame.nvim: the cursor line's author, age and commit at its end | `[git-blame]` `allow-process = ["git"]` |
+| [`illuminate`](examples/illuminate) | like vim-illuminate: highlights the other uses of the word under the cursor | – |
 | [`snippets`](examples/snippets) | snippets with tab stops in the completion menu (`fn`, `test`, `for`...), like LuaSnip | `[snippets.snippets.rust]` `dbg = "dbg!($1)"` |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
@@ -639,6 +644,28 @@ keys, `j`/`k`, the arrows, `ctrl-d`/`ctrl-u` and `g`/`G` move, `esc` or
 editor the keys. `sidebar::selected()` tells which item is selected.
 Nothing is drawn or checked while no sidebar is shown. See
 `examples/tree`.
+
+### Panels (added to API 0.4)
+
+`helix_plugin_api::panels` docks the same kind of list left, right or
+below the views: one panel per dock (the sidebar is the left one), each
+owned by the plugin that showed it last. `size` is columns for side
+panels (12–80; at most a third of the width each, half if alone) and rows
+for the bottom one (3–40, at most half the height):
+
+```rust,ignore
+use helix_plugin_api::panels::{self, item, on_enter, panel, Dock};
+
+let row = on_enter(item("✔  TC 0   accepted", "diff.plus", 0), "show", vec!["0".into()]);
+panels::show(&panel(Dock::Bottom, "Tests: 1/1 passed", vec![row], 10))?;
+panels::focus(Dock::Bottom, true);
+```
+
+Only one panel has the keys at a time (same keys as the sidebar); users
+reach panels with `:panel-focus left|right|bottom` and close them with
+`:panel-close`. `panels::selected(dock)` and `panels::close(dock)` work
+on the plugin's own panel. See `examples/competitest` (bottom) and
+`examples/outline` (right).
 
 ## Registers (API 0.3)
 
