@@ -366,15 +366,23 @@ the hook first and keep it generic.
 
 ## M8. Distribution
 
-- [ ] **M8.1 `:plugin-install <git-url | path>`.** Clone into
+- [x] **M8.1 `:plugin-install <git-url | path>`.** Clone into
   `<config>/plugins/<name>`, use a committed `plugin.wasm` (no building on the
   user's machine by default), show the requested permissions and ask before
   enabling. `:plugin-update`, `:plugin-remove`.
-- [ ] **M8.2 Lock file.** `plugins.lock` with the commit and a SHA-256 of the
+- [x] **M8.2 Lock file.** `plugins.lock` with the commit and a SHA-256 of the
   wasm; refuse a changed wasm until reinstalled.
-- [ ] **M8.3 Template and other languages.** A `cargo generate` template;
+- [x] **M8.3 Template and other languages.** A `cargo generate` template;
   documented examples for Go (TinyGo), JavaScript (`jco componentize`) and
   Python (`componentize-py`) built from the same WIT.
+  - Done: `:plugin-install` / `:plugin-update` / `:plugin-remove`
+    (`helix-term/src/plugins/install.rs`; stage in the background, confirm
+    with the permissions, copy only `plugin.toml` + component); asks again
+    on new permissions. `plugins.lock` (source, commit, SHA-256) is checked
+    on every load; changed components are refused. Template:
+    `helix-plugin/template` (rendered, built, installed and run in tmux).
+    JavaScript verified end to end (`examples/js-upper`); Python and Go
+    documented but untested (toolchains not available here).
 
 ## M9. Hardening and docs
 

@@ -1,0 +1,20 @@
+[package]
+name = "{{project-name}}"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Point this at your Pure checkout, or a published SDK.
+helix-plugin-api = { git = "https://github.com/TsaH0/helix-editor-custom", subdirectory = "helix-plugin/sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

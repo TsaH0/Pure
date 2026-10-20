@@ -18,6 +18,8 @@
 //!
 //! Every plugin can use its own directory, `<data dir>/plugins/<name>/`.
 
+pub mod install;
+pub use install::{install_command, remove_command, update_command};
 mod picker;
 mod popup;
 mod process;
@@ -154,6 +156,11 @@ fn file_workspace_in(
     Some(workspace)
 }
 
+/// `plugins.lock`, next to the plugins directory `dir`.
+pub fn lock_file(dir: &Path) -> PathBuf {
+    dir.with_file_name("plugins.lock")
+}
+
 pub fn plugin_dir() -> PathBuf {
     helix_loader::config_dir().join("plugins")
 }
@@ -268,7 +275,19 @@ fn build_host(
         Some(helix_loader::data_dir().join("plugins")),
     );
     let mut setting_errors = Vec::new();
+    // Installed plugins whose component changed since aren't loaded.
+    let changed = match install::Lock::read(&lock_file(dir)) {
+        Ok(lock) => install::verify(dir, &lock),
+        Err(err) => {
+            setting_errors.push(err);
+            Vec::new()
+        }
+    };
     let (actions, mut errors) = host.load_all(dir, |name| {
+        if let Some((_, reason)) = changed.iter().find(|(changed, _)| changed == name) {
+            setting_errors.push(anyhow::anyhow!("{reason}"));
+            return None;
+        }
         plugin_settings(settings, name).map(|settings| {
             settings.unwrap_or_else(|err| {
                 setting_errors.push(err);

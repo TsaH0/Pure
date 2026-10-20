@@ -1,0 +1,12 @@
+name = "{{project-name}}"
+version = "0.1.0"
+api = "0.3"
+description = "{{description}}"
+# Only what the plugin needs: read-buffers, edit-buffers, open-files,
+# run-commands, process, filesystem.
+permissions = ["read-buffers", "edit-buffers"]
+wasm = "plugin.wasm"
+
+# Default key bindings (only used where nothing else is bound):
+# [keys.normal.space]
+# P = "hello"

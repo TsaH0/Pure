@@ -54,6 +54,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`text-tools`](examples/text-tools) | `upper`, `lower`, `sort-lines`, `count` | – |
 | [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
+| [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`todos`](examples/todos) | `list`; highlights TODO / FIXME / NOTE, signs, end-of-line notes, a statusline count | – |
 | [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
 
@@ -463,3 +464,34 @@ anything it asks the editor to do is dropped. Pass everything it needs in
 `input` and return the result as a string. At most 4 tasks run at once per
 plugin; a task that crashes or runs out of time gives an error result and
 the next task gets a fresh instance (the plugin stays enabled).
+
+## Distributing a plugin
+
+Start from the template:
+
+```sh
+cargo generate --git https://github.com/TsaH0/helix-editor-custom helix-plugin/template
+```
+
+Build it (`cargo build --release --target wasm32-wasip2`), copy the `.wasm`
+to `plugin.wasm` next to `plugin.toml`, and commit both. Users install it
+with `:plugin-install <git URL>`; nothing is built on their machines.
+`plugins.lock` pins the installed component's SHA-256.
+
+## Other languages
+
+Any language that builds a component for `wit/v0.3` works; the WIT is the
+whole contract. A plugin must export every interface of the world (`plugin`,
+`callbacks`, `events`, `background`); empty handlers are fine.
+
+- **JavaScript** (verified): see [`examples/js-upper`](examples/js-upper),
+  built with `npm install && npm run build` (`jco componentize ... --disable
+  http --disable fetch-event`). The component bundles a JS engine: 12 MB, a
+  cold first load compiles for ~55 s in a debug build of Pure (seconds in a
+  release build) and 0.4 s from the cache after that, on Pure's background
+  loading thread.
+- **Python** (untested here): `componentize-py --wit-path wit/v0.3 --world
+  helix-plugin componentize app -o plugin.wasm`.
+- **Go** (untested here): TinyGo 0.34+ with `wit-bindgen-go generate
+  wit/v0.3`, then `tinygo build -target=wasip2 --wit-package wit/v0.3
+  --wit-world helix-plugin -o plugin.wasm`.

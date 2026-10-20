@@ -37,6 +37,16 @@ pub fn command_names() -> Vec<String> {
     Vec::new()
 }
 
+pub fn install_command(editor: &mut Editor, _source: String) {
+    editor.set_error(DISABLED);
+}
+
+pub fn update_command(editor: &mut Editor, _names: Vec<String>) {
+    editor.set_error(DISABLED);
+}
+
+pub fn remove_command(_compositor: &mut crate::compositor::Compositor, _name: String) {}
+
 pub fn commands_with_docs() -> Vec<(String, String)> {
     Vec::new()
 }

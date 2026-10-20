@@ -10,7 +10,19 @@ The full guide, including how to write plugins, is
 
 ## Installing a plugin
 
-Each plugin is a directory in `~/.config/helix/plugins/` holding its
+```
+:plugin-install https://github.com/someone/pure-plugin   (or a local directory)
+```
+
+Pure fetches it, shows its name, version and permissions, and asks before
+installing. It uses the plugin's committed `plugin.wasm` (nothing is built).
+`:plugin-update` (all, or named plugins) fetches new versions and asks again
+if a plugin wants new permissions; `:plugin-remove <name>` removes one.
+Installed plugins are recorded in `~/.config/helix/plugins.lock` with their
+commit and a SHA-256 of the component: if the component changes behind
+Pure's back, it isn't loaded until you update or reinstall it.
+
+You can also install by hand. Each plugin is a directory in `~/.config/helix/plugins/` holding its
 `plugin.toml` and `plugin.wasm`:
 
 ```
@@ -49,6 +61,9 @@ e = ":yazi/open"
 | `:plugin-list` | Show the plugins, their permissions, grants and commands |
 | `:plugin-log <plugin>` | Show what a plugin logged |
 | `:plugin-reload` | Reload all plugins |
+| `:plugin-install <url or dir>` | Install a plugin (asks first) |
+| `:plugin-update [names]` | Update installed plugins |
+| `:plugin-remove <name>` | Remove a plugin (asks first) |
 
 ## Decorations
 

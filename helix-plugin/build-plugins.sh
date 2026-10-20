@@ -18,6 +18,8 @@ build tests/plugins/testplugin2 testplugin2 testplugin2
 build tests/plugins/testplugin3 testplugin3 testplugin3
 # Every example, into its own directory.
 for example in examples/*/; do
+    # Rust examples; others (js-upper) build with their own tools.
+    [ -f "$example/Cargo.toml" ] || continue
     name=$(basename "$example")
     (cd "$example" && cargo build --locked --release --target wasm32-wasip2)
     cp "$example/target/wasm32-wasip2/release/$(echo "$name" | tr - _).wasm" "$example/plugin.wasm"

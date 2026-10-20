@@ -2981,6 +2981,48 @@ fn plugin_list(
     Ok(())
 }
 
+fn plugin_install(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        crate::plugins::install_command(cx.editor, args[0].to_string());
+    }
+    Ok(())
+}
+
+fn plugin_update(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event == PromptEvent::Validate {
+        let names = args.iter().map(|arg| arg.to_string()).collect();
+        crate::plugins::update_command(cx.editor, names);
+    }
+    Ok(())
+}
+
+fn plugin_remove(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let name = args[0].to_string();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |_editor: &mut Editor, compositor: &mut Compositor| {
+                crate::plugins::remove_command(compositor, name)
+            },
+        )))
+    });
+    Ok(())
+}
+
 fn plugin_log(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4487,6 +4529,39 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-install",
+        aliases: &[],
+        doc: "Install a plugin from a git URL or a directory (it must have a committed component); asks first.",
+        fun: plugin_install,
+        completer: CommandCompleter::positional(&[completers::directory]),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-update",
+        aliases: &[],
+        doc: "Update plugins installed with :plugin-install (all, or the ones named); asks before new permissions.",
+        fun: plugin_update,
+        completer: CommandCompleter::all(completers::plugin_name),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-remove",
+        aliases: &[],
+        doc: "Remove a plugin (asks first).",
+        fun: plugin_remove,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (1, Some(1)),
             ..Signature::DEFAULT
         },
     },
