@@ -71,6 +71,11 @@ runtime_local! {
     static WANTS_REGISTERS: AtomicBool = AtomicBool::new(false);
     /// Completion requests waiting for a plugin's answer: `(plugin, id)`.
     static COMPLETIONS: Mutex<Vec<(String, u32, tokio::sync::oneshot::Sender<Vec<PluginCompletion>>)>> = Mutex::new(Vec::new());
+    /// A background load is running: directories wait for it.
+    static LOADING: AtomicBool = AtomicBool::new(false);
+    /// The directory to hand to `editor.directory-handler` once the
+    /// background load finishes (the latest request wins).
+    static PENDING_DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
     /// Counts loads, so a slow background load can't replace a newer one.
     static GENERATION: AtomicUsize = AtomicUsize::new(0);
     /// The plugin directory and settings loaded last, to reload them.
@@ -213,6 +218,7 @@ pub fn load_in_background() {
         return;
     }
     let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    LOADING.store(true, Ordering::Relaxed);
     tokio::spawn(async move {
         let (settings, error) = read_settings();
         let built = tokio::task::spawn_blocking(move || {
@@ -222,6 +228,14 @@ pub fn load_in_background() {
         })
         .await;
         let Ok((host, actions, errors, loaded)) = built else {
+            LOADING.store(false, Ordering::Relaxed);
+            let pending = PENDING_DIRECTORY.lock().take();
+            if let Some(dir) = pending {
+                job::dispatch(move |editor, compositor| {
+                    open_file_picker(editor, compositor, dir, "loading plugins failed")
+                })
+                .await;
+            }
             return;
         };
         job::dispatch(move |editor, _| {
@@ -249,6 +263,48 @@ fn install_background(
     for doc in open {
         queue(Event::DocumentOpen(plugin_doc_id(doc)));
     }
+    LOADING.store(false, Ordering::Relaxed);
+    if let Some(dir) = PENDING_DIRECTORY.lock().take() {
+        if let Some(handler) = editor.config().directory_handler.clone() {
+            run_directory_handler(handler, dir);
+        }
+    }
+}
+
+/// Open `dir` with `editor.directory-handler`, if one is set: now, or once
+/// plugins finished loading. `false` means no handler: the caller opens its
+/// file picker. If the handler fails, the file picker opens instead.
+pub fn open_directory(editor: &Editor, dir: PathBuf) -> bool {
+    let Some(handler) = editor.config().directory_handler.clone() else {
+        return false;
+    };
+    if LOADING.load(Ordering::Relaxed) {
+        *PENDING_DIRECTORY.lock() = Some(dir);
+    } else {
+        run_directory_handler(handler, dir);
+    }
+    true
+}
+
+/// Run `handler` with `dir` once the current event is handled.
+fn run_directory_handler(handler: String, dir: PathBuf) {
+    tokio::spawn(job::dispatch_callback(job::Callback::EditorCompositorJobs(
+        Box::new(move |editor, compositor, jobs| {
+            let arg = dir.to_string_lossy().into_owned();
+            if let Err(err) = run_command(editor, jobs, &handler, vec![arg]) {
+                open_file_picker(editor, compositor, dir, &format!("{handler}: {err}"));
+            }
+        }),
+    )));
+}
+
+/// The fallback when the directory handler can't open `dir`.
+fn open_file_picker(editor: &mut Editor, compositor: &mut Compositor, dir: PathBuf, why: &str) {
+    editor.set_error(format!(
+        "directory-handler failed ({why}); showing the file picker"
+    ));
+    let picker = crate::ui::file_picker(editor, dir);
+    compositor.push(Box::new(crate::ui::overlay::overlaid(picker)));
 }
 
 /// Whether `dir` has any plugin (a subdirectory with a `plugin.toml`).
@@ -282,6 +338,7 @@ fn build_host(
         file_workspace(),
         Some(helix_loader::data_dir().join("plugins")),
     );
+    host.set_program_check(starts_program);
     let mut setting_errors = Vec::new();
     // Installed plugins whose component changed since aren't loaded.
     let changed = match install::Lock::read(&lock_file(dir)) {
@@ -334,6 +391,7 @@ fn install(
         }
     }
     editor.plugin_statusline.clear();
+    editor.sidebar = None;
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -722,6 +780,14 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         workspace: Some(workspace()),
         cwd: helix_stdx::env::current_working_dir(),
         config_dir: helix_loader::config_dir(),
+        sidebar: editor
+            .sidebar
+            .as_ref()
+            .map(|sidebar| helix_plugin::SidebarSnapshot {
+                owner: sidebar.owner.clone(),
+                selected: sidebar.selected as u32,
+                focused: sidebar.focused,
+            }),
         registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
             editor.registers.stored().collect()
         } else {
@@ -914,8 +980,25 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                             .collect(),
                         len,
                     ),
+                    helix_plugin::Decorations::LineBackgrounds(lines) => {
+                        store.set_line_backgrounds(layer, lines, len)
+                    }
+                    helix_plugin::Decorations::Conceals(conceals) => {
+                        store.set_conceals(layer, conceals, len)
+                    }
                     helix_plugin::Decorations::RawOnCursorLine(raw) => {
                         store.set_raw_on_cursor_line(layer, raw)
+                    }
+                    helix_plugin::Decorations::RenderModes(modes) => {
+                        let modes: Vec<_> = modes
+                            .into_iter()
+                            .map(|mode| match mode {
+                                helix_plugin::Mode::Normal => helix_view::document::Mode::Normal,
+                                helix_plugin::Mode::Insert => helix_view::document::Mode::Insert,
+                                helix_plugin::Mode::Select => helix_view::document::Mode::Select,
+                            })
+                            .collect();
+                        store.set_render_modes(layer, &modes)
                     }
                 }
                 helix_event::request_redraw();
@@ -1007,30 +1090,64 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::RenamePath { from, to } => {
-                // Buffers of files inside a renamed directory follow it too.
-                let inside: Vec<_> = editor
-                    .documents()
-                    .filter_map(|doc| {
-                        let rest = doc.path()?.strip_prefix(&from).ok()?;
-                        (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
-                    })
-                    .collect();
-                match editor.move_path(&from, &to) {
-                    Ok(()) => {
-                        for (doc, path) in inside {
-                            editor.set_doc_path(doc, &path);
-                        }
-                    }
-                    Err(err) => editor.set_error(format!(
-                        "Failed to move {} to {}: {err}",
-                        from.display(),
-                        to.display()
-                    )),
+                if let Err(err) = rename_path(editor, &from, &to) {
+                    editor.set_error(err);
                 }
+            }
+            Action::FileOps { plugin, id, ops } => {
+                tokio::spawn(file_ops::run(plugin, id, ops));
             }
             Action::DeletePath(path) => {
                 if let Err(err) = editor.delete_path(&path, true) {
                     editor.set_error(format!("Failed to delete {}: {err}", path.display()));
+                }
+            }
+            Action::ShowSidebar {
+                plugin,
+                title,
+                items,
+                width,
+                selected,
+            } => {
+                let items: Vec<_> = items
+                    .into_iter()
+                    .map(|item| helix_view::sidebar::SidebarItem {
+                        text: item.text,
+                        scope: item.scope,
+                        depth: item.depth,
+                        command: item.command,
+                    })
+                    .collect();
+                // The same plugin's sidebar keeps its scroll, focus and
+                // (unless told otherwise) selection.
+                let (scroll, focused, previous) = match &editor.sidebar {
+                    Some(old) if old.owner == plugin => (old.scroll, old.focused, old.selected),
+                    _ => (0, false, 0),
+                };
+                let selected = selected
+                    .unwrap_or(previous)
+                    .min(items.len().saturating_sub(1));
+                editor.sidebar = Some(helix_view::sidebar::Sidebar {
+                    owner: plugin,
+                    title,
+                    items,
+                    width,
+                    selected,
+                    scroll,
+                    focused,
+                });
+                helix_event::request_redraw();
+            }
+            Action::CloseSidebar { plugin } => {
+                if editor.sidebar.as_ref().is_some_and(|s| s.owner == plugin) {
+                    editor.sidebar = None;
+                    helix_event::request_redraw();
+                }
+            }
+            Action::FocusSidebar { plugin, focused } => {
+                if let Some(sidebar) = editor.sidebar.as_mut().filter(|s| s.owner == plugin) {
+                    sidebar.focused = focused;
+                    helix_event::request_redraw();
                 }
             }
             Action::MarkSaved(doc) => {
@@ -1171,6 +1288,192 @@ fn clear_plugin_diagnostics(editor: &mut Editor) {
         .collect();
     for plugin in plugins {
         editor.clear_plugin_diagnostics(&plugin);
+    }
+}
+
+/// Rename through the editor (language servers hear about it); buffers of
+/// the file, or of files inside a renamed directory, follow.
+fn rename_path(editor: &mut Editor, from: &Path, to: &Path) -> Result<(), String> {
+    let inside: Vec<_> = editor
+        .documents()
+        .filter_map(|doc| {
+            let rest = doc.path()?.strip_prefix(from).ok()?;
+            (!rest.as_os_str().is_empty()).then(|| (doc.id(), to.join(rest)))
+        })
+        .collect();
+    editor.move_path(from, to).map_err(|err| {
+        format!(
+            "Failed to move {} to {}: {err}",
+            from.display(),
+            to.display()
+        )
+    })?;
+    for (doc, path) in inside {
+        editor.set_doc_path(doc, &path);
+    }
+    Ok(())
+}
+
+/// `files.apply` (API 0.4): operations in order, results to the plugin.
+mod file_ops {
+    use std::path::{Path, PathBuf};
+
+    use helix_plugin::{Callback, FileOp};
+
+    use crate::job;
+
+    pub async fn run(plugin: String, id: u32, ops: Vec<FileOp>) {
+        let mut results = Vec::with_capacity(ops.len());
+        for op in ops {
+            if results.iter().any(Result::is_err) {
+                results.push(Err("skipped after an earlier failure".to_string()));
+                continue;
+            }
+            results.push(run_one(op).await);
+        }
+        super::deliver_async(plugin, Callback::FilesDone { id, results }).await;
+    }
+
+    async fn run_one(op: FileOp) -> Result<(), String> {
+        match op {
+            // These go through the editor, which tells language servers and
+            // moves buffers along.
+            FileOp::Create { path, directory } => {
+                on_editor(move |editor| {
+                    let path = PathBuf::from(path);
+                    if std::fs::symlink_metadata(&path).is_ok() {
+                        return Err(format!("{} already exists", path.display()));
+                    }
+                    editor
+                        .create_path(&path, directory)
+                        .map_err(|err| format!("Failed to create {}: {err}", path.display()))
+                })
+                .await
+            }
+            FileOp::Rename { from, to } => {
+                on_editor(move |editor| {
+                    let to = PathBuf::from(to);
+                    // `move_path` quietly does nothing for a missing file.
+                    if std::fs::symlink_metadata(&from).is_err() {
+                        return Err(format!("Failed to move {from}: it doesn't exist"));
+                    }
+                    if std::fs::symlink_metadata(&to).is_ok() {
+                        return Err(format!("{} already exists", to.display()));
+                    }
+                    super::rename_path(editor, Path::new(&from), &to)
+                })
+                .await
+            }
+            FileOp::Delete(path) => {
+                on_editor(move |editor| {
+                    let path = PathBuf::from(path);
+                    editor
+                        .delete_path(&path, true)
+                        .map_err(|err| format!("Failed to delete {}: {err}", path.display()))
+                })
+                .await
+            }
+            // These can take a while: off the editor's thread.
+            FileOp::Copy { from, to } => {
+                blocking(move || {
+                    let to = PathBuf::from(to);
+                    if std::fs::symlink_metadata(&to).is_ok() {
+                        return Err(format!("{} already exists", to.display()));
+                    }
+                    copy(Path::new(&from), &to)
+                        .map_err(|err| format!("Failed to copy {from} to {}: {err}", to.display()))
+                })
+                .await
+            }
+            FileOp::Trash(path) => {
+                // Never a permanent delete: if the trash fails, so does this.
+                blocking(move || {
+                    trash::delete(&path).map_err(|err| format!("Failed to trash {path}: {err}"))
+                })
+                .await
+            }
+        }
+    }
+
+    async fn on_editor(
+        f: impl FnOnce(&mut helix_view::Editor) -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        job::dispatch(move |editor, _| {
+            let _ = sender.send(f(editor));
+        })
+        .await;
+        receiver
+            .await
+            .unwrap_or_else(|_| Err("the editor stopped".into()))
+    }
+
+    async fn blocking(
+        f: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        tokio::task::spawn_blocking(f)
+            .await
+            .unwrap_or_else(|err| Err(err.to_string()))
+    }
+
+    /// Copy a file or a directory tree; symlinks are copied as links.
+    pub(super) fn copy(from: &Path, to: &Path) -> std::io::Result<()> {
+        let meta = std::fs::symlink_metadata(from)?;
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if meta.file_type().is_symlink() {
+            #[cfg(unix)]
+            return std::os::unix::fs::symlink(std::fs::read_link(from)?, to);
+            #[cfg(not(unix))]
+            return std::fs::copy(from, to).map(|_| ());
+        }
+        if meta.is_dir() {
+            std::fs::create_dir(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                copy(&entry.path(), &to.join(entry.file_name()))?;
+            }
+            Ok(())
+        } else {
+            std::fs::copy(from, to).map(|_| ())
+        }
+    }
+}
+
+/// Whether running `command` (`:name args` or a static command) starts a
+/// program: plugins need `allow-process = true` for those.
+pub fn starts_program(command: &str) -> bool {
+    // Typable commands by canonical name (aliases resolve), static by name.
+    const TYPED: &[&str] = &[
+        "run-shell-command",
+        "pipe",
+        "pipe-to",
+        "insert-output",
+        "append-output",
+        "run-interactive",
+        "run-and-wait",
+        "compile",
+        "grep",
+    ];
+    const STATIC: &[&str] = &[
+        "shell_pipe",
+        "shell_pipe_to",
+        "shell_insert_output",
+        "shell_append_output",
+        "shell_keep_pipe",
+        "run_and_wait",
+        "compile",
+    ];
+    let command = command.trim();
+    match command.strip_prefix(':') {
+        Some(typed) => {
+            let name = typed.split_whitespace().next().unwrap_or_default();
+            crate::commands::typed::TYPABLE_COMMAND_MAP
+                .get(name)
+                .is_some_and(|cmd| TYPED.contains(&cmd.name))
+        }
+        None => STATIC.contains(&command.split_whitespace().next().unwrap_or_default()),
     }
 }
 
@@ -1564,6 +1867,25 @@ pub fn wants(kind: EventKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_that_start_programs() {
+        for command in [
+            ":sh ls",
+            ":run-shell-command ls",
+            ":pipe sort",
+            ":| sort",
+            ":insert-output date",
+            ":bang ls",
+            "shell_pipe",
+            " :grep x",
+        ] {
+            assert!(starts_program(command), "{command}");
+        }
+        for command in [":write", ":echo hi", "goto_line_end", ":plugin-run x/y", ""] {
+            assert!(!starts_program(command), "{command}");
+        }
+    }
 
     #[test]
     fn file_grants_require_a_project_outside_home_config_and_data() {

@@ -16,6 +16,7 @@ pub mod input;
 pub mod keyboard;
 pub mod plugin_decorations;
 pub mod register;
+pub mod sidebar;
 pub mod theme;
 pub mod tree;
 pub mod view;

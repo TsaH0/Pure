@@ -57,6 +57,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
+| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"` |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
@@ -78,7 +79,9 @@ f = ":plugin-run finder/files"
   - `edit-buffers`: change text and selections
   - `open-files`: open files
   - `run-commands`: run editor commands (only from the plugin's own commands
-    and callbacks)
+    and callbacks). Commands that start programs (`:sh`, `:pipe`,
+    `:insert-output`, `!`, `:compile`, `:grep`, ...) also need the user's
+    `allow-process = true`, since they can run anything.
   - `process`: run programs, see [Running programs](#running-programs). This
     one also needs the user's `allow-process` grant.
   - `filesystem`: read (or write) the workspace, see [Files](#files). This one
@@ -195,15 +198,19 @@ The versioned WIT files are the complete API reference.
 
 ## API versions and SDK callbacks
 
-Pure accepts `api = "0.1"`, `api = "0.2"` and `api = "0.3"` side by side.
-Existing 0.1/0.2 components load without rebuilding. SDK 0.3 generates the
-0.3 ABI by default; set `api = "0.3"` in the plugin manifest. To rebuild an
-older component, select exactly one legacy feature and keep its manifest API:
+Pure accepts `api = "0.1"` to `api = "0.4"` side by side. Existing
+components load without rebuilding. SDK 0.4 generates the 0.4 ABI by
+default; set `api = "0.4"` in the plugin manifest. To rebuild an older
+component, select exactly one legacy feature and keep its manifest API:
 
 ```toml
-# For api = "0.2" (use api-v0-1 for api = "0.1"):
-helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-2"] }
+# For api = "0.3" (api-v0-2 for "0.2", api-v0-1 for "0.1"):
+helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-3"] }
 ```
+
+0.4 differs from 0.3 only in `files`: 0.3's `create_path`, `rename_path`
+and `delete_path` became `files::apply`, which reports results (and can copy
+and trash); plugins export one more callback (the SDK does that).
 
 The SDK exports callback bindings automatically. `editor::spawn` and
 `editor::run_interactive` accept a one-shot closure receiving `Result<Output,
@@ -231,8 +238,9 @@ editor::spawn(&["rg", "--files"], SpawnOptions::default(), |output| {
 
 UI (`run-interactive`, `pick`, popups, `run-command`) is restricted to plugin commands
 and callbacks, so events cannot interrupt typing. API 0.1's
-WIT remains at [`wit/v0.1/`](wit/v0.1/) and 0.2 at
-[`wit/v0.2/`](wit/v0.2/); released interfaces are never extended in place.
+WIT remains at [`wit/v0.1/`](wit/v0.1/), 0.2 at [`wit/v0.2/`](wit/v0.2/)
+and 0.3 at [`wit/v0.3/`](wit/v0.3/). A released version may gain host
+functions (imports: old components don't use them), never exports.
 
 ## Running programs
 
@@ -385,22 +393,37 @@ allow-files = "write"
 allow-dirs = ["~", "/tmp"]
 ```
 
-### Changing files through the editor (API 0.3)
+### Changing files through the editor (API 0.4)
 
 `std::fs` changes files behind the editor's back. `helix_plugin_api::files`
 asks the editor instead, like `:move` does, so buffers follow renamed files
 and language servers hear about it (and can, say, update imports):
 
 ```rust,ignore
-files::create_path("/work/src/new.rs", false)?;      // or true: a directory
-files::rename_path("/work/a.rs", "/work/src/a.rs")?; // its buffer follows
-files::delete_path("/work/old")?;                    // directories recursively
+use helix_plugin_api::files::{self, CreateOp, FileOp, MoveOp};
+
+let ops = [
+    FileOp::Create(CreateOp { path: "/work/src/new.rs".into(), directory: false }),
+    FileOp::Rename(MoveOp { from: "/work/a.rs".into(), to: "/work/src/a.rs".into() }),
+    FileOp::Copy(MoveOp { from: "/work/assets".into(), to: "/work/assets-old".into() }),
+    FileOp::Trash("/work/old".into()), // or Delete: final
+];
+files::apply(&ops, |results| {
+    // One result per operation, in order; after a failure: "skipped".
+    for result in results {
+        result?;
+    }
+    editor::set_status("done");
+    Ok(())
+})?;
 ```
 
-They need `filesystem` and `allow-files = "write"`, take absolute paths
-inside `roots()` (no `..`, and no symlink leading out), and are carried out
-after the call returns, in order; failures are shown to the user. Read the
-result in a later callback, e.g. a 1 ms timer.
+They need `filesystem` and `allow-files = "write"` and take absolute paths
+inside `files::roots()` (no `..`, and no symlink leading out). They run in
+order after the call, off the editor's thread for copies and the trash;
+none overwrites an existing path. `Trash` uses the system's trash and fails
+rather than deleting if it can't. (API 0.3 has fire-and-forget
+`create_path`, `rename_path` and `delete_path` instead.)
 
 ## Events
 
@@ -444,9 +467,28 @@ decorations::set_statusline("count", "3 todos")?;
   line break puts it at the end of the line. No line breaks in the text.
 - Overlays (`set_overlays`, `decorations::overlay`) draw other characters
   *over* the text (one over each char), e.g. `◉` over `#`; the text itself
-  is unchanged. Hiding characters (conceal) isn't possible.
+  is unchanged.
+- Conceals (`set_conceals`, `decorations::conceal`) hide text: Markdown's
+  `**`, a link's URL. The replacement is empty or one grapheme (`…`, `α`)
+  styled with the scope. A conceal stays within one line (cut at its end)
+  and is widened to whole graphemes; overlapping ones: the first wins. The
+  text is still there: motions, search and edits act on it, a click on a
+  replacement lands at the hidden range's start, and editing inside hidden
+  text shows it until the plugin sets the layer again. Pair it with
+  `set_raw_on_cursor_line` so the line being edited shows everything.
+- `set_raw_on_cursor_line(doc, layer, true)` hides a layer on the primary
+  cursor's line (other selections don't reveal theirs), and
+  `set_render_modes(doc, layer, &[Mode::Normal])` draws it only in those
+  modes: together, render-markdown.nvim's behaviour (raw while inserting
+  or selecting, raw on the cursor line). Both are kept by the editor, so
+  the plugin needs no cursor or mode events.
 - Signs are one character on a line, shown in the `plugins` gutter, which
   users add to `editor.gutters`.
+- Line backgrounds (`set_line_backgrounds`, `decorations::line_background`)
+  fill whole lines, wrapped rows included, to the window's edge (not the
+  gutter), e.g. code blocks. Text, selections and the cursor line draw over
+  them. Themes differ, so the scope may list fallbacks:
+  `"ui.cursorline.primary,ui.virtual.ruler"` uses the first one defined.
 - The statusline text shows in the `plugins` element of
   `editor.statusline` (one line, at most 200 chars per segment).
 - At most 100,000 decorations per layer. Reloading plugins clears them.
@@ -517,6 +559,29 @@ callback is a callback: it can open UI and run commands. See
   mappings); elsewhere they do nothing.
 
 `examples/oil` uses all of them: a directory as an editable buffer.
+
+## Sidebar (API 0.4)
+
+`helix_plugin_api::sidebar` shows a list on the left of the editor: a file
+tree, an outline, test results. Items have a theme scope, an indentation
+and a command: enter (or `l`, or a click) runs one of the plugin's commands
+with the item's arguments.
+
+```rust,ignore
+use helix_plugin_api::sidebar::{self, item, on_enter, SidebarView};
+
+let file = on_enter(item("  main.rs", "", 1), "open", vec!["/work/src/main.rs".into()]);
+sidebar::show(&SidebarView { title: " work/".into(), items: vec![file], width: 32, selected: None })?;
+sidebar::focus(true); // give it the keys
+```
+
+One sidebar is shown at a time (the plugin that showed it last owns it);
+showing it again updates it and keeps its scroll and selection. With the
+keys, `j`/`k`, the arrows, `ctrl-d`/`ctrl-u` and `g`/`G` move, `esc` or
+`tab` hand the keys back, `q` closes it; a click in the editor gives the
+editor the keys. `sidebar::selected()` tells which item is selected.
+Nothing is drawn or checked while no sidebar is shown. See
+`examples/tree`.
 
 ## Registers (API 0.3)
 

@@ -312,7 +312,7 @@ interface events {
 /// into the text the call sees, and follow the user's edits afterwards.
 /// Available from commands, callbacks and event handlers.
 interface decorations {
-  use types.{document-id};
+  use types.{document-id, mode};
 
   record highlight {
     %from: u32,
@@ -348,11 +348,44 @@ interface decorations {
   }
   set-signs: func(doc: document-id, layer: string, signs: list<sign>) -> result<_, string>;
 
+  record line-background {
+    /// 0-based line.
+    line: u32,
+    /// A theme scope whose background fills the line's text area to the
+    /// window's edge (wrapped rows too), e.g. `markup.raw.block`. Text,
+    /// selections and the cursor line draw over it. Several scopes separated
+    /// by commas: the first one the theme defines (themes differ a lot).
+    /// Added in 0.3.x.
+    scope: string,
+  }
+  set-line-backgrounds: func(doc: document-id, layer: string, lines: list<line-background>) -> result<_, string>;
+
   /// Hide `layer` on the line holding the primary cursor, so the line shows
   /// its plain text while being edited (the way render-markdown.nvim does).
   /// The editor follows the cursor itself: the plugin needs no
   /// selection-change events for this. Off by default.
   set-raw-on-cursor-line: func(doc: document-id, layer: string, raw: bool) -> result<_, string>;
+
+  /// Text hidden from the screen (Markdown's `**`, a link's URL). The
+  /// text stays in the document: it is only not drawn. `from..to` must not
+  /// cross a line break (the editor stops there).
+  record conceal {
+    %from: u32,
+    to: u32,
+    /// Drawn instead: empty hides the text, otherwise one grapheme (`…`,
+    /// `α`); longer replacements are cut to their first grapheme.
+    replacement: string,
+    /// Style of the replacement.
+    scope: string,
+  }
+  /// Overlapping conceals in one layer: the first wins. Combine with
+  /// `set-raw-on-cursor-line` so the line being edited shows all its text.
+  set-conceals: func(doc: document-id, layer: string, conceals: list<conceal>) -> result<_, string>;
+
+  /// Draw `layer` only in these modes (all of them by default; an empty
+  /// list restores that). `[normal]` shows the raw text while inserting or
+  /// selecting, like render-markdown.nvim's `render_modes`.
+  set-render-modes: func(doc: document-id, layer: string, modes: list<mode>) -> result<_, string>;
 
   /// Text for the `plugins` statusline element; empty removes the segment.
   set-statusline: func(segment: string, text: string) -> result<_, string>;

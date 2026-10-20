@@ -1,5 +1,5 @@
 use crate::doc_formatter::{DocumentFormatter, TextFormat};
-use crate::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
+use crate::text_annotations::{Conceal, InlineAnnotation, Overlay, TextAnnotations};
 
 impl TextFormat {
     fn new_test(softwrap: bool) -> Self {
@@ -210,4 +210,152 @@ fn annotation_and_overlay() {
         .collect_to_str(),
         "fooo  bar "
     );
+}
+
+fn conceal_text(text: &str, softwrap: bool, conceals: &[Conceal]) -> String {
+    DocumentFormatter::new_at_prev_checkpoint(
+        text.into(),
+        &TextFormat::new_test(softwrap),
+        TextAnnotations::default().add_conceals(conceals, None),
+        0,
+    )
+    .collect_to_str()
+}
+
+#[test]
+fn conceal() {
+    // hide markup entirely
+    assert_eq!(
+        conceal_text(
+            "a **b** c\n",
+            false,
+            &[Conceal::new(2, 4, ""), Conceal::new(5, 7, "")]
+        ),
+        "a b c \n "
+    );
+    // a replacement takes one cell
+    assert_eq!(
+        conceal_text("\\alpha + 1\n", false, &[Conceal::new(0, 6, "α")]),
+        "α + 1 \n "
+    );
+    // a conceal never crosses a line break
+    assert_eq!(
+        conceal_text("ab\ncd\n", false, &[Conceal::new(1, 5, "")]),
+        "a \ncd \n "
+    );
+    // multi-codepoint graphemes are swallowed whole
+    assert_eq!(
+        conceal_text("x👨‍👩‍👧y\n", false, &[Conceal::new(1, 6, "…")]),
+        "x…y \n "
+    );
+    // overlapping conceals: the first to start wins
+    assert_eq!(
+        conceal_text(
+            "abcdef\n",
+            false,
+            &[Conceal::new(1, 3, ""), Conceal::new(2, 5, "X")]
+        ),
+        "adef \n "
+    );
+}
+
+#[test]
+fn conceal_positions() {
+    let text = "a **b** c\n";
+    let conceals = [Conceal::new(2, 4, ""), Conceal::new(5, 7, "")];
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals, None);
+    let fmt = TextFormat::new_test(false);
+    let graphemes: Vec<_> =
+        DocumentFormatter::new_at_prev_checkpoint(text.into(), &fmt, &annotations, 0)
+            .map(|g| (g.char_idx, g.visual_pos.col, g.doc_chars(), g.width()))
+            .collect();
+    assert_eq!(
+        graphemes,
+        [
+            (0, 0, 1, 1),
+            (1, 1, 1, 1),
+            (2, 2, 2, 0), // `**` hidden
+            (4, 2, 1, 1),
+            (5, 3, 2, 0), // `**` hidden
+            (7, 3, 1, 1),
+            (8, 4, 1, 1),
+            (9, 5, 1, 1),
+            (10, 0, 0, 1),
+        ]
+    );
+}
+
+#[test]
+fn conceal_with_annotations_inside() {
+    // inline annotations and overlays inside hidden text are not shown
+    let conceals = [Conceal::new(1, 4, "")];
+    let inline = [
+        InlineAnnotation::new(2, "VIRT"),
+        InlineAnnotation::new(4, "<"),
+    ];
+    let overlays = [Overlay::new(3, "O"), Overlay::new(5, "P")];
+    let fmt = TextFormat::new_test(false);
+    let mut annotations = TextAnnotations::default();
+    annotations
+        .add_conceals(&conceals, None)
+        .add_inline_annotations(&inline, None)
+        .add_overlay(&overlays, None);
+    assert_eq!(
+        DocumentFormatter::new_at_prev_checkpoint("abcdefg\n".into(), &fmt, &annotations, 0)
+            .collect_to_str(),
+        "a<ePg \n "
+    );
+}
+
+#[test]
+fn conceal_softwrap() {
+    // concealed text takes no columns when wrapping
+    let text = format!("{}\n", "**foo** ".repeat(4));
+    let conceals: Vec<_> = (0..4)
+        .flat_map(|i| {
+            [
+                Conceal::new(i * 8, i * 8 + 2, ""),
+                Conceal::new(i * 8 + 5, i * 8 + 7, ""),
+            ]
+        })
+        .collect();
+    assert_eq!(conceal_text(&text, true, &conceals), "foo foo foo foo  \n ");
+}
+
+#[test]
+fn conceal_position_round_trip() {
+    use crate::position::{char_idx_at_visual_block_offset, visual_offset_from_block};
+    let text = crate::Rope::from("a **bold** and [link](https://x.y) end\nnext **x**\n");
+    let conceals = [
+        Conceal::new(2, 4, ""),
+        Conceal::new(8, 10, ""),
+        Conceal::new(15, 16, ""),
+        Conceal::new(20, 34, "…"),
+        Conceal::new(44, 46, ""),
+        Conceal::new(47, 49, ""),
+    ];
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&conceals, None);
+    for soft_wrap in [false, true] {
+        let fmt = TextFormat::new_test(soft_wrap);
+        for pos in 0..text.len_chars() {
+            let (visual, _) = visual_offset_from_block(text.slice(..), 0, pos, &fmt, &annotations);
+            let (back, _) = char_idx_at_visual_block_offset(
+                text.slice(..),
+                0,
+                visual.row,
+                visual.col,
+                &fmt,
+                &annotations,
+            );
+            // a hidden position maps to the first visible position after it
+            // (or the replacement's start); visible positions round-trip
+            match conceals.iter().find(|c| (c.start..c.end).contains(&pos)) {
+                Some(c) if c.replacement.is_empty() => assert_eq!(back, c.end, "pos {pos}"),
+                Some(c) => assert_eq!(back, c.start, "pos {pos}"),
+                None => assert_eq!(back, pos, "pos {pos}"),
+            }
+        }
+    }
 }

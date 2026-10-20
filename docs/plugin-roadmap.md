@@ -35,12 +35,13 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 
 | Path | What |
 | --- | --- |
-| `helix-plugin/wit/v0.{1,2,3}/helix-plugin.wit` | Versioned APIs (WIT); 0.1/0.2 frozen, 0.3 current |
+| `helix-plugin/wit/v0.{1,2,3,4}/helix-plugin.wit` | Versioned APIs (WIT); 0.1–0.3 frozen (exports), 0.4 current |
+| `helix-plugin/src/api/world.rs` | Host adapters shared by 0.3 and 0.4 (a macro per world) |
 | `helix-plugin/src/lib.rs` | Host: `PluginHost`, `Manifest`, `Permission`, `Snapshot`, `Action`, `Event`, `Limits`, host functions (`impl host::Host for State`) |
 | `helix-plugin/src/test.rs` | Host tests with real components, including frozen compatibility fixtures and current examples |
 | `helix-plugin/tests/plugins/testplugin` | Source of the test plugin (its own cargo workspace) |
 | `helix-plugin/sdk` | Rust guest SDK `helix-plugin-api` (`Plugin` trait, `register_plugin!`, `editor`, `text`) |
-| `helix-plugin/examples/text-tools` | Example plugin; `plugin.wasm` is committed |
+| `helix-plugin/examples/*` | Example plugins (one per API feature); each `plugin.wasm` is committed |
 | `helix-plugin/build-plugins.sh` | Rebuilds the test plugin and example wasm files |
 | `helix-term/src/plugins.rs` | Editor integration: loading, `snapshot`, `apply` (turns `Action`s into edits), hooks, debouncing, `:plugin-*` helpers |
 | `helix-term/src/commands/typed.rs` | `:plugin-run`, `:plugin-list`, `:plugin-reload` |
@@ -482,7 +483,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   replacements are numbered `first_line + n`; CR-only line endings are not
   split.
 
-## API 0.3 work in progress
+## API 0.3 (done; notes from the work)
 
 The draft WIT moved to `helix-plugin/wit/v0.3/helix-plugin.wit`, including
 optional `generation: u64` tags on picker updates and a generation in query
@@ -534,15 +535,15 @@ What plugins still can't do, and why:
 
 | Kind | Status |
 | --- | --- |
-| Sidebars, file trees, panels (nvim-tree, outline, undotree panes) | Not possible: Helix has no plugin-defined views or panes. Pickers, popups and plugin buffers in splits cover most uses. |
+| Sidebars, file trees, outlines (nvim-tree) | Done (API 0.4): `sidebar` interface, `examples/tree`. Other panes (bottom panels, floating windows with their own keys) still aren't. |
 | Embedded terminals (toggleterm) | Not possible: no terminal emulator in Helix. `run-interactive` hands over the whole terminal instead. |
-| Conceal (hide `**`, link URLs) | TODO below: needs `DocumentFormatter` support. |
+| Conceal (hide `**`, link URLs) | Done: `set-conceals` + `set-render-modes` (imports in 0.3 and 0.4), `examples/markdown`. |
 | Folding | Not possible: Helix has no folds. |
 | Custom UI components (dashboards with layout) | Not possible beyond popups (markdown) and pickers. |
 | Debug adapters, language servers | Use Helix's own DAP and LSP support (`languages.toml`). |
 | Network access | Not in the sandbox; run a program (`curl`) with `allow-process`. |
 | Format on save | Use `formatter` in `languages.toml`; a plugin can offer a format command. |
-| Opening a directory given on the command line (`pure .` → oil) | Not yet: Pure opens its file picker; a "directory open" event would be needed. |
+| Opening a directory given on the command line (`pure .` → oil) | Done: `editor.directory-handler`. |
 
 ---
 
@@ -550,12 +551,15 @@ What plugins still can't do, and why:
 
 Tasks in one batch touch the same code, so give each batch to one agent.
 
-1. **Done:** M0–M4, M6.1, M9, M11 and the M10 host/editor work
-   (see `plugin-progress.md`).
-2. **Open, no owner review needed:** M10 SDK/examples/guide migration and
-   the small TODOs below.
-3. **Needs the owner first:** M5, M6.2, M6.3, M7, M8 and the file-manager
-   APIs.
+1. **Done:** M0–M12 (see `plugin-progress.md`).
+2. **Open, no owner review needed:** the Future TODOs below.
+3. **Done after the owner's decision:** conceal ("whatever
+   render-markdown.nvim does").
+4. **Compatibility rule since 0.3 is on master:** new *imports* (host
+   functions) may still be added to API 0.3; anything that needs a new
+   *export* (a callback or event handler the plugin must implement) goes
+   into a new API version with the old one frozen, because components
+   missing an export fail to load.
 
 ## Future TODOs (not yet milestones)
 
@@ -617,31 +621,70 @@ Small, self-contained; each one is a good single task.
   (`fuzzing_through_the_abi`, 300 seeds).
 - [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
-- [ ] **Conceal decorations:** hide ranges of text (for Markdown `**`,
-  backticks, link URLs). Needs `helix-core`'s `DocumentFormatter` to skip
-  graphemes; cursor movement over hidden text must still work. Larger than
-  other decorations: design with the owner first.
-- [ ] **Full-line backgrounds:** a highlight that extends to the window's
-  edge (heading and code-block backgrounds), e.g. a line-level style in
-  `PluginDecorations` applied in `render_view`.
-- [ ] **Directory arguments for file-manager plugins:** an event (or a
-  setting naming a plugin command) when Pure is started on a directory, so
-  `pure .` can open `oil` instead of the file picker.
-- [ ] **Trash for `oil`:** deleting is final today. A `trash` setting could
-  move entries to the XDG trash (`~/.local/share/Trash`, needs `allow-dirs`)
-  with `.trashinfo` files.
-- [ ] **Incremental Markdown rendering:** re-render only the changed lines
-  (see the overhead numbers in `plugin-progress.md`).
+- [x] **Conceal decorations:** `decorations.set-conceals` and
+  `set-render-modes` (imports, so API 0.3 has them too). The owner chose
+  render-markdown.nvim's behaviour: the primary cursor's line is raw (other
+  selections don't reveal), nothing renders in insert/select modes (per
+  layer, `set-render-modes`), a click on a replacement lands at the range's
+  start. Formatter support in `helix-core` (`text_annotations::Conceal`,
+  one branch in `DocumentFormatter::advance_grapheme`); design and
+  decisions in [`plugin-conceal-proposal.md`](plugin-conceal-proposal.md).
+  `examples/markdown` hides `**`, `*`, `~~`, backticks and link URLs.
+- [x] **Sidebar (API 0.4):** `sidebar.show/close/focus/selected`. One
+  sidebar (`Editor::sidebar`, `helix_view::sidebar`) left of the views; the
+  editor area shrinks only while it's shown. Items run the owner's commands
+  (no new export). Keys while focused: j/k, arrows, ctrl-d/u, g/G, enter/l,
+  esc/tab, q; mouse clicks and the wheel. `examples/tree` (nvim-tree like).
+- [x] **Full-line backgrounds:** `decorations.set-line-backgrounds` (added
+  to 0.3 and 0.4: an import). Stored at line starts and mapped through
+  edits; `render_view` looks up only the visible lines and paints the text
+  area of each view (wrapped rows too) before the cursor line, text and
+  selections. Raw-on-cursor-line layers skip the cursor's line. Scopes may
+  list comma-separated fallbacks. The markdown example uses it for code
+  blocks.
+- [x] **Directory arguments for file-manager plugins:**
+  `editor.directory-handler = "oil/open"` runs that plugin command with the
+  directory for `pure <dir>` and `:open <dir>`. At startup the request waits
+  for the background plugin load (the first frame is not delayed; a later
+  request replaces an earlier one); if the command is missing or fails, the
+  file picker opens with an error. Test:
+  `directory_handler_opens_directories_with_a_plugin`.
+- [x] **Trash for `oil`, file results (API 0.4):** `files.apply` runs
+  create/rename/copy/delete/trash in order, stops at the first failure and
+  reports one result per operation (`on-files-done`). Trash uses the `trash`
+  crate (freedesktop trash with metadata and name collisions, macOS,
+  Windows; symlinks themselves); it never falls back to deleting. Oil marks
+  buffers saved only when everything succeeded; otherwise the edits stay
+  and what did succeed isn't repeated. `trash = true` in oil's settings.
+  API 0.3 is frozen (`testplugin3-v0.3.wasm`, `oil-v0.3.wasm`).
+- [x] **Incremental Markdown rendering:** the example caches its last
+  rendering per document; an edit re-renders from the first changed line
+  until the code-fence state agrees with the old rendering, and the rest is
+  reused, moved by the edit (a property test checks it against full
+  renders). The text still crosses the boundary and layers are still
+  replaced whole: a plugin can't know what changed without reading the
+  text. If that ever shows up in profiles, the next step is API: the
+  changed line range in `on-document-change` and line-range layer
+  updates.
 
 ## Guidelines for agents (lessons from earlier work)
+
+- `cargo test -p helix-term --features integration` relinks
+  `target/debug/pure` with the in-memory test terminal: run by hand, it
+  draws nothing. Before checking the real editor (tmux, pty scripts),
+  `touch helix-term/src/main.rs && cargo build`.
 
 - **Push often.** An earlier agent built M1.1–M1.3 and lost all of it
   because it was never pushed before its session ended. Commit and push
   every finished task to your branch.
-- **API versions:** 0.1 and 0.2 are frozen (never edit a released WIT);
-  new functions go in a new version. Add new *exports* in separate interfaces (like `callbacks`
-  and `events`): the SDK's `register_plugin!` implements `plugin` for both
-  API versions, so changing `plugin` breaks the 0.1 ABI.
+- **API versions:** 0.1 and 0.2 are frozen; 0.3 is frozen for exports
+  and 0.4 is current. A released version may gain host functions
+  (imports), never exports: components lacking an export fail to load. New
+  exports mean a new version, with the old one's fixtures frozen in
+  `tests/fixtures/` and its adapters shared via `api/world.rs`. Add new
+  *exports* in separate interfaces (like `callbacks` and `events`): the
+  SDK's `register_plugin!` implements `plugin` for all versions, so
+  changing `plugin` breaks the 0.1 ABI.
 - **Fixtures:** after changing the WIT, the SDK or a guest, run
   `helix-plugin/build-plugins.sh` and commit the `.wasm` files. A stale
   fixture fails at load time with "a matching implementation was not found

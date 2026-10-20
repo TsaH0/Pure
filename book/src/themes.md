@@ -336,6 +336,9 @@ These scopes are used for theming the editor interface:
 | `ui.bufferline.background`        | Style for bufferline background                                                                |
 | `ui.popup`                        | Documentation popups (e.g. Space + k)                                                          |
 | `ui.popup.info`                   | Prompt for multiple key options                                                                |
+| `ui.cmdline.popup`                | The popup command line (`editor.cmdline.style = "popup"`), falls back to `ui.popup`            |
+| `ui.cmdline.border`               | Its border, falls back to `ui.window`                                                          |
+| `ui.cmdline.title`                | Its title, falls back to `ui.text.focus`                                                       |
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
 | `ui.picker.header.column`         | Column names in pickers with multiple columns                                                  |
 | `ui.picker.header.column.active`  | The column name in pickers with multiple columns where the cursor is entering into.            |

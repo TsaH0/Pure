@@ -869,7 +869,7 @@ fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, temp
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -1459,7 +1459,7 @@ async fn plugins_decorate_documents() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Result<()> {
     let file = tempfile::Builder::new().suffix(".md").tempfile()?;
-    std::fs::write(file.path(), "# Title\n- item\n")?;
+    std::fs::write(file.path(), "# Title\n- item\n```\ncode\n```\n")?;
     let mut app = AppBuilder::new()
         .with_file(file.path(), None)
         .build()
@@ -1480,6 +1480,102 @@ async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Resu
     assert!(!decorations.is_empty());
     // The editor hides the rendering on the cursor's line: no cursor events.
     assert!(decorations.wants_cursor_line());
+    // Code blocks get full-line backgrounds.
+    let doc = helix_view::doc!(app.editor);
+    let lines: Vec<_> = decorations
+        .line_backgrounds(doc.text().slice(..), &app.editor.theme, 0..10, None)
+        .into_keys()
+        .collect();
+    assert_eq!(lines, [2, 3, 4]);
+    Ok(())
+}
+
+/// Line `line` of the focused document as drawn: with the view's
+/// annotations (conceals, overlays, virtual text) applied.
+fn shown_line(app: &Application, line: usize) -> String {
+    use helix_core::doc_formatter::{DocumentFormatter, TextFormat};
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let annotations = view.text_annotations(doc, Some(&app.editor.theme));
+    let text = doc.text().slice(..);
+    let start = text.line_to_char(line);
+    let format = TextFormat {
+        viewport_width: 200,
+        ..TextFormat::default()
+    };
+    let mut shown = String::new();
+    for grapheme in DocumentFormatter::new_at_prev_checkpoint(text, &format, &annotations, start) {
+        if grapheme.line_idx != line || grapheme.raw == helix_core::graphemes::Grapheme::Newline {
+            break;
+        }
+        shown.push_str(&grapheme.raw.to_string());
+    }
+    shown
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn markdown_example_conceals_markup_like_render_markdown() -> anyhow::Result<()> {
+    use helix_view::document::Mode;
+    let file = tempfile::Builder::new().suffix(".md").tempfile()?;
+    std::fs::write(
+        file.path(),
+        "a **b** `c`\nsee [docs](https://x.y/z) now\n- *it*\n",
+    )?;
+    let mut app = AppBuilder::new()
+        .with_file(file.path(), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("markdown");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/markdown").join(file),
+            plugin.join(file),
+        )?;
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, "ia<esc>u").await;
+    deliver_events(&mut app).await;
+    // What the renderer does each frame.
+    let set_mode = |app: &Application, mode| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .set_render_mode(mode)
+    };
+    set_mode(&app, Mode::Normal);
+
+    // The primary cursor's line is raw; the others are rendered.
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    assert_eq!(shown_line(&app, 1), "see docs now");
+    assert_eq!(shown_line(&app, 2), "• it");
+
+    // Moving the cursor moves the raw line; the plugin is not involved.
+    keys(&mut app, "j").await;
+    assert_eq!(shown_line(&app, 0), "a b c");
+    assert_eq!(shown_line(&app, 1), "see [docs](https://x.y/z) now");
+
+    // Other selections don't reveal their lines: `C` adds a selection on
+    // line 2 and makes it primary, so line 1 is rendered again.
+    keys(&mut app, "C").await;
+    assert_eq!(
+        helix_view::doc!(app.editor)
+            .selection(app.editor.tree.focus)
+            .len(),
+        2
+    );
+    assert_eq!(shown_line(&app, 1), "see docs now");
+    assert_eq!(shown_line(&app, 2), "- *it*");
+    keys(&mut app, ",").await;
+
+    // Nothing is rendered while inserting or selecting.
+    set_mode(&app, Mode::Insert);
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    assert_eq!(shown_line(&app, 2), "- *it*");
+    set_mode(&app, Mode::Select);
+    assert_eq!(shown_line(&app, 0), "a **b** `c`");
+    set_mode(&app, Mode::Normal);
+    assert_eq!(shown_line(&app, 0), "a b c");
+
     Ok(())
 }
 
@@ -1592,7 +1688,7 @@ fn app_with_v3_manifest(
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.3\"\npermissions = [{permissions}]\n{extra}"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n{extra}"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -1822,5 +1918,237 @@ async fn oil_example_edits_directories_as_buffers() -> anyhow::Result<()> {
     deliver_events(&mut app).await;
     let name = helix_view::doc!(app.editor).display_name().to_string();
     assert_eq!(name, format!("oil://{}/", work.display()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn directory_handler_opens_directories_with_a_plugin() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    let mut config = test_config();
+    config.editor.directory_handler = Some("oil/open".into());
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, &format!(":open {}<ret>", work.display())).await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    assert!(text(&app).contains(" a.txt"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    let (mut app, _dir) = app_with_v3_settings(&format!("{ALL}, \"filesystem\""), &settings);
+    let p = |name: &str| work.join(name).display().to_string();
+    let ops = format!(
+        "create:{} rename:{}:{} copy:{}:{} trash:{}",
+        p("a"),
+        p("a"),
+        p("b"),
+        p("b"),
+        p("c"),
+        p("c")
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/files {ops}<ret>"),
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+    assert_eq!(status, "files-done:ok;ok;ok;ok");
+    assert!(!work.join("a").exists());
+    assert!(work.join("b").is_file());
+    assert!(!work.join("c").exists(), "trashed, not left behind");
+
+    // A failure stops the rest; nothing after it happens.
+    app.editor.clear_status();
+    let ops = format!("rename:{}:{} delete:{}", p("missing"), p("x"), p("b"));
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/files {ops}<ret>"),
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+    assert!(
+        status.starts_with("files-done:err(Failed to move"),
+        "{status}"
+    );
+    assert!(
+        status.ends_with(";err(skipped after an earlier failure)"),
+        "{status}"
+    );
+    assert!(
+        work.join("b").is_file(),
+        "the delete after the failure didn't run"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oil_example_can_delete_to_the_trash() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("keep.txt"), "k")?;
+    std::fs::write(work.join("old.txt"), "o")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("keep.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\ntrash = true\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    let listing = text(&app);
+    let kept: String = listing
+        .lines()
+        .filter(|line| !line.ends_with(" old.txt"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    set_text(&mut app, &kept);
+    keys(&mut app, ":w<ret>").await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("oil:")).await;
+    assert!(status.contains("applied"), "{status}");
+    assert!(!work.join("old.txt").exists());
+    assert!(work.join("keep.txt").exists());
+    assert!(!helix_view::doc!(app.editor).is_modified());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::create_dir(work.join("src"))?;
+    std::fs::write(work.join("src/main.rs"), "fn main() {}\n")?;
+    std::fs::write(work.join("README.md"), "hi\n")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("README.md"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("tree");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/tree").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[tree]\nallow-files = \"read\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    // The tree shows the workspace (the repository, in tests).
+    keys(&mut app, ":tree/toggle<ret>").await;
+    let sidebar = app
+        .editor
+        .sidebar
+        .as_ref()
+        .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
+    assert_eq!(sidebar.owner, "tree");
+    assert!(sidebar.focused);
+    assert!(!sidebar.items.is_empty());
+
+    // The view got narrower to make room.
+    let view = helix_view::view!(app.editor);
+    assert!(view.area.x >= 12, "{:?}", view.area);
+
+    // Keys move the selection while the sidebar has them; esc gives them back.
+    let before = app.editor.sidebar.as_ref().unwrap().selected;
+    keys(&mut app, "k").await;
+    let after = app.editor.sidebar.as_ref().unwrap().selected;
+    assert_eq!(after, before.saturating_sub(1));
+    keys(&mut app, "<esc>").await;
+    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+
+    // Enter on a file opens it and gives the keys to the editor.
+    keys(&mut app, ":tree/focus<ret>").await;
+    let sidebar = app.editor.sidebar.as_mut().unwrap();
+    let (index, path) = sidebar
+        .items
+        .iter()
+        .enumerate()
+        .find_map(|(i, item)| match &item.command {
+            Some((command, args)) if command == "open" => Some((i, args[0].clone())),
+            _ => None,
+        })
+        .expect("a file in the tree");
+    sidebar.selected = index;
+    keys(&mut app, "<ret>").await;
+    assert_eq!(
+        helix_view::doc!(app.editor)
+            .path()
+            .map(|p| p.display().to_string()),
+        Some(path)
+    );
+    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+
+    keys(&mut app, ":tree/toggle<ret>").await;
+    assert!(app.editor.sidebar.is_none(), "toggled off");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_commands_that_start_programs_need_allow_process() -> anyhow::Result<()> {
+    // Without `allow-process = true`, `:sh` from a plugin is refused.
+    let (mut app, _dir) = app_with_plugins("#[a|]#", ALL, "");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo hi<ret>").await;
+    assert_error(&app, "allow-process = true");
+    // Ordinary commands still work.
+    keys(&mut app, ":plugin-run testplugin/run :echo fine<ret>").await;
+    assert_eq!(status(&app).0, "fine");
+
+    // A list of programs isn't enough: `:sh` runs anything.
+    let (mut app, _dir) =
+        app_with_plugins("#[a|]#", ALL, "[testplugin]\nallow-process = [\"echo\"]\n");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo hi<ret>").await;
+    assert_error(&app, "allow-process = true");
+
+    let (mut app, _dir) = app_with_plugins("#[a|]#", ALL, "[testplugin]\nallow-process = true\n");
+    keys(&mut app, ":plugin-run testplugin/run :sh echo granted<ret>").await;
+    deliver_events(&mut app).await;
+    // It ran (its output is in a popup), not refused.
+    assert!(app
+        .editor
+        .get_status()
+        .is_none_or(|(message, _)| !message.contains("allow-process")));
     Ok(())
 }

@@ -324,6 +324,10 @@ impl<'a> TextRenderer<'a> {
             return 0;
         }
         position.row -= self.offset.row;
+        if grapheme.width() == 0 {
+            // concealed text that is hidden entirely
+            return 0;
+        }
         let cut_off_start = self.offset.col.saturating_sub(position.col);
         let is_whitespace = grapheme.is_whitespace();
 

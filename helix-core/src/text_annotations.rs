@@ -79,6 +79,30 @@ impl Overlay {
     }
 }
 
+/// Hides the document text `start..end` (char indices, grapheme aligned).
+/// `replacement` is drawn instead: empty hides the text, otherwise it should
+/// be a single grapheme (`…`, `α`). The hidden range never spans a line
+/// break; the formatter stops at the first one.
+///
+/// The concealed text is still part of the document: positions inside it
+/// map to the replacement's cell (or the next visible cell when hidden).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conceal {
+    pub start: usize,
+    pub end: usize,
+    pub replacement: Tendril,
+}
+
+impl Conceal {
+    pub fn new(start: usize, end: usize, replacement: impl Into<Tendril>) -> Self {
+        Self {
+            start,
+            end,
+            replacement: replacement.into(),
+        }
+    }
+}
+
 /// Line annotations allow inserting virtual text lines between normal text
 /// lines.  These lines can be filled with text in the rendering code as their
 /// contents have no effect beyond visual appearance.
@@ -278,6 +302,7 @@ impl<T: ?Sized> Drop for RawBox<T> {
 pub struct TextAnnotations<'a> {
     inline_annotations: Vec<Layer<'a, InlineAnnotation, Option<Highlight>>>,
     overlays: Vec<Layer<'a, Overlay, Option<Highlight>>>,
+    conceals: Vec<Layer<'a, Conceal, Option<Highlight>>>,
     line_annotations: Vec<(Cell<usize>, RawBox<dyn LineAnnotation + 'a>)>,
 }
 
@@ -286,6 +311,7 @@ impl Debug for TextAnnotations<'_> {
         f.debug_struct("TextAnnotations")
             .field("inline_annotations", &self.inline_annotations)
             .field("overlays", &self.overlays)
+            .field("conceals", &self.conceals)
             .finish_non_exhaustive()
     }
 }
@@ -295,6 +321,7 @@ impl<'a> TextAnnotations<'a> {
     pub fn reset_pos(&self, char_idx: usize) {
         reset_pos(&self.inline_annotations, char_idx, |annot| annot.char_idx);
         reset_pos(&self.overlays, char_idx, |annot| annot.char_idx);
+        reset_pos(&self.conceals, char_idx, |annot| annot.start);
         for (next_anchor, layer) in &self.line_annotations {
             next_anchor.set(unsafe { layer.get().reset_pos(char_idx) });
         }
@@ -312,6 +339,40 @@ impl<'a> TextAnnotations<'a> {
             }
         }
 
+        OverlayHighlights::Heterogenous { highlights }
+    }
+
+    /// Highlights for conceal replacements in `char_range` (the whole hidden
+    /// range gets the layer's highlight; only the replacement is drawn).
+    /// Overlapping conceals from different layers are left out, matching
+    /// what the formatter shows.
+    pub fn collect_conceal_highlights(&self, char_range: Range<usize>) -> OverlayHighlights {
+        let mut highlights = Vec::new();
+        for layer in &self.conceals {
+            let Some(highlight) = layer.metadata else {
+                continue;
+            };
+            let first = layer
+                .annotations
+                .partition_point(|conceal| conceal.end <= char_range.start);
+            for conceal in &layer.annotations[first..] {
+                if conceal.start >= char_range.end {
+                    break;
+                }
+                if !conceal.replacement.is_empty() && conceal.start < conceal.end {
+                    highlights.push((highlight, conceal.start..conceal.end));
+                }
+            }
+        }
+        highlights.sort_by_key(|(_, range)| range.start);
+        let mut end = 0;
+        highlights.retain(|(_, range)| {
+            let keep = range.start >= end;
+            if keep {
+                end = range.end;
+            }
+            keep
+        });
         OverlayHighlights::Heterogenous { highlights }
     }
 
@@ -354,6 +415,28 @@ impl<'a> TextAnnotations<'a> {
         self
     }
 
+    /// Add concealed ranges (see [`Conceal`]).
+    ///
+    /// The conceals **must be sorted** by `start` and must not overlap within
+    /// a layer. Across layers the conceal that starts first wins; at the same
+    /// start the layer added first wins. The replacement is drawn with
+    /// `highlight` patched on top of the text's style.
+    pub fn add_conceals(
+        &mut self,
+        layer: &'a [Conceal],
+        highlight: Option<Highlight>,
+    ) -> &mut Self {
+        if !layer.is_empty() {
+            self.conceals.push((layer, highlight).into());
+        }
+        self
+    }
+
+    /// Whether any conceal layer is present.
+    pub fn has_conceals(&self) -> bool {
+        !self.conceals.is_empty()
+    }
+
     /// Add new annotation lines.
     ///
     /// The line annotations **must be sorted** by their `char_idx`.
@@ -388,6 +471,36 @@ impl<'a> TextAnnotations<'a> {
             }
         }
         overlay
+    }
+
+    /// The conceal starting at `char_idx`, if any. Conceals that start before
+    /// `char_idx` (hidden by an earlier conceal) are skipped.
+    pub(crate) fn conceal_at(&self, char_idx: usize) -> Option<&Conceal> {
+        let mut found = None;
+        for layer in &self.conceals {
+            let mut i = layer.current_index.get();
+            while layer
+                .annotations
+                .get(i)
+                .is_some_and(|conceal| conceal.start < char_idx)
+            {
+                i += 1;
+            }
+            if let Some(conceal) = layer.annotations.get(i) {
+                if conceal.start == char_idx && conceal.end > char_idx {
+                    i += 1;
+                    found = found.or(Some(conceal));
+                }
+            }
+            layer.current_index.set(i);
+        }
+        found
+    }
+
+    /// Moves inline annotations and overlays past text hidden by a conceal.
+    pub(crate) fn skip_concealed(&self, char_idx: usize) {
+        reset_pos(&self.inline_annotations, char_idx, |annot| annot.char_idx);
+        reset_pos(&self.overlays, char_idx, |annot| annot.char_idx);
     }
 
     pub(crate) fn process_virtual_text_anchors(&self, grapheme: &FormattedGrapheme) {

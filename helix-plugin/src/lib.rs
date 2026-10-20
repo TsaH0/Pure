@@ -31,12 +31,12 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 
-use api::{v0_1, v0_2, v0_3, Instance};
+use api::{v0_1, v0_2, v0_3, v0_4, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.3";
+pub const API_VERSION: &str = "0.4";
 
 pub type DocumentId = u32;
 
@@ -178,8 +178,15 @@ pub enum Decorations {
     Overlays(Vec<(usize, String, String)>),
     /// `(char position of the line start, one-char text, theme scope)`.
     Signs(Vec<(usize, String, String)>),
+    /// `(char position of the line start, theme scope)`.
+    LineBackgrounds(Vec<(usize, String)>),
+    /// `(char range within one line, replacement grapheme or empty, theme
+    /// scope)`, sorted, not overlapping.
+    Conceals(Vec<(std::ops::Range<usize>, String, String)>),
     /// Not a replacement: whether the layer is hidden on the cursor's line.
     RawOnCursorLine(bool),
+    /// Not a replacement: the modes the layer is drawn in (empty: all).
+    RenderModes(Vec<Mode>),
 }
 
 /// Most background tasks a plugin may have at once, and their default time
@@ -212,6 +219,40 @@ pub struct PluginDiagnostic {
     pub code: Option<String>,
     pub source: Option<String>,
 }
+
+/// One row of a plugin's sidebar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarItem {
+    pub text: String,
+    pub scope: String,
+    pub depth: u16,
+    pub command: Option<(String, Vec<String>)>,
+}
+
+/// Most items in a sidebar.
+pub const MAX_SIDEBAR_ITEMS: usize = 100_000;
+
+/// The sidebar as a plugin call sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarSnapshot {
+    pub owner: String,
+    pub selected: u32,
+    pub focused: bool,
+}
+
+/// A file operation of `files.apply` (API 0.4); paths are checked against
+/// the plugin's grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOp {
+    Create { path: String, directory: bool },
+    Rename { from: String, to: String },
+    Copy { from: String, to: String },
+    Delete(String),
+    Trash(String),
+}
+
+/// Most operations in one `files.apply`.
+pub const MAX_FILE_OPS: usize = 1000;
 
 /// A completion from a plugin. `replace_from` is a char offset, checked by
 /// the editor against the cursor.
@@ -265,6 +306,11 @@ fn default_wasm() -> PathBuf {
 }
 
 impl Manifest {
+    /// API 0.3 or later (plugin buffers, background tasks, popups ids, ...).
+    pub fn at_least_0_3(&self) -> bool {
+        matches!(self.api.as_str(), "0.3" | "0.4")
+    }
+
     pub fn parse(source: &str) -> anyhow::Result<Self> {
         let manifest: Manifest = toml::from_str(source)?;
         if !is_valid_name(&manifest.name) {
@@ -273,7 +319,7 @@ impl Manifest {
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4") {
             bail!(
                 "plugin '{}' needs plugin API {} but this Pure supports 0.1, 0.2 and 0.3",
                 manifest.name,
@@ -318,6 +364,8 @@ pub struct Snapshot {
     /// Register contents, only filled in when a plugin has the `registers`
     /// permission ([`PluginHost::wants_registers`]); no clipboard.
     pub registers: BTreeMap<char, Vec<String>>,
+    /// The sidebar, if one is shown.
+    pub sidebar: Option<SidebarSnapshot>,
 }
 
 impl Default for Snapshot {
@@ -330,6 +378,7 @@ impl Default for Snapshot {
             cwd: PathBuf::new(),
             config_dir: PathBuf::new(),
             registers: BTreeMap::new(),
+            sidebar: None,
         }
     }
 }
@@ -441,6 +490,21 @@ pub enum Action {
     },
     /// Mark a plugin's buffer as saved.
     MarkSaved(DocumentId),
+    /// Show or update `plugin`'s sidebar; `selected: None` keeps it.
+    ShowSidebar {
+        plugin: String,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u16,
+        selected: Option<usize>,
+    },
+    CloseSidebar {
+        plugin: String,
+    },
+    FocusSidebar {
+        plugin: String,
+        focused: bool,
+    },
     /// File operations through the editor (language servers and buffers
     /// follow). Paths are absolute and checked against the plugin's grant.
     CreatePath {
@@ -452,6 +516,13 @@ pub enum Action {
         to: PathBuf,
     },
     DeletePath(PathBuf),
+    /// Carry out `ops` (checked, absolute paths) in order, stopping at the
+    /// first failure, and deliver [`Callback::FilesDone`].
+    FileOps {
+        plugin: String,
+        id: u32,
+        ops: Vec<FileOp>,
+    },
     SetRegister {
         name: char,
         values: Vec<String>,
@@ -510,6 +581,7 @@ pub enum PendingKind {
     Background,
     Timer,
     Completion,
+    Files,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -550,6 +622,11 @@ pub enum Callback {
     Timer {
         id: u32,
     },
+    /// One result per operation of a `files.apply` (API 0.4).
+    FilesDone {
+        id: u32,
+        results: Vec<Result<(), String>>,
+    },
 }
 
 impl Callback {
@@ -565,6 +642,7 @@ impl Callback {
             Self::PopupClosed { id } => (*id, PendingKind::Popup),
             Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
             Self::Timer { id } => (*id, PendingKind::Timer),
+            Self::FilesDone { id, .. } => (*id, PendingKind::Files),
         }
     }
 
@@ -684,6 +762,7 @@ struct State {
     roots: Vec<PathBuf>,
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
+    starts_program: Option<fn(&str) -> bool>,
     /// The latest `log` lines, for `:plugin-log`.
     log: std::collections::VecDeque<String>,
 }
@@ -717,6 +796,7 @@ impl State {
             files: FileGrant::None,
             roots: Vec::new(),
             data_dir: None,
+            starts_program: None,
             log: Default::default(),
         }
     }
@@ -914,6 +994,16 @@ impl State {
         }
         if command.trim().is_empty() {
             return Err("empty command".into());
+        }
+        // A command can run any program (`:sh`): only with every program
+        // allowed.
+        if self.starts_program.is_some_and(|starts| starts(&command))
+            && self.process != ProcessGrant::Any
+        {
+            return Err(format!(
+                "'{}' runs programs: it needs allow-process = true in plugins.toml",
+                command.trim()
+            ));
         }
         self.actions.push(Action::RunCommand(command));
         Ok(())
@@ -1237,6 +1327,28 @@ impl State {
         Ok(())
     }
 
+    fn set_line_backgrounds(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        lines: Vec<(u32, String)>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, lines.len())?;
+        let text = &self.document(doc)?.text;
+        let count = text.len_lines();
+        let mut checked = Vec::with_capacity(lines.len());
+        for (line, scope) in lines {
+            if line as usize >= count {
+                return Err(format!(
+                    "invalid line {line} for a document of {count} lines"
+                ));
+            }
+            checked.push((text.line_to_char(line as usize), scope));
+        }
+        self.decorate(doc, layer, Decorations::LineBackgrounds(checked));
+        Ok(())
+    }
+
     fn run_background(&mut self, task: String, input: String) -> Result<u32, String> {
         if self.context == CallContext::Init {
             return Err("run-background can't be used from init".into());
@@ -1340,6 +1452,47 @@ impl State {
         }
     }
 
+    fn apply_files(&mut self, ops: Vec<FileOp>) -> Result<u32, String> {
+        if self.context == CallContext::Init {
+            return Err("files.apply can't be used from init".into());
+        }
+        if ops.len() > MAX_FILE_OPS {
+            return Err(format!("at most {MAX_FILE_OPS} file operations at once"));
+        }
+        let ops = ops
+            .into_iter()
+            .map(|op| {
+                let check = |path: &str| {
+                    self.writable(path)
+                        .map(|path| path.to_string_lossy().into_owned())
+                };
+                Ok(match op {
+                    FileOp::Create { path, directory } => FileOp::Create {
+                        path: check(&path)?,
+                        directory,
+                    },
+                    FileOp::Rename { from, to } => FileOp::Rename {
+                        from: check(&from)?,
+                        to: check(&to)?,
+                    },
+                    FileOp::Copy { from, to } => FileOp::Copy {
+                        from: check(&from)?,
+                        to: check(&to)?,
+                    },
+                    FileOp::Delete(path) => FileOp::Delete(check(&path)?),
+                    FileOp::Trash(path) => FileOp::Trash(check(&path)?),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let id = self.request(PendingKind::Files)?;
+        self.actions.push(Action::FileOps {
+            plugin: self.plugin.clone(),
+            id,
+            ops,
+        });
+        Ok(id)
+    }
+
     fn create_path(&mut self, path: String, directory: bool) -> Result<(), String> {
         let path = self.writable(&path)?;
         self.actions.push(Action::CreatePath { path, directory });
@@ -1370,6 +1523,67 @@ impl State {
             .filter(|root| root.is_dir())
             .map(|root| root.to_string_lossy().into_owned())
             .collect()
+    }
+
+    fn show_sidebar(
+        &mut self,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u32,
+        selected: Option<u32>,
+    ) -> Result<(), String> {
+        if self.context == CallContext::Init {
+            return Err("the sidebar can't be shown from init".into());
+        }
+        if items.len() > MAX_SIDEBAR_ITEMS {
+            return Err(format!(
+                "a sidebar can have at most {MAX_SIDEBAR_ITEMS} items"
+            ));
+        }
+        let one_line = |text: String| -> String {
+            text.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect()
+        };
+        let items = items
+            .into_iter()
+            .map(|item| SidebarItem {
+                text: one_line(item.text),
+                ..item
+            })
+            .collect();
+        let width = width.clamp(12, 80) as u16;
+        self.snapshot.sidebar = Some(SidebarSnapshot {
+            owner: self.plugin.clone(),
+            selected: selected.unwrap_or(0),
+            focused: false,
+        });
+        self.actions.push(Action::ShowSidebar {
+            plugin: self.plugin.clone(),
+            title: one_line(title),
+            items,
+            width,
+            selected: selected.map(|s| s as usize),
+        });
+        Ok(())
+    }
+
+    fn close_sidebar(&mut self) {
+        self.actions.push(Action::CloseSidebar {
+            plugin: self.plugin.clone(),
+        });
+    }
+
+    fn focus_sidebar(&mut self, focused: bool) {
+        self.actions.push(Action::FocusSidebar {
+            plugin: self.plugin.clone(),
+            focused,
+        });
+    }
+
+    fn sidebar_selected(&self) -> Option<u32> {
+        let sidebar = self.snapshot.sidebar.as_ref()?;
+        (sidebar.owner == self.plugin).then_some(sidebar.selected)
     }
 
     fn buffer_name(&self, doc: DocumentId) -> Option<String> {
@@ -1499,6 +1713,60 @@ impl State {
     ) -> Result<(), String> {
         self.need_layer(doc, &layer, 0)?;
         self.decorate(doc, layer, Decorations::RawOnCursorLine(raw));
+        Ok(())
+    }
+
+    fn set_conceals(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        conceals: Vec<(u32, u32, String, String)>,
+    ) -> Result<(), String> {
+        use helix_core::graphemes::{ensure_grapheme_boundary_next, ensure_grapheme_boundary_prev};
+        use helix_core::unicode::segmentation::UnicodeSegmentation;
+
+        let len = self.need_layer(doc, &layer, conceals.len())?;
+        let text = self.document(doc)?.text.slice(..);
+        let mut checked = Vec::with_capacity(conceals.len());
+        for (from, to, replacement, scope) in conceals {
+            let (from, to) = (from as usize, to as usize);
+            if from > to || to > len {
+                return Err(format!(
+                    "invalid range {from}..{to} for a document of {len} chars"
+                ));
+            }
+            // Whole graphemes, never past the end of the line.
+            let from = ensure_grapheme_boundary_prev(text, from);
+            let line = text.char_to_line(from);
+            let line_end = helix_core::line_ending::line_end_char_index(&text, line);
+            let to = ensure_grapheme_boundary_next(text, to).min(line_end);
+            if from >= to {
+                continue;
+            }
+            let replacement = replacement.graphemes(true).next().unwrap_or("").to_string();
+            checked.push((from..to, replacement, scope));
+        }
+        checked.sort_by_key(|(range, ..)| (range.start, range.end));
+        let mut end = 0;
+        checked.retain(|(range, ..)| {
+            let keep = range.start >= end;
+            if keep {
+                end = range.end;
+            }
+            keep
+        });
+        self.decorate(doc, layer, Decorations::Conceals(checked));
+        Ok(())
+    }
+
+    fn set_render_modes(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        modes: Vec<Mode>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, 0)?;
+        self.decorate(doc, layer, Decorations::RenderModes(modes));
         Ok(())
     }
 
@@ -1677,10 +1945,11 @@ fn spawn_worker(
     linker: Linker<State>,
     component: Component,
     ticker: Arc<Ticker>,
-    name: String,
+    manifest: &Manifest,
     memory: usize,
     limit: Duration,
 ) -> std::io::Result<std::sync::mpsc::Sender<BackgroundTask>> {
+    let (name, api) = (manifest.name.clone(), manifest.api.clone());
     let (sender, tasks) = std::sync::mpsc::channel::<BackgroundTask>();
     std::thread::Builder::new()
         .name(format!("plugin-{name}-background"))
@@ -1697,9 +1966,15 @@ fn spawn_worker(
                     store.set_epoch_deadline(ticks);
                     let busy = ticker.busy();
                     let started = runtime.run(limit, async {
-                        v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
-                            .await
-                            .map(|instance| Instance::V0_3(Box::new(instance)))
+                        if api == "0.3" {
+                            v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_3(Box::new(instance)))
+                        } else {
+                            v0_4::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_4(Box::new(instance)))
+                        }
                     });
                     drop(busy);
                     match started {
@@ -1849,6 +2124,9 @@ pub struct PluginHost {
     workspace: Option<PathBuf>,
     /// Plugins get `<data_root>/<name>` as their own directory.
     data_root: Option<PathBuf>,
+    /// Whether an editor command starts a program (see
+    /// [`PluginHost::set_program_check`]).
+    starts_program: Option<fn(&str) -> bool>,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
 }
@@ -1936,6 +2214,7 @@ impl PluginHost {
         v0_1::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_4::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
@@ -1948,6 +2227,7 @@ impl PluginHost {
             cache_dir,
             workspace: None,
             data_root: None,
+            starts_program: None,
             ticker,
             runtime,
         })
@@ -1990,6 +2270,13 @@ impl PluginHost {
     pub fn set_dirs(&mut self, workspace: Option<PathBuf>, data_root: Option<PathBuf>) {
         self.workspace = workspace;
         self.data_root = data_root;
+    }
+
+    /// Tell which editor commands start programs (`:sh`, `:pipe`, ...): a
+    /// plugin runs those (`run-command`) only with `allow-process = true`.
+    /// Applies to plugins loaded afterwards.
+    pub fn set_program_check(&mut self, starts_program: fn(&str) -> bool) {
+        self.starts_program = Some(starts_program);
     }
 
     /// The workspace plugins with `allow-files` were given (see `set_dirs`).
@@ -2178,6 +2465,7 @@ impl PluginHost {
                 .cloned()
                 .collect(),
             data_dir,
+            starts_program: self.starts_program,
             log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);
@@ -2199,6 +2487,9 @@ impl PluginHost {
                     "0.3" => v0_3::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
                         .map(|instance| Instance::V0_3(Box::new(instance))),
+                    "0.4" => v0_4::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(|instance| Instance::V0_4(Box::new(instance))),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -2312,10 +2603,12 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3") || plugin.disabled.is_some() {
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4")
+            || plugin.disabled.is_some()
+        {
             bail!("requests require an enabled API 0.2 or newer plugin");
         }
-        if kind == PendingKind::Popup && plugin.manifest.api != "0.3" {
+        if kind == PendingKind::Popup && !plugin.manifest.at_least_0_3() {
             bail!("popup requests require API 0.3");
         }
         plugin
@@ -2396,7 +2689,7 @@ impl PluginHost {
                 self.linker.clone(),
                 plugin.component.clone(),
                 plugin.ticker.clone(),
-                plugin.manifest.name.clone(),
+                &plugin.manifest,
                 memory,
                 limit,
             ) {
@@ -2504,7 +2797,7 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Option<anyhow::Result<Vec<Action>>> {
-        self.dispatch_if(plugin, event, snapshot, |p| p.manifest.api == "0.3")
+        self.dispatch_if(plugin, event, snapshot, |p| p.manifest.at_least_0_3())
     }
 
     fn dispatch_if(
@@ -2567,7 +2860,7 @@ impl PluginHost {
         let plugin = self
             .plugins
             .iter_mut()
-            .find(|p| p.name() == plugin && p.disabled.is_none() && p.manifest.api == "0.3")
+            .find(|p| p.name() == plugin && p.disabled.is_none() && p.manifest.at_least_0_3())
             .ok_or_else(|| anyhow!("the plugin owning this buffer isn't running"))?;
         plugin
             .call(

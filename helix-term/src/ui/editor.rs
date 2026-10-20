@@ -44,6 +44,8 @@ pub struct EditorView {
     spinners: ProgressSpinners,
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
+    /// Where a plugin's sidebar was drawn last, for mouse clicks.
+    sidebar_area: Option<Rect>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +69,7 @@ impl EditorView {
             completion: None,
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
+            sidebar_area: None,
         }
     }
 
@@ -91,8 +94,16 @@ impl EditorView {
 
         let view_offset = doc.view_offset(view.id);
 
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations.set_render_mode(editor.mode());
+        }
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
+
+        // Plugins' line backgrounds, under the cursor line and the text.
+        if let Some(backgrounds) = Self::plugin_line_backgrounds(doc, view, theme, inner) {
+            decorations.add_decoration(backgrounds);
+        }
 
         if is_focused && config.cursorline {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
@@ -160,6 +171,11 @@ impl EditorView {
                 cursor_line,
                 &mut overlays,
             );
+            if text_annotations.has_conceals() {
+                overlays.push(
+                    text_annotations.collect_conceal_highlights(text.line_to_char(first)..end),
+                );
+            }
         }
 
         if is_focused {
@@ -932,6 +948,36 @@ impl EditorView {
     }
 
     /// Apply the highlighting on the lines where a cursor is active
+    /// Plugins' whole-line backgrounds for the visible lines, filling the
+    /// text area of the view (not the gutter).
+    fn plugin_line_backgrounds(
+        doc: &Document,
+        view: &View,
+        theme: &Theme,
+        inner: Rect,
+    ) -> Option<impl Decoration> {
+        if doc.plugin_decorations.is_empty() {
+            return None;
+        }
+        let text = doc.text().slice(..);
+        let anchor = doc.view_offset(view.id).anchor.min(text.len_chars());
+        let first = text.char_to_line(anchor);
+        // Wrapped lines take more rows, never fewer: this covers the view.
+        let lines = first..first + inner.height as usize + 1;
+        let cursor_line = doc
+            .plugin_decorations
+            .wants_cursor_line()
+            .then(|| text.char_to_line(doc.selection(view.id).primary().cursor(text)));
+        let styles = doc
+            .plugin_decorations
+            .line_backgrounds(text, theme, lines, cursor_line);
+        (!styles.is_empty()).then_some(move |renderer: &mut TextRenderer, pos: LinePos| {
+            if let Some(style) = styles.get(&pos.doc_line) {
+                renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), *style);
+            }
+        })
+    }
+
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
         // TODO only highlight the visual line that contains the cursor instead of the full visual line
@@ -1587,6 +1633,16 @@ impl Component for EditorView {
                 cx.editor.reset_idle_timer();
                 canonicalize_key(&mut key);
 
+                // A focused sidebar takes its keys.
+                if cx.editor.sidebar.as_ref().is_some_and(|s| s.focused)
+                    && self.pseudo_pending.is_empty()
+                {
+                    let rows = self.sidebar_area.map_or(0, |a| a.height as usize);
+                    if crate::ui::sidebar::handle_key(cx.editor, cx.jobs, key, rows) {
+                        return EventResult::Consumed(None);
+                    }
+                }
+
                 // clear status
                 cx.editor.status_msg = None;
 
@@ -1688,7 +1744,20 @@ impl Component for EditorView {
                 EventResult::Consumed(callback)
             }
 
-            Event::Mouse(event) => self.handle_mouse_event(event, &mut cx),
+            Event::Mouse(event) => {
+                if let Some(area) = self.sidebar_area {
+                    if crate::ui::sidebar::handle_mouse(cx.editor, cx.jobs, event, area) {
+                        return EventResult::Consumed(None);
+                    }
+                }
+                // A click elsewhere gives the editor its keys back.
+                if matches!(event.kind, MouseEventKind::Down(_)) {
+                    if let Some(sidebar) = cx.editor.sidebar.as_mut() {
+                        sidebar.focused = false;
+                    }
+                }
+                self.handle_mouse_event(event, &mut cx)
+            }
             Event::IdleTimeout => self.handle_idle_timeout(&mut cx),
             Event::FocusGained => {
                 self.terminal_focused = true;
@@ -1731,6 +1800,13 @@ impl Component for EditorView {
             editor_area = editor_area.clip_top(1);
         }
 
+        // A plugin's sidebar takes columns on the left.
+        let sidebar_area = crate::ui::sidebar::area(cx.editor, editor_area);
+        if let Some(sidebar) = sidebar_area {
+            editor_area = editor_area.clip_left(sidebar.width);
+        }
+        self.sidebar_area = sidebar_area;
+
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
 
@@ -1741,6 +1817,10 @@ impl Component for EditorView {
         for (view, is_focused) in cx.editor.tree.views() {
             let doc = cx.editor.document(view.doc).unwrap();
             self.render_view(cx.editor, doc, view, area, surface, is_focused);
+        }
+
+        if let Some(area) = sidebar_area {
+            crate::ui::sidebar::render(cx.editor, area, surface);
         }
 
         if let Some(area) = Self::splash_area(cx.editor) {

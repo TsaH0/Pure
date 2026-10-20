@@ -49,6 +49,7 @@
 | `preview-completion-insert` | Whether to apply completion item instantly when selected | `true` |
 | `completion-trigger-len` | The min-length of word under cursor to trigger autocompletion | `2` |
 | `completion-replace` | Whether to make completions always replace the entire word and not just the part before the cursor | `false` |
+| `directory-handler` | A plugin command that opens directories passed on the command line or to `:open` (it gets the directory as its argument), e.g. `"oil/open"`. Without it, or if it fails, the file picker opens | unset |
 | `auto-info` | Whether to display info boxes | `true` |
 | `true-color` | Whether to override automatic detection of terminal truecolor support in the event of a false negative | `false` |
 | `undercurl` | Whether to override automatic detection of terminal undercurl support in the event of a false negative | `false` |
@@ -72,6 +73,27 @@
 | `kitty-keyboard-protocol` | Whether to enable Kitty Keyboard Protocol. Can be `enabled`, `disabled` or `auto` | `"auto"` |
 
 [^3]: In most cases, you also need to enable the `auto-format` setting under `languages.toml`. You can find the reasoning [here](https://github.com/helix-editor/helix/discussions/9043#discussioncomment-7811497).
+
+### `[editor.cmdline]` Section
+
+How the command line (`:`) and other prompts (search, prompts of commands
+and plugins) look.
+
+| Key | Description | Default |
+| --- | --- | --- |
+| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim | `"bottom"` |
+| `popup-width` | Width of the popup in percent of the screen | `70` |
+| `popup-rows` | Most completions the popup lists | `15` |
+| `descriptions` | In the popup, show each command's category, what it does and its aliases (plugin commands too) | `true` |
+
+```toml
+[editor.cmdline]
+style = "popup"
+```
+
+Its colors come from `ui.cmdline.popup`, `ui.cmdline.border` and
+`ui.cmdline.title` (falling back to `ui.popup`, `ui.window` and
+`ui.text.focus`), and the selected row from `ui.menu.selected`.
 
 ### `[editor.clipboard-provider]` Section
 

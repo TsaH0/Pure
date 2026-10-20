@@ -25,7 +25,11 @@
 //! Build with `cargo build --release --target wasm32-wasip2` and put the
 //! resulting `.wasm` next to a `plugin.toml` in `~/.config/helix/plugins/<name>/`.
 
-#[cfg(all(feature = "api-v0-1", feature = "api-v0-2"))]
+#[cfg(any(
+    all(feature = "api-v0-1", feature = "api-v0-2"),
+    all(feature = "api-v0-1", feature = "api-v0-3"),
+    all(feature = "api-v0-2", feature = "api-v0-3"),
+))]
 compile_error!("select only one legacy plugin ABI feature");
 
 #[cfg(feature = "api-v0-1")]
@@ -52,11 +56,23 @@ pub mod bindings {
     });
 }
 
-#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
+#[cfg(all(not(any(feature = "api-v0-1", feature = "api-v0-2")), feature = "api-v0-3"))]
 #[doc(hidden)]
 pub mod bindings {
     wit_bindgen::generate!({
         path: "../wit/v0.3",
+        world: "helix-plugin",
+        pub_export_macro: true,
+        export_macro_name: "__export_helix_plugin",
+        default_bindings_module: "helix_plugin_api::bindings",
+    });
+}
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+#[doc(hidden)]
+pub mod bindings {
+    wit_bindgen::generate!({
+        path: "../wit/v0.4",
         world: "helix-plugin",
         pub_export_macro: true,
         export_macro_name: "__export_helix_plugin",
@@ -113,6 +129,25 @@ pub mod decorations {
         annotation(position, text, scope)
     }
 
+    /// A background for a whole 0-based line, to the window's edge.
+    pub fn line_background(line: u32, scope: &str) -> LineBackground {
+        LineBackground {
+            line,
+            scope: scope.into(),
+        }
+    }
+
+    /// Hide chars `from..to` (within one line), drawing `replacement`
+    /// instead: empty, or one grapheme such as `…`.
+    pub fn conceal(from: u32, to: u32, replacement: &str, scope: &str) -> Conceal {
+        Conceal {
+            from,
+            to,
+            replacement: replacement.into(),
+            scope: scope.into(),
+        }
+    }
+
     /// A one-character sign on a 0-based line.
     pub fn sign(line: u32, text: impl Into<String>, scope: &str) -> Sign {
         Sign {
@@ -144,9 +179,42 @@ pub mod diagnostics {
 
 /// File operations through the editor (API 0.3): open buffers and language
 /// servers follow renames. Needs `filesystem` and `allow-files = "write"`.
+/// API 0.3 has `create_path`, `rename_path` and `delete_path`, carried out
+/// after the call; API 0.4 has [`files::apply`] with results.
 #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
 pub mod files {
+    #[cfg(feature = "api-v0-3")]
     pub use crate::bindings::helix::plugin::files::*;
+    #[cfg(not(feature = "api-v0-3"))]
+    pub use crate::bindings::helix::plugin::files::{roots, CreateOp, FileOp, MoveOp};
+    #[cfg(not(feature = "api-v0-3"))]
+    pub use crate::requests::apply_files as apply;
+}
+
+/// A sidebar left of the editor (API 0.4): a file tree, an outline...
+/// Items run the plugin's commands on enter.
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+pub mod sidebar {
+    pub use crate::bindings::helix::plugin::sidebar::*;
+
+    /// An item showing `text` in theme `scope` (empty: plain), indented by
+    /// `depth`.
+    pub fn item(text: impl Into<String>, scope: &str, depth: u32) -> SidebarItem {
+        SidebarItem {
+            text: text.into(),
+            scope: scope.into(),
+            depth,
+            command: None,
+            args: Vec::new(),
+        }
+    }
+
+    /// Run the plugin's `command` with `args` when the item is chosen.
+    pub fn on_enter(mut item: SidebarItem, command: &str, args: Vec<String>) -> SidebarItem {
+        item.command = Some(command.into());
+        item.args = args;
+        item
+    }
 }
 
 /// Completion sources (API 0.3): subscribe to `EventKind::Completion`,
@@ -368,6 +436,7 @@ macro_rules! __export_callbacks {
             fn on_timer(id: $crate::RequestId) {
                 $crate::requests::timer_fired(id)
             }
+            $crate::__files_done!();
         }
         impl $crate::bindings::exports::helix::plugin::background::Guest for $export {
             fn run(task: String, input: String) -> Result<String, String> {
@@ -422,3 +491,22 @@ pub fn __run_command(f: impl FnOnce() -> Result<(), String>) -> Result<(), Strin
         requests::run_command(f)
     }
 }
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __files_done {
+    () => {
+        fn on_files_done(id: $crate::RequestId, results: Vec<Result<(), String>>) {
+            $crate::requests::files_done(id, results)
+        }
+    };
+}
+
+#[cfg(feature = "api-v0-3")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __files_done {
+    () => {};
+}
+

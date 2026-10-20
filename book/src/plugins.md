@@ -43,9 +43,10 @@ Ready-made examples are in
 | `emoji` | Completes `:name` to emoji in the completion menu |
 | `pomodoro` | A pomodoro timer in the statusline; `start`, `stop` |
 | `yank-history` | `list`: pick an earlier yank to paste |
+| `tree` | A file tree in a sidebar, like nvim-tree: `space B` shows it; `enter` opens files and folders |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
-| `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences); `toggle` |
+| `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
 ## Using plugins
 
@@ -72,10 +73,13 @@ e = ":oil/open"
 
 ## Decorations
 
-Plugins (API 0.3) can highlight text, add virtual text and set gutter signs
+Plugins (API 0.3 and later) can highlight text, add virtual text and set gutter signs
 and statusline text; the `todos` example does all four. They can also draw
-characters over the text, shown as plain text on the cursor's line while you
-edit it; the `markdown` example renders Markdown that way. Signs and
+characters over the text and hide markup (`**`, link URLs), shown as plain
+text on the cursor's line and while inserting or selecting, like
+render-markdown.nvim; the `markdown` example renders Markdown that way.
+Hidden text is still in the document: motions, search and edits see it.
+Signs and
 statusline text only show where you ask for them:
 
 ```toml
@@ -98,7 +102,9 @@ have; `:plugin-list` shows them. Turn a plugin's keys off with
 Besides commands, pickers, popups and prompts, plugins can show
 **diagnostics** (like a language server: gutter, `]d`, `space d`), be
 **completion sources** (items join the completion menu), run **timers**,
-open **scratch buffers** and buffers they own (`:w` goes to the plugin, as
+show a **sidebar** (a file tree, an outline: `j`/`k` and `enter`
+in it, `esc` back to the editor, `q` closes it), open **scratch buffers**
+and buffers they own (`:w` goes to the plugin, as
 in `oil`), use **registers**, and rename, create or delete files through
 the editor so open buffers follow. Inside a plugin's own buffer its
 `[keys.buffer]` bindings apply; nowhere else.
@@ -110,9 +116,18 @@ it like text and `:w`: change a name to rename, delete a line to delete,
 add a line to create (`name/` for a directory), cut and paste lines between
 directory buffers to move, copy and paste to copy. A list of the changes
 asks for confirmation first. In directory buffers `enter` opens, `-` goes
-up, `ctrl-p` previews, `g?` lists all keys. It needs
+up, `ctrl-p` previews, `g?` lists all keys. With `trash = true` in its
+`plugins.toml` table, deleted entries go to the system's trash. If a change
+fails, the buffer keeps your edits; fix it and `:w` again. It needs
 `allow-files = "write"` (and `allow-dirs` for directories outside the
-project).
+project). To have `pure some/dir` and `:open some/dir` open oil instead of
+the file picker:
+
+```toml
+# ~/.config/helix/config.toml
+[editor]
+directory-handler = "oil/open"
+```
 
 ## Settings and permissions
 
@@ -138,6 +153,9 @@ allow-dirs = ["~"]               # more directories than the workspace
 
 Plugins with the `registers` permission can read your registers (never the
 clipboard) and write them.
+
+A plugin that runs editor commands can only run those that start programs
+(`:sh`, `:pipe`, `!`, ...) with `allow-process = true`.
 
 A plugin that crashes, takes too long (2 s for a command) or uses too much
 memory (256 MiB) is disabled until `:plugin-reload`; the editor keeps

@@ -6,12 +6,44 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use helix_core::syntax::OverlayHighlights;
-use helix_core::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
+use helix_core::text_annotations::{Conceal, InlineAnnotation, Overlay, TextAnnotations};
 use helix_core::{Assoc, ChangeSet, RopeSlice};
 
+use crate::document::Mode;
+use crate::graphics::Style;
 use crate::Theme;
+
+fn mode_bit(mode: Mode) -> u8 {
+    match mode {
+        Mode::Normal => 1,
+        Mode::Select => 2,
+        Mode::Insert => 4,
+    }
+}
+
+/// The mode the document was last drawn in, for layers drawn only in some
+/// modes. Set by the renderer each frame; motions computed between frames
+/// see what is on screen.
+#[derive(Debug, Default)]
+struct RenderMode(AtomicU8);
+
+impl RenderMode {
+    fn get(&self) -> u8 {
+        match self.0.load(Ordering::Relaxed) {
+            0 => mode_bit(Mode::Normal),
+            bit => bit,
+        }
+    }
+}
+
+impl Clone for RenderMode {
+    fn clone(&self) -> Self {
+        Self(AtomicU8::new(self.0.load(Ordering::Relaxed)))
+    }
+}
 
 /// One layer's virtual text, grouped by scope (one style per group, which is
 /// what `TextAnnotations` takes).
@@ -39,9 +71,17 @@ pub struct PluginDecorations {
     overlays: BTreeMap<String, Vec<(String, Vec<Overlay>)>>,
     /// Sorted by position per layer.
     signs: BTreeMap<String, Vec<Sign>>,
+    /// Whole-line backgrounds: `(line start, theme scope)`, sorted per layer.
+    line_backgrounds: BTreeMap<String, Vec<(usize, String)>>,
+    /// Hidden text: `(scope, conceals sorted by start, not overlapping)`
+    /// per layer.
+    conceals: BTreeMap<String, Vec<(String, Vec<Conceal>)>>,
     /// Layers not drawn on the line with the view's cursor, so it shows the
     /// raw text (e.g. rendered Markdown).
     raw_on_cursor_line: std::collections::BTreeSet<String>,
+    /// Layers drawn only in some modes: a mask of [`mode_bit`]s.
+    render_modes: BTreeMap<String, u8>,
+    mode: RenderMode,
 }
 
 /// The part of `items` (sorted by `pos`) outside `skip`: before and after.
@@ -66,6 +106,21 @@ impl PluginDecorations {
             && self.annotations.is_empty()
             && self.overlays.is_empty()
             && self.signs.is_empty()
+            && self.line_backgrounds.is_empty()
+            && self.conceals.is_empty()
+    }
+
+    /// Whether `layer` is drawn in the current mode.
+    fn shown(&self, layer: &str) -> bool {
+        self.render_modes
+            .get(layer)
+            .is_none_or(|modes| modes & self.mode.get() != 0)
+    }
+
+    /// Record the mode the document is drawn in (for
+    /// [`set_render_modes`](Self::set_render_modes)).
+    pub fn set_render_mode(&self, mode: Mode) {
+        self.mode.0.store(mode_bit(mode), Ordering::Relaxed);
     }
 
     /// Replace `layer`'s highlights. Ranges past `len` are dropped, and later
@@ -156,6 +211,99 @@ impl PluginDecorations {
         }
     }
 
+    /// Replace `layer`'s line backgrounds: `(char position of the line
+    /// start, theme scope)`.
+    pub fn set_line_backgrounds(
+        &mut self,
+        layer: String,
+        mut lines: Vec<(usize, String)>,
+        len: usize,
+    ) {
+        lines.retain(|(pos, _)| *pos <= len);
+        lines.sort_by_key(|(pos, _)| *pos);
+        lines.dedup_by_key(|(pos, _)| *pos);
+        if lines.is_empty() {
+            self.line_backgrounds.remove(&layer);
+        } else {
+            self.line_backgrounds.insert(layer, lines);
+        }
+    }
+
+    /// The background style of each line in `lines` (first layer wins);
+    /// raw-on-cursor-line layers skip `cursor_line`.
+    pub fn line_backgrounds(
+        &self,
+        text: RopeSlice,
+        theme: &Theme,
+        lines: Range<usize>,
+        cursor_line: Option<usize>,
+    ) -> BTreeMap<usize, Style> {
+        let mut styles = BTreeMap::new();
+        if lines.start >= text.len_lines() {
+            return styles;
+        }
+        let from = text.line_to_char(lines.start);
+        let to = text.line_to_char(lines.end.min(text.len_lines()));
+        for (layer, backgrounds) in &self.line_backgrounds {
+            if !self.shown(layer) {
+                continue;
+            }
+            let raw = self.raw_on_cursor_line.contains(layer);
+            let first = backgrounds.partition_point(|(pos, _)| *pos < from);
+            for (pos, scope) in backgrounds[first..].iter().take_while(|(pos, _)| *pos < to) {
+                let line = text.char_to_line(*pos);
+                if raw && Some(line) == cursor_line {
+                    continue;
+                }
+                // Comma-separated scopes: the first the theme has.
+                if let Some(style) = scope.split(',').find_map(|s| theme.try_get(s.trim())) {
+                    styles.entry(line).or_insert(style);
+                }
+            }
+        }
+        styles
+    }
+
+    /// Replace `layer`'s conceals: `(char range, replacement, scope)`.
+    /// Ranges are expected within one line and grapheme aligned (the host
+    /// checks); later ranges overlapping earlier ones are dropped.
+    pub fn set_conceals(
+        &mut self,
+        layer: String,
+        mut conceals: Vec<(Range<usize>, String, String)>,
+        len: usize,
+    ) {
+        conceals.retain(|(range, ..)| range.start < range.end && range.end <= len);
+        conceals.sort_by_key(|(range, ..)| (range.start, range.end));
+        let mut end = 0;
+        let mut groups: BTreeMap<String, Vec<Conceal>> = BTreeMap::new();
+        for (range, replacement, scope) in conceals {
+            if range.start >= end {
+                end = range.end;
+                groups.entry(scope).or_default().push(Conceal::new(
+                    range.start,
+                    range.end,
+                    replacement,
+                ));
+            }
+        }
+        if groups.is_empty() {
+            self.conceals.remove(&layer);
+        } else {
+            self.conceals.insert(layer, groups.into_iter().collect());
+        }
+    }
+
+    /// The modes `layer` is drawn in; empty means all.
+    pub fn set_render_modes(&mut self, layer: String, modes: &[Mode]) {
+        let mask = modes.iter().fold(0, |mask, mode| mask | mode_bit(*mode));
+        if mask == 0 || mask == 7 {
+            self.render_modes.remove(&layer);
+        } else {
+            self.render_modes.insert(layer, mask);
+        }
+    }
+
     /// Replace `layer`'s gutter signs.
     pub fn set_signs(&mut self, layer: String, mut signs: Vec<Sign>, len: usize) {
         signs.retain(|sign| sign.pos <= len && !sign.text.is_empty());
@@ -185,8 +333,13 @@ impl PluginDecorations {
             .retain(|layer, _| !layer.starts_with(&prefix));
         self.overlays.retain(|layer, _| !layer.starts_with(&prefix));
         self.signs.retain(|layer, _| !layer.starts_with(&prefix));
+        self.line_backgrounds
+            .retain(|layer, _| !layer.starts_with(&prefix));
+        self.conceals.retain(|layer, _| !layer.starts_with(&prefix));
         self.raw_on_cursor_line
             .retain(|layer| !layer.starts_with(&prefix));
+        self.render_modes
+            .retain(|layer, _| !layer.starts_with(&prefix));
     }
 
     /// Follow an edit: `len` is the new text's length.
@@ -226,6 +379,25 @@ impl PluginDecorations {
                 });
             }
         }
+        for groups in self.conceals.values_mut() {
+            for (_, conceals) in groups.iter_mut() {
+                // Hidden text that is edited shows again until the plugin
+                // sets the layer anew.
+                conceals.retain_mut(|conceal| {
+                    let start = changes.map_pos(conceal.start, Assoc::After);
+                    let end = changes.map_pos(conceal.end, Assoc::Before);
+                    let kept = end > start && end - start == conceal.end - conceal.start;
+                    conceal.start = start;
+                    conceal.end = end;
+                    kept && end <= len
+                });
+            }
+            groups.retain(|(_, conceals)| !conceals.is_empty());
+        }
+        self.conceals.retain(|_, groups| !groups.is_empty());
+        for lines in self.line_backgrounds.values_mut() {
+            changes.update_positions(lines.iter_mut().map(|(pos, _)| (pos, Assoc::After)));
+        }
         for signs in self.signs.values_mut() {
             changes.update_positions(signs.iter_mut().map(|sign| (&mut sign.pos, Assoc::After)));
         }
@@ -241,6 +413,9 @@ impl PluginDecorations {
         overlays: &mut Vec<OverlayHighlights>,
     ) {
         for (layer, highlights) in &self.highlights {
+            if !self.shown(layer) {
+                continue;
+            }
             let skip = cursor_line
                 .clone()
                 .filter(|_| self.raw_on_cursor_line.contains(layer));
@@ -275,6 +450,9 @@ impl PluginDecorations {
                 .filter(|_| self.raw_on_cursor_line.contains(layer))
         };
         for (layer, groups) in &self.overlays {
+            if !self.shown(layer) {
+                continue;
+            }
             let skip = skip(layer);
             for (scope, overlays) in groups {
                 let style = theme.and_then(|theme| theme.find_highlight(scope));
@@ -283,7 +461,22 @@ impl PluginDecorations {
                 }
             }
         }
+        for (layer, groups) in &self.conceals {
+            if !self.shown(layer) {
+                continue;
+            }
+            let skip = skip(layer);
+            for (scope, conceals) in groups {
+                let style = theme.and_then(|theme| theme.find_highlight(scope));
+                for part in outside(conceals, &skip, |conceal| conceal.start) {
+                    text_annotations.add_conceals(part, style);
+                }
+            }
+        }
         for (layer, annotations) in &self.annotations {
+            if !self.shown(layer) {
+                continue;
+            }
             let skip = skip(layer);
             for (scope, annotations) in &annotations.groups {
                 let style = theme.and_then(|theme| theme.find_highlight(scope));
@@ -307,7 +500,10 @@ impl PluginDecorations {
     pub fn signs_by_line(&self, text: RopeSlice) -> BTreeMap<usize, (&str, &str)> {
         let mut by_line = BTreeMap::new();
         let len = text.len_chars();
-        for signs in self.signs.values() {
+        for (layer, signs) in &self.signs {
+            if !self.shown(layer) {
+                continue;
+            }
             for sign in signs {
                 let line = text.char_to_line(sign.pos.min(len));
                 by_line
@@ -429,5 +625,84 @@ mod test {
         assert!(decorations.wants_cursor_line());
         decorations.clear_plugin("md");
         assert!(!decorations.wants_cursor_line());
+    }
+
+    #[test]
+    fn line_backgrounds_follow_edits_and_skip_the_raw_cursor_line() {
+        let mut text = Rope::from("a\nb\nc\n");
+        let mut decorations = PluginDecorations::default();
+        let theme: Theme = toml::from_str(r#""ui.selection" = { bg = "red" }"#).unwrap();
+        decorations.set_line_backgrounds(
+            "md/blocks".into(),
+            vec![(2, "ui.selection".into()), (4, "ui.selection".into())],
+            text.len_chars(),
+        );
+        let lines = |d: &PluginDecorations, text: &Rope, cursor| {
+            d.line_backgrounds(text.slice(..), &theme, 0..10, cursor)
+                .into_keys()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&decorations, &text, None), [1, 2]);
+        // A new line above moves them down.
+        let transaction = Transaction::change(&text, [(0, 0, Some("x\n".into()))].into_iter());
+        transaction.apply(&mut text);
+        decorations.map(transaction.changes(), text.len_chars());
+        assert_eq!(lines(&decorations, &text, None), [2, 3]);
+        // Only the visible lines are looked at.
+        assert!(decorations
+            .line_backgrounds(text.slice(..), &theme, 3..4, None)
+            .contains_key(&3));
+        decorations.set_raw_on_cursor_line("md/blocks".into(), true);
+        assert_eq!(lines(&decorations, &text, Some(2)), [3]);
+    }
+
+    #[test]
+    fn conceals_follow_edits_and_render_modes() {
+        use helix_core::doc_formatter::{DocumentFormatter, TextFormat};
+        use helix_core::{Rope, Transaction};
+
+        let shown = |decorations: &PluginDecorations, text: &Rope, cursor_line| {
+            let mut annotations = TextAnnotations::default();
+            decorations.annotate(None, cursor_line, &mut annotations);
+            let format = TextFormat::default();
+            DocumentFormatter::new_at_prev_checkpoint(text.slice(..), &format, &annotations, 0)
+                .map(|g| g.raw.to_string())
+                .collect::<String>()
+        };
+        let mut text = Rope::from("a **b** c\n");
+        let mut decorations = PluginDecorations::default();
+        decorations.set_conceals(
+            "md/conceal".into(),
+            vec![
+                (2..4, String::new(), "markup.bold".into()),
+                (5..7, String::new(), "markup.bold".into()),
+                // overlapping: dropped
+                (3..6, "x".into(), "markup.bold".into()),
+            ],
+            text.len_chars(),
+        );
+        assert!(!decorations.is_empty());
+        assert_eq!(shown(&decorations, &text, None), "a b c  ");
+        decorations.set_raw_on_cursor_line("md/conceal".into(), true);
+        assert_eq!(shown(&decorations, &text, Some(0..9)), "a **b** c  ");
+
+        // Typing before a conceal moves it; typing inside one drops it.
+        let edit = Transaction::insert(&text, &helix_core::Selection::point(0), "z".into());
+        decorations.map(edit.changes(), text.len_chars() + 1);
+        edit.apply(&mut text);
+        assert_eq!(shown(&decorations, &text, None), "za b c  ");
+        let edit = Transaction::insert(&text, &helix_core::Selection::point(4), "y".into());
+        decorations.map(edit.changes(), text.len_chars() + 1);
+        edit.apply(&mut text);
+        assert_eq!(shown(&decorations, &text, None), "za *y*b c  ");
+
+        // Drawn in normal mode only.
+        decorations.set_render_modes("md/conceal".into(), &[Mode::Normal]);
+        decorations.set_render_mode(Mode::Insert);
+        assert_eq!(shown(&decorations, &text, None), "za *y*b** c  ");
+        decorations.set_render_mode(Mode::Normal);
+        assert_eq!(shown(&decorations, &text, None), "za *y*b c  ");
+        decorations.clear_plugin("md");
+        assert!(decorations.is_empty());
     }
 }

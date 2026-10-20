@@ -3,56 +3,36 @@
 Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 [`plugin-processes-and-pickers.md`](plugin-processes-and-pickers.md).
 
-## Status
+## Status (2026-10-20)
 
-- Done: M0 (API 0.2 groundwork), M1 (processes and the terminal), M2
-  (pickers, including live pickers), M3.1–M3.2 (popups, prompts), M4 (file
-  access, workspace info), M6.1 (save, close and selection events).
-- Also done: M3.3 (`:plugin-log`), M9.1 (property tests), M9.2
-  (benchmarks).
-- Done: review-fix regression coverage and M11, including query generations
-  in the API 0.3 host/editor.
-- Done: M10 (API 0.3), including default SDK, finder migration, the guide,
-  frozen 0.2 compatibility fixtures and the kept API trial example.
-  Five follow-up findings remain in Future TODOs.
-- Needs the owner's design review first: M5, M6.2, M6.3, M7, M8 and the APIs
-  for file-manager style plugins.
+- Done: M0–M12. API 0.1 and 0.2 are frozen (compatibility fixtures in
+  `helix-plugin/tests/fixtures`); API 0.3 is the current one.
+- Still open: the Future TODOs in the roadmap (one item is blocked
+  upstream). Conceal is done (render-markdown.nvim's behaviour, the owner's
+  choice).
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
   `helix-plugin/examples/` (`text-tools`, `finder`, `api-demo`, `todos`,
   `markdown`, `js-upper`, `oil`, `lint`, `emoji`, `pomodoro`,
   `yank-history`). The `yazi` example was removed at the owner's request
   (2026-10-20) and replaced by `oil`.
-- Done: M12, more kinds of plugins (linters, completion sources, timers,
-  plugin buffers, registers, file operations); see the roadmap for what
-  still isn't possible.
+- Sections below are a log, oldest first after this one; numbers in them
+  are from the day they were measured.
 
 ## Open questions for the owner
 
 - ~~Per-program prompt~~: decided no; `allow-process` is the only gate.
-- Should a plugin's `run-command` (API 0.1's `run-commands` permission, which
-  can run `:sh`, `:write`, ...) also need the `process` grant? Unchanged for
-  now.
-
-- **M5 decorations proposal:** plugin-owned ids and per-document ranges for
-  highlights and virtual text; opt-in gutter/statusline entries. Reuse the
-  existing annotation renderer and invalidate only when a plugin changes its
-  data. Owner review should settle lifetimes, priority and theme scopes first.
-- **M6 bindings/commands proposal:** optional manifest defaults merged below
-  user bindings, with an explicit per-plugin disable switch; command aliases
-  resolve through the existing command dispatcher. Review naming and conflict
-  handling before implementing either feature; preserve existing bindings.
-- **M7 background work proposal:** explicit opt-in jobs receive immutable input
-  and return bounded results through callbacks, with cancellation on reload.
-  Research WASI 0.3 separately against the pinned Rust/Wasmtime versions;
-  host async execution for time limits does not require a new guest ABI.
-- **M8 distribution proposal:** stage downloads, display requested grants,
-  verify a pinned commit and component digest, then enable explicitly. Review
-  update trust and rollback rules before adding install/update/remove commands.
-- **File-manager API proposal:** compare an editable scratch buffer with
-  plugin-owned views. A scratch buffer can reuse editing and save hooks;
-  persistent views require a larger rendering and focus API. Agree on the
-  interaction model and upstream diff budget before implementation.
+- ~~Should a plugin's `run-command` that starts a program also need the
+  `allow-process` grant?~~ Done: commands that start programs (`:sh`,
+  `:pipe`, `:pipe-to`, `:insert-output`, `:append-output`,
+  `:run-interactive`, `:run-and-wait`/`!`, `:compile`, `:grep` and the
+  matching static commands; aliases resolve) need `allow-process = true`
+  (a list of programs isn't enough). The editor tells the host which
+  commands those are (`PluginHost::set_program_check`,
+  `plugins::starts_program`).
+- The M5–M8 and file-manager proposals that were here were reviewed and
+  implemented (M5 decorations, M6 bindings and commands, M7 background
+  tasks, M8 distribution, M12 plugin buffers and file operations).
 
 ## Review-fix regression coverage
 
@@ -595,7 +575,7 @@ edits and dropped with their char).
 | Code blocks with the language | Yes (fence rule, label, block highlight) |
 | Raw text on the cursor line (anti-conceal) | Yes (`set-raw-on-cursor-line`: the editor follows the cursor, no events) |
 | Toggle | Yes (`markdown/toggle`, `space M`) |
-| Hiding `**`, backticks, link URLs (conceal) | **No**: Helix can't draw fewer chars than there are |
+| Hiding `**`, backticks, link URLs (conceal) | **No** at the time; done later (see "Conceal" below) |
 | Heading backgrounds across the whole window | Partly: highlight covers the text only |
 
 Gaps that would need editor work: conceal (a new kind of text annotation in
@@ -672,4 +652,79 @@ Design notes:
   (`*_example_*`), editor tests for diagnostics, timers, plugin buffers,
   buffer keys, completion and the oil workflow
   (`oil_example_edits_directories_as_buffers`).
+
+
+## Overhead with 10 plugins vs vanilla (2026-10-20, after M12, API 0.4, sidebar)
+
+Same harness (`docs/bench/vs-helix.py`), release builds, alternating runs.
+"10 plugins": oil, tree, markdown, todos, lint, emoji, finder, text-tools,
+yank-history and pomodoro, with their grants.
+
+| Median | Vanilla | Pure, none | Pure, 10 plugins |
+| --- | --- | --- | --- |
+| big.rs: startup | 435 ms | 444 ms | 451 ms |
+| big.rs: CPU, start then quit | 362 ms | 377 ms | 421 ms |
+| big.rs: CPU, editing session | 24.0 s | 26.7 s* | 23.9 s |
+| big.md: startup | 133 ms | 132 ms | 133 ms |
+| big.md: CPU, start then quit | 60 ms | 57 ms | 114 ms |
+| big.md: CPU, editing session | 760 ms | 784 ms | 1519 ms |
+| Idle 5 s, both files | 0 wake-ups | 0 wake-ups | 0 wake-ups |
+| Peak memory, big.rs | 36.2 MiB | 41.4 MiB | 63.8 MiB |
+
+\* The big.rs editing runs varied ±10 % on this machine (vanilla 22.0–24.9 s,
+Pure 23.7–28.9 s, Pure with plugins 23.0–25.2 s): within noise.
+
+- Startup to the first frame and idle are unchanged with any number of
+  plugins: plugins load after the first frame and nothing runs while idle.
+- With 10 plugins, starting costs ~50 ms more CPU (instantiating 10
+  components, after the first frame). The first run after installing them
+  also compiles them once (up to ~2.5 s of background CPU, then cached).
+- Editing the 6,700-line Markdown file costs what the plugins asked for:
+  markdown re-renders the changed part, lint re-checks the document, todos
+  re-scans, emoji is asked for completions while typing. Together about
+  2.8 ms per edit, under one frame.
+- Memory without plugins: the heap is the same as before this work (19.6
+  MiB anonymous memory for both the previous and the current build); the
+  extra RSS is file-backed code pages of the larger binary (+3 MiB since
+  the previous build, shared and reclaimable, not allocations). Building
+  with `--no-default-features --features git` drops Wasmtime entirely.
+  With 10 plugins: +22 MiB (about 2 MiB per plugin instance).
+
+## Conceal (2026-10-20)
+
+The owner's decision on the open questions: "whatever render-markdown.nvim
+does". So:
+
+| Question | render-markdown.nvim | Pure |
+| --- | --- | --- |
+| Raw text: cursor line or cursor only? | the whole cursor line (`anti_conceal`) | the whole primary cursor line (`set-raw-on-cursor-line`) |
+| Lines with other selections raw too? | no (one cursor) | no: only the primary's line |
+| Insert mode? | not rendered (`render_modes = n, c, t`) | not rendered in insert or select (`set-render-modes [normal]`, per layer) |
+| Mouse click on hidden text? | hidden text has no cell | the same; a click on a replacement lands at the range's start |
+
+- `helix-core`: `text_annotations::Conceal` and `add_conceals`; the
+  formatter's `advance_grapheme` swallows a concealed range (never a line
+  break) into one grapheme drawn as the replacement (or nothing: width 0),
+  and moves inline annotations and overlays past it. Position mapping
+  (cursor, scrolling, mouse, soft wrap) goes through the formatter, so it
+  follows. Tests: rendering, positions, annotations inside hidden text, soft
+  wrap, `pos -> screen -> pos` round trips.
+- `helix-view`: a `conceals` layer in `PluginDecorations` (mapped through
+  edits; hidden text that is edited shows again), per-layer render modes,
+  and the mode the document was last drawn in (set by the renderer, so
+  motions between frames match the screen; per document, so parallel
+  editors in tests don't share it).
+- API: `decorations.set-conceals` and `set-render-modes` in 0.3 and 0.4
+  (imports only: frozen components still link). The host widens ranges to
+  whole graphemes, cuts them at the line's end, keeps one grapheme of the
+  replacement and drops overlaps.
+- `examples/markdown` hides `**`/`__`, `*`/`_`, `~~`, backticks and link
+  URLs (`[text](url)` shows `text`, `![alt](url)` shows `▣alt`), renders
+  only in normal mode, and keeps its incremental rendering (the property
+  test covers the new layers).
+- Checked in a terminal (pty + pyte): the cursor line is raw, the others
+  concealed; `i` shows everything raw; `esc` renders again.
+- No cost without plugins: an empty `PluginDecorations` is skipped as
+  before; the formatter checks an empty conceal list per document grapheme
+  (a loop over zero layers).
 

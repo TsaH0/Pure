@@ -1,6 +1,6 @@
 name = "emoji"
 version = "0.1.0"
-api = "0.3"
+api = "0.4"
 description = "Complete :name to emoji (a completion source)"
 permissions = ["read-buffers"]
 wasm = "plugin.wasm"

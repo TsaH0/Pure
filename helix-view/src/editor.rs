@@ -359,6 +359,12 @@ pub struct Config {
     /// Whether to instruct the LSP to replace the entire word when applying a completion
     /// or to only insert new text
     pub completion_replace: bool,
+    /// A plugin command (`plugin/command`) that opens directories given on
+    /// the command line or to `:open`, e.g. `oil/open`, instead of the file
+    /// picker. It gets the directory as its argument.
+    pub directory_handler: Option<String>,
+    /// How the command line (and other prompts) look.
+    pub cmdline: CmdlineConfig,
     /// `true` if helix should automatically add a line comment token if you're currently in a comment
     /// and press `enter`.
     pub continue_comments: bool,
@@ -1162,6 +1168,42 @@ pub enum PopupBorderConfig {
     Menu,
 }
 
+/// Where prompts (`:`, `/`, ...) are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CmdlineStyle {
+    /// On the last line, completions above it (Helix's).
+    #[default]
+    Bottom,
+    /// A box in the middle of the screen, completions in a list below the
+    /// input (like noice.nvim).
+    Popup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CmdlineConfig {
+    pub style: CmdlineStyle,
+    /// Width of the popup, in percent of the screen.
+    pub popup_width: u16,
+    /// Most completion rows the popup shows.
+    pub popup_rows: u16,
+    /// Show what commands do (and their category and aliases) next to the
+    /// completions, in the popup.
+    pub descriptions: bool,
+}
+
+impl Default for CmdlineConfig {
+    fn default() -> Self {
+        Self {
+            style: CmdlineStyle::Bottom,
+            popup_width: 70,
+            popup_rows: 15,
+            descriptions: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WordCompletion {
@@ -1227,6 +1269,8 @@ impl Default for Config {
             },
             text_width: 80,
             completion_replace: false,
+            directory_handler: None,
+            cmdline: CmdlineConfig::default(),
             continue_comments: true,
             workspace_lsp_roots: Vec::new(),
             default_line_ending: LineEndingConfig::default(),
@@ -1330,6 +1374,8 @@ pub struct Editor {
     /// Statusline text from plugins, by `plugin/segment` (the `plugins`
     /// statusline element).
     pub plugin_statusline: BTreeMap<String, String>,
+    /// A plugin's sidebar, left of the views (Pure).
+    pub sidebar: Option<crate::sidebar::Sidebar>,
 
     pub exit_code: i32,
 
@@ -1477,6 +1523,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             plugin_statusline: BTreeMap::new(),
+            sidebar: None,
             workspace_trust,
         }
     }

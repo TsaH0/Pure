@@ -1,0 +1,540 @@
+// The API between Helix and its WebAssembly plugins.
+//
+// Positions are char offsets into a document, like everywhere in Helix. Reads
+// see the editor's state at the time the editor called into the plugin plus
+// the plugin's own edits. Edits, selection changes, messages and commands are
+// applied by the editor after the plugin call returns, in the order they were
+// made; all edits a single call makes to a document form one undo step.
+
+package helix:plugin@0.4.0;
+
+interface types {
+  type request-id = u32;
+  enum open-action { replace, hsplit, vsplit }
+
+  type document-id = u32;
+
+  /// A selection range. `anchor` == `head` is a cursor.
+  record range {
+    anchor: u32,
+    head: u32,
+  }
+
+  /// Replace the text between char offsets `from` and `to` with `text`.
+  record edit {
+    %from: u32,
+    to: u32,
+    text: string,
+  }
+
+  enum mode {
+    normal,
+    insert,
+    select,
+  }
+
+  enum event-kind {
+    document-open,
+    document-change,
+    mode-switch,
+    /// After a document was written to disk (`events.on-document-save`).
+    document-save,
+    /// After a document was closed (`events.on-document-close`).
+    document-close,
+    /// After the selections changed, debounced (`events.on-selection-change`).
+    selection-change,
+    /// After a command ran from a key press (`events.on-post-command`).
+    post-command,
+    /// The terminal gained or lost focus (`events.on-focus-gained`/`-lost`).
+    focus-gained,
+    focus-lost,
+    /// The editor went idle after typing (`events.on-editor-idle`).
+    editor-idle,
+    /// The plugin is a completion source: the editor asks it for
+    /// completions while typing (`events.on-completion`).
+    completion,
+  }
+
+  record command-info {
+    /// Run with `:plugin-run <plugin>/<name>`.
+    name: string,
+    doc: string,
+  }
+
+  record registration {
+    commands: list<command-info>,
+    events: list<event-kind>,
+  }
+}
+
+/// Functions the editor provides. Functions returning `result` fail with a
+/// message when the plugin lacks the permission (see `plugin.toml`) or the
+/// arguments are invalid.
+interface host {
+  use types.{document-id, range, edit, mode, open-action};
+
+  /// The document in the focused view.
+  current-document: func() -> option<document-id>;
+  /// All open documents.
+  documents: func() -> list<document-id>;
+  current-mode: func() -> mode;
+
+  // Needs the `read-buffers` permission.
+  document-path: func(doc: document-id) -> result<option<string>, string>;
+  document-language: func(doc: document-id) -> result<option<string>, string>;
+  text: func(doc: document-id) -> result<string, string>;
+  text-range: func(doc: document-id, %from: u32, to: u32) -> result<string, string>;
+  /// Selections of the focused view on `doc` (or the first view showing it).
+  /// The first range is the primary selection.
+  selections: func(doc: document-id) -> result<list<range>, string>;
+
+  // Needs the `edit-buffers` permission.
+  /// Apply edits. They must not overlap; their offsets refer to the text
+  /// before this call.
+  apply-edits: func(doc: document-id, edits: list<edit>) -> result<_, string>;
+  set-selections: func(doc: document-id, ranges: list<range>) -> result<_, string>;
+
+  // Needs the `open-files` permission.
+  open-file: func(path: string) -> result<_, string>;
+  /// Open `path` in the current view or a split, with the cursor at `line`
+  /// and `column` (1-based; default 1).
+  open-file-at: func(path: string, action: open-action, line: option<u32>, column: option<u32>) -> result<_, string>;
+  /// Open a new scratch buffer (no file) holding `text`, highlighted as
+  /// `language` (e.g. `diff`). It becomes the current document: later calls
+  /// find it with `current-document`. For output, REPLs, file-manager-style
+  /// buffers.
+  open-scratch: func(text: string, language: option<string>, action: open-action) -> result<_, string>;
+  /// Open a buffer this plugin owns, shown as `name` (e.g. `oil://src/`).
+  /// `:write` on it calls `events.on-buffer-write` instead of writing a
+  /// file, and the plugin's `[keys.buffer]` bindings apply in it. If the
+  /// plugin already has a buffer with this name, that one is shown and
+  /// `text` is ignored. `events.on-document-open` follows (without
+  /// subscribing), so the plugin learns its id.
+  open-buffer: func(name: string, text: string, language: option<string>, action: open-action) -> result<_, string>;
+  /// The name of `doc` if this plugin owns it (`open-buffer`).
+  buffer-name: func(doc: document-id) -> option<string>;
+  /// Mark one of this plugin's buffers as saved (no unsaved changes), e.g.
+  /// once `on-buffer-write` applied it.
+  mark-saved: func(doc: document-id) -> result<_, string>;
+
+  // Needs the `registers` permission. The clipboard registers (`+`, `*`)
+  // can be written but not read.
+  /// The values of register `name` (one per selection), empty when unset.
+  register: func(name: char) -> result<list<string>, string>;
+  set-register: func(name: char, values: list<string>) -> result<_, string>;
+
+  // Needs the `run-commands` permission. Only available while running one of
+  // the plugin's commands, not in event handlers.
+  /// Run an editor command: a static command like `goto_line_end` or a typable
+  /// command line like `:write`.
+  run-command: func(command: string) -> result<_, string>;
+
+  set-status: func(message: string);
+  set-error: func(message: string);
+  /// Write to Helix's log file.
+  log: func(message: string);
+
+  /// The workspace the editor runs in (the directory with `.git`, `.helix`,
+  /// ... above the working directory), if any.
+  workspace-root: func() -> option<string>;
+  /// The editor's working directory.
+  cwd: func() -> string;
+  /// The editor's configuration directory (`~/.config/helix`).
+  config-dir: func() -> string;
+  /// A directory only this plugin uses, for its own files; readable and
+  /// writable through WASI (std::fs) as this path.
+  data-dir: func() -> string;
+  /// Needs `read-buffers`: whether `doc` has unsaved changes.
+  document-modified: func(doc: document-id) -> result<bool, string>;
+}
+
+/// Functions a plugin provides.
+interface plugin {
+  use types.{document-id, mode, registration};
+
+  /// Called once after loading with the plugin's settings from
+  /// `plugins.toml`, as a JSON object.
+  init: func(config: string) -> result<registration, string>;
+  run-command: func(name: string, args: list<string>) -> result<_, string>;
+
+  on-document-open: func(doc: document-id);
+  on-document-change: func(doc: document-id);
+  on-mode-switch: func(old: mode, new: mode);
+}
+
+/// Background programs and terminal hand-over. Requires a user process grant.
+interface process {
+  use types.{request-id};
+  record spawn-options {
+    cwd: option<string>,
+    stdin: option<string>,
+    timeout-ms: option<u32>,
+    /// Also deliver stdout as it arrives (`callbacks.on-process-output`,
+    /// whole lines including newlines, batched). The final on-process-done
+    /// contains only the unfinished stdout line and the full stderr.
+    /// The 16 MiB stdout cap counts delivered batches and the final tail.
+    %stream: bool,
+  }
+  record interactive-options {
+    cwd: option<string>,
+    chooser-file: bool,
+    wait-for-key: bool,
+  }
+  record output {
+    exit-code: option<s32>,
+    stdout: string,
+    stderr: string,
+  }
+  spawn: func(argv: list<string>, options: spawn-options) -> result<request-id, string>;
+  run-interactive: func(argv: list<string>, options: interactive-options) -> result<request-id, string>;
+  kill: func(id: request-id);
+}
+
+/// UI requests are available only from commands and callbacks.
+interface ui {
+  use types.{request-id, open-action};
+  variant preview {
+    file(tuple<string, option<tuple<u32, u32>>>),
+    text(string),
+  }
+  record item {
+    columns: list<string>,
+    data: string,
+    preview: option<preview>,
+  }
+  record picker {
+    title: string,
+    columns: list<string>,
+    items: list<item>,
+    initial: option<u32>,
+    /// Live picker: the editor reports what the user types with
+    /// `callbacks.on-picker-query` (debounced) instead of filtering the
+    /// items itself; the plugin answers with `set-items`.
+    live: bool,
+  }
+  variant picker-result {
+    accepted(tuple<list<u32>, open-action>),
+    cancelled,
+  }
+  show-picker: func(picker: picker) -> result<request-id, string>;
+  /// Live pickers require the generation supplied with on-picker-query;
+  /// stale batches are ignored. Use none for static pickers.
+  push-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
+  /// Replace an open picker's items, with the same generation rules.
+  set-items: func(id: request-id, generation: option<u64>, items: list<item>) -> result<_, string>;
+
+  record popup {
+    markdown: string,
+    /// In the middle of the screen instead of at the cursor.
+    centered: bool,
+  }
+  /// Show a popup until the next key press (or `close-popup`). When it
+  /// closes, `callbacks.on-popup-close` is called with its id.
+  show-popup: func(popup: popup) -> result<request-id, string>;
+  close-popup: func(id: request-id);
+
+  record prompt {
+    /// Shown before the input, e.g. "rename to:".
+    message: string,
+    /// The input to start with.
+    initial: string,
+    /// Offered as completions while typing (fuzzy matched).
+    completions: list<string>,
+  }
+  /// Ask for a line of text. The answer arrives in
+  /// `callbacks.on-prompt-done` (`none` if the user pressed Esc).
+  show-prompt: func(prompt: prompt) -> result<request-id, string>;
+}
+
+interface callbacks {
+  use types.{request-id};
+  use process.{output};
+  use ui.{picker-result};
+  on-process-done: func(id: request-id, %result: result<output, string>);
+  on-picker-done: func(id: request-id, %result: picker-result);
+  /// What the user typed in a live picker. Capture this generation when
+  /// starting background work and send it with every result batch.
+  on-picker-query: func(id: request-id, generation: u64, query: string);
+  /// Output of a program started with `stream`.
+  on-process-output: func(id: request-id, chunk: string);
+  on-popup-close: func(id: request-id);
+  on-prompt-done: func(id: request-id, answer: option<string>);
+  /// The result of `worker.run-background`.
+  on-background-done: func(id: request-id, %result: result<string, string>);
+  /// A timer from `timers.set-timer` went off.
+  on-timer: func(id: request-id);
+  /// The results of `files.apply`, one per operation, in order.
+  on-files-done: func(id: request-id, results: list<result<_, string>>);
+}
+
+/// Heavy computation without freezing the editor: `run-background` runs the
+/// plugin's `background.run` export in a second instance of the plugin, on
+/// another thread, with up to 30 s, and delivers what it returns to
+/// `callbacks.on-background-done`. The second instance has its own memory
+/// and no editor access (no documents, no actions, no programs, no files):
+/// pass it everything it needs in `input`.
+interface worker {
+  use types.{request-id};
+  /// From commands, callbacks and event handlers. At most 4 at once.
+  run-background: func(task: string, input: string) -> result<request-id, string>;
+}
+
+/// Implemented by the plugin; runs in the background instance.
+interface background {
+  run: func(task: string, input: string) -> result<string, string>;
+}
+
+/// Event handlers added in 0.2 (subscribe in `init`'s registration).
+interface events {
+  use types.{document-id, request-id};
+  on-document-save: func(doc: document-id);
+  /// The document is already closed: only its id is known.
+  on-document-close: func(doc: document-id);
+  on-selection-change: func(doc: document-id);
+  /// `command` is the command's name, e.g. `move_char_left`.
+  on-post-command: func(command: string);
+  on-focus-gained: func();
+  on-focus-lost: func();
+  on-editor-idle: func();
+  /// The editor wants completions at char `position` (the cursor) in `doc`.
+  /// Answer with `completion.complete(id, ...)`, now or later (e.g. after a
+  /// program finished); unanswered requests are dropped after a second or
+  /// when the next one starts. The editor filters the items by what was
+  /// typed.
+  on-completion: func(id: request-id, doc: document-id, position: u32);
+  /// `:write` on one of this plugin's buffers (`host.open-buffer`); called
+  /// without subscribing, as a command (prompts and pickers work). Call
+  /// `mark-saved` once it is applied.
+  on-buffer-write: func(doc: document-id);
+}
+
+/// How documents look: highlights, virtual text, gutter signs and the
+/// statusline. Each plugin's decorations are in layers it names; setting a
+/// layer replaces it, an empty list clears it. Positions are char offsets
+/// into the text the call sees, and follow the user's edits afterwards.
+/// Available from commands, callbacks and event handlers.
+interface decorations {
+  use types.{document-id, mode};
+
+  record highlight {
+    %from: u32,
+    to: u32,
+    /// A theme scope, e.g. `diff.plus`, `warning` or `ui.cursor.match`.
+    scope: string,
+  }
+  /// Overlapping highlights in one layer: the first (by position) wins.
+  set-highlights: func(doc: document-id, layer: string, highlights: list<highlight>) -> result<_, string>;
+
+  record annotation {
+    /// Shown before the char at this offset; the offset of a line's end
+    /// (its newline) puts it at the end of the line.
+    position: u32,
+    text: string,
+    scope: string,
+  }
+  set-annotations: func(doc: document-id, layer: string, annotations: list<annotation>) -> result<_, string>;
+
+  /// Draw `text` over the document from `position`: its first char over
+  /// the char at `position`, the next over the following one, and so on
+  /// (the text replaces what is shown, not what is there; use chars of the
+  /// same width). The `annotation` record is reused: `text` must not span a
+  /// line break.
+  set-overlays: func(doc: document-id, layer: string, overlays: list<annotation>) -> result<_, string>;
+
+  record sign {
+    /// 0-based line.
+    line: u32,
+    /// One character, shown in the `plugins` gutter (`editor.gutters`).
+    text: string,
+    scope: string,
+  }
+  set-signs: func(doc: document-id, layer: string, signs: list<sign>) -> result<_, string>;
+
+  record line-background {
+    /// 0-based line.
+    line: u32,
+    /// A theme scope whose background fills the line's text area to the
+    /// window's edge (wrapped rows too), e.g. `markup.raw.block`. Text,
+    /// selections and the cursor line draw over it. Several scopes separated
+    /// by commas: the first one the theme defines (themes differ a lot).
+    /// Added in 0.3.x.
+    scope: string,
+  }
+  set-line-backgrounds: func(doc: document-id, layer: string, lines: list<line-background>) -> result<_, string>;
+
+  /// Hide `layer` on the line holding the primary cursor, so the line shows
+  /// its plain text while being edited (the way render-markdown.nvim does).
+  /// The editor follows the cursor itself: the plugin needs no
+  /// selection-change events for this. Off by default.
+  set-raw-on-cursor-line: func(doc: document-id, layer: string, raw: bool) -> result<_, string>;
+
+  /// Text hidden from the screen (Markdown's `**`, a link's URL). The
+  /// text stays in the document: it is only not drawn. `from..to` must not
+  /// cross a line break (the editor stops there).
+  record conceal {
+    %from: u32,
+    to: u32,
+    /// Drawn instead: empty hides the text, otherwise one grapheme (`…`,
+    /// `α`); longer replacements are cut to their first grapheme.
+    replacement: string,
+    /// Style of the replacement.
+    scope: string,
+  }
+  /// Overlapping conceals in one layer: the first wins. Combine with
+  /// `set-raw-on-cursor-line` so the line being edited shows all its text.
+  set-conceals: func(doc: document-id, layer: string, conceals: list<conceal>) -> result<_, string>;
+
+  /// Draw `layer` only in these modes (all of them by default; an empty
+  /// list restores that). `[normal]` shows the raw text while inserting or
+  /// selecting, like render-markdown.nvim's `render_modes`.
+  set-render-modes: func(doc: document-id, layer: string, modes: list<mode>) -> result<_, string>;
+
+  /// Text for the `plugins` statusline element; empty removes the segment.
+  set-statusline: func(segment: string, text: string) -> result<_, string>;
+}
+
+/// Diagnostics, like a language server's: shown in the gutter and inline,
+/// by `]d` / `[d`, the diagnostics pickers and the statusline counts. For
+/// linters.
+interface diagnostics {
+  use types.{document-id};
+
+  enum severity { hint, info, warning, error }
+
+  record diagnostic {
+    /// Char offsets; `from` == `to` marks a point.
+    %from: u32,
+    to: u32,
+    severity: severity,
+    message: string,
+    code: option<string>,
+    /// Shown in pickers, e.g. `shellcheck`.
+    source: option<string>,
+  }
+
+  /// Replace this plugin's diagnostics on `doc`; an empty list clears them.
+  /// They follow edits until set again.
+  set-diagnostics: func(doc: document-id, diagnostics: list<diagnostic>) -> result<_, string>;
+}
+
+/// Change files through the editor, so open buffers and language servers
+/// follow (a renamed file keeps its buffer; servers can update imports).
+/// Needs the `filesystem` permission and `allow-files = "write"`; paths are
+/// absolute and inside `roots`.
+interface files {
+  use types.{request-id};
+
+  record create-op {
+    path: string,
+    /// A directory instead of an empty file.
+    directory: bool,
+  }
+  record move-op {
+    %from: string,
+    to: string,
+  }
+  variant file-op {
+    /// Missing parents are created.
+    create(create-op),
+    rename(move-op),
+    /// Directories with their contents; symlinks are copied as links.
+    copy(move-op),
+    /// Directories with their contents. Final: prefer `trash`.
+    delete(string),
+    /// Move to the system's trash (freedesktop trash, the macOS Trash or
+    /// the Windows recycle bin). Never deletes instead: if the trash can't
+    /// take it, the operation fails.
+    trash(string),
+  }
+
+  /// The workspace and the `allow-dirs` directories the user granted.
+  roots: func() -> list<string>;
+  /// Carry out `ops` in order, off the plugin's call, stopping at the first
+  /// failure. `callbacks.on-files-done` gets one result per operation;
+  /// those after a failure fail with "skipped". At most 1000 operations.
+  apply: func(ops: list<file-op>) -> result<request-id, string>;
+}
+
+/// Run code later: auto-save, polling, clocks, debouncing. Nothing runs
+/// while no timer is set.
+interface timers {
+  use types.{request-id};
+
+  /// Call `callbacks.on-timer` once, after `delay-ms` (at least 1).
+  /// Set another from there to repeat. At most 16 at once.
+  set-timer: func(delay-ms: u32) -> result<request-id, string>;
+  cancel-timer: func(id: request-id);
+}
+
+/// Answers to `events.on-completion`.
+interface completion {
+  use types.{request-id};
+
+  record completion-item {
+    /// Shown in the menu and matched against what was typed.
+    label: string,
+    /// Inserted instead of `label`.
+    insert: option<string>,
+    /// Shown next to the label, e.g. `snippet` or `emoji`.
+    kind: option<string>,
+    /// Markdown shown beside the menu.
+    documentation: option<string>,
+    /// Char offset where the replaced text starts (it ends at the cursor);
+    /// default: the start of the word before the cursor.
+    replace-from: option<u32>,
+  }
+
+  /// At most 1000 items; once per request.
+  complete: func(id: request-id, items: list<completion-item>) -> result<_, string>;
+}
+
+/// A sidebar on the left of the editor: a file tree, an outline, a list of
+/// tests... One is shown at a time; the plugin that showed it last owns it.
+/// When it has the keys, j/k (or the arrows, ctrl-d/ctrl-u, g/G) move,
+/// enter (or l, or a click) runs the selected item's command, esc or tab
+/// give the editor the keys back, and q closes it.
+interface sidebar {
+  record sidebar-item {
+    text: string,
+    /// A theme scope, e.g. `ui.text.directory`; empty for plain text.
+    scope: string,
+    /// Indentation (tree depth), two columns each.
+    depth: u32,
+    /// One of the plugin's commands, run with `args` on enter.
+    command: option<string>,
+    args: list<string>,
+  }
+  record sidebar-view {
+    title: string,
+    items: list<sidebar-item>,
+    /// Columns, 12 to 80 (at most half the window).
+    width: u32,
+    /// The item to select; none keeps the selection.
+    selected: option<u32>,
+  }
+  /// Show or update this plugin's sidebar. At most 100,000 items.
+  show: func(view: sidebar-view) -> result<_, string>;
+  /// Close this plugin's sidebar.
+  close: func();
+  /// Give the sidebar the keys (true) or give them back to the editor.
+  focus: func(focused: bool);
+  /// The selected item of this plugin's sidebar, if it is shown.
+  selected: func() -> option<u32>;
+}
+
+world helix-plugin {
+  import host;
+  import process;
+  import ui;
+  import decorations;
+  import worker;
+  import diagnostics;
+  import timers;
+  import completion;
+  import files;
+  import sidebar;
+  export plugin;
+  export callbacks;
+  export events;
+  export background;
+}
