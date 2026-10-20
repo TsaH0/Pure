@@ -163,6 +163,8 @@ pub enum Decorations {
     Highlights(Vec<(std::ops::Range<usize>, String)>),
     /// `(char position, text, theme scope)`.
     Annotations(Vec<(usize, String, String)>),
+    /// `(char position, text drawn over the chars from there, theme scope)`.
+    Overlays(Vec<(usize, String, String)>),
     /// `(char position of the line start, one-char text, theme scope)`.
     Signs(Vec<(usize, String, String)>),
 }
@@ -1058,6 +1060,35 @@ impl State {
             checked.push((position as usize, text, scope));
         }
         self.decorate(doc, layer, Decorations::Annotations(checked));
+        Ok(())
+    }
+
+    fn set_overlays(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        overlays: Vec<(u32, String, String)>,
+    ) -> Result<(), String> {
+        let len = self.need_layer(doc, &layer, overlays.len())?;
+        let text = &self.document(doc)?.text;
+        let mut checked = Vec::with_capacity(overlays.len());
+        for (position, overlay, scope) in overlays {
+            let (from, count) = (position as usize, overlay.chars().count());
+            if from + count > len {
+                return Err(format!(
+                    "invalid overlay at {position} for a document of {len} chars"
+                ));
+            }
+            if text
+                .slice(from..from + count)
+                .chars()
+                .any(|c| c == '\n' || c == '\r')
+            {
+                return Err("an overlay can't cover a line break".into());
+            }
+            checked.push((from, overlay, scope));
+        }
+        self.decorate(doc, layer, Decorations::Overlays(checked));
         Ok(())
     }
 

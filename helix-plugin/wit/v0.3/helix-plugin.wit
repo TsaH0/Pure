@@ -294,6 +294,13 @@ interface decorations {
   }
   set-annotations: func(doc: document-id, layer: string, annotations: list<annotation>) -> result<_, string>;
 
+  /// Draw `text` over the document from `position`: its first char over
+  /// the char at `position`, the next over the following one, and so on
+  /// (the text replaces what is shown, not what is there; use chars of the
+  /// same width). The `annotation` record is reused: `text` must not span a
+  /// line break.
+  set-overlays: func(doc: document-id, layer: string, overlays: list<annotation>) -> result<_, string>;
+
   record sign {
     /// 0-based line.
     line: u32,

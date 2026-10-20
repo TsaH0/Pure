@@ -108,6 +108,11 @@ pub mod decorations {
         }
     }
 
+    /// `text` drawn over the chars from `position` (one char over each).
+    pub fn overlay(position: u32, text: impl Into<String>, scope: &str) -> Annotation {
+        annotation(position, text, scope)
+    }
+
     /// A one-character sign on a 0-based line.
     pub fn sign(line: u32, text: impl Into<String>, scope: &str) -> Sign {
         Sign {

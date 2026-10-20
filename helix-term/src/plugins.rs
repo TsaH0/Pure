@@ -833,6 +833,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     helix_plugin::Decorations::Annotations(annotations) => {
                         store.set_annotations(layer, annotations, len)
                     }
+                    helix_plugin::Decorations::Overlays(overlays) => {
+                        store.set_overlays(layer, overlays, len)
+                    }
                     helix_plugin::Decorations::Signs(signs) => store.set_signs(
                         layer,
                         signs

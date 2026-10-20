@@ -41,6 +41,7 @@ Ready-made examples are in
 | `yazi` | `open`: pick files with yazi |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
+| `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences); `toggle` |
 
 ## Using plugins
 

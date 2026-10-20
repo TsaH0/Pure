@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use helix_core::syntax::OverlayHighlights;
-use helix_core::text_annotations::{InlineAnnotation, TextAnnotations};
+use helix_core::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
 use helix_core::{Assoc, ChangeSet, RopeSlice};
 
 use crate::Theme;
@@ -34,13 +34,19 @@ pub struct PluginDecorations {
     /// Sorted, non-overlapping `(range, scope)` per layer.
     highlights: BTreeMap<String, Vec<(Range<usize>, String)>>,
     annotations: BTreeMap<String, AnnotationLayer>,
+    /// Chars drawn over the text: `(scope, overlays sorted by position)`
+    /// per layer.
+    overlays: BTreeMap<String, Vec<(String, Vec<Overlay>)>>,
     /// Sorted by position per layer.
     signs: BTreeMap<String, Vec<Sign>>,
 }
 
 impl PluginDecorations {
     pub fn is_empty(&self) -> bool {
-        self.highlights.is_empty() && self.annotations.is_empty() && self.signs.is_empty()
+        self.highlights.is_empty()
+            && self.annotations.is_empty()
+            && self.overlays.is_empty()
+            && self.signs.is_empty()
     }
 
     /// Replace `layer`'s highlights. Ranges past `len` are dropped, and later
@@ -98,6 +104,39 @@ impl PluginDecorations {
         self.annotations.insert(layer, AnnotationLayer { groups });
     }
 
+    /// Replace `layer`'s overlays: `(position, text, scope)`, each char of
+    /// `text` over one char of the document. Later overlays on a char
+    /// already covered are dropped.
+    pub fn set_overlays(
+        &mut self,
+        layer: String,
+        overlays: Vec<(usize, String, String)>,
+        len: usize,
+    ) {
+        let mut chars: Vec<(usize, char, String)> = Vec::new();
+        for (pos, text, scope) in overlays {
+            for (i, ch) in text.chars().enumerate() {
+                if pos + i < len {
+                    chars.push((pos + i, ch, scope.clone()));
+                }
+            }
+        }
+        chars.sort_by_key(|(pos, ..)| *pos);
+        chars.dedup_by_key(|(pos, ..)| *pos);
+        let mut groups: BTreeMap<String, Vec<Overlay>> = BTreeMap::new();
+        for (pos, ch, scope) in chars {
+            groups
+                .entry(scope)
+                .or_default()
+                .push(Overlay::new(pos, ch.to_string()));
+        }
+        if groups.is_empty() {
+            self.overlays.remove(&layer);
+        } else {
+            self.overlays.insert(layer, groups.into_iter().collect());
+        }
+    }
+
     /// Replace `layer`'s gutter signs.
     pub fn set_signs(&mut self, layer: String, mut signs: Vec<Sign>, len: usize) {
         signs.retain(|sign| sign.pos <= len && !sign.text.is_empty());
@@ -116,6 +155,7 @@ impl PluginDecorations {
             .retain(|layer, _| !layer.starts_with(&prefix));
         self.annotations
             .retain(|layer, _| !layer.starts_with(&prefix));
+        self.overlays.retain(|layer, _| !layer.starts_with(&prefix));
         self.signs.retain(|layer, _| !layer.starts_with(&prefix));
     }
 
@@ -144,6 +184,18 @@ impl PluginDecorations {
                 );
             }
         }
+        for groups in self.overlays.values_mut() {
+            for (_, overlays) in groups.iter_mut() {
+                // Drawn over a char: it moves with the char, and goes when the
+                // char is deleted (its start and end then map to one place).
+                overlays.retain_mut(|overlay| {
+                    let start = changes.map_pos(overlay.char_idx, Assoc::After);
+                    let end = changes.map_pos(overlay.char_idx + 1, Assoc::Before);
+                    overlay.char_idx = start;
+                    end == start + 1 && start < len
+                });
+            }
+        }
         for signs in self.signs.values_mut() {
             changes.update_positions(signs.iter_mut().map(|sign| (&mut sign.pos, Assoc::After)));
         }
@@ -170,12 +222,18 @@ impl PluginDecorations {
         }
     }
 
-    /// Add the virtual text to `text_annotations`.
+    /// Add the virtual text and overlays to `text_annotations`.
     pub fn annotate<'a>(
         &'a self,
         theme: Option<&Theme>,
         text_annotations: &mut TextAnnotations<'a>,
     ) {
+        for groups in self.overlays.values() {
+            for (scope, overlays) in groups {
+                let style = theme.and_then(|theme| theme.find_highlight(scope));
+                text_annotations.add_overlay(overlays, style);
+            }
+        }
         for layer in self.annotations.values() {
             for (scope, annotations) in &layer.groups {
                 let style = theme.and_then(|theme| theme.find_highlight(scope));
@@ -240,6 +298,32 @@ mod test {
 
         decorations.clear_plugin("p");
         assert!(decorations.is_empty());
+    }
+
+    #[test]
+    fn overlays_follow_their_chars() {
+        let mut text = Rope::from("# a\n- b\n");
+        let mut decorations = PluginDecorations::default();
+        decorations.set_overlays(
+            "md/marks".into(),
+            vec![(0, "◉".into(), "h".into()), (4, "•".into(), "l".into())],
+            text.len_chars(),
+        );
+        let positions = |d: &PluginDecorations| -> Vec<usize> {
+            d.overlays["md/marks"]
+                .iter()
+                .flat_map(|(_, overlays)| overlays.iter().map(|o| o.char_idx))
+                .collect()
+        };
+        assert_eq!(positions(&decorations), [0, 4]);
+        // Typing before the bullet moves it; deleting the heading's `#` drops
+        // its overlay.
+        let transaction =
+            Transaction::change(&text, [(0, 1, None), (4, 4, Some("x".into()))].into_iter());
+        transaction.apply(&mut text);
+        decorations.map(transaction.changes(), text.len_chars());
+        assert_eq!(positions(&decorations), [4]);
+        assert_eq!(text.char(4), '-');
     }
 
     #[test]

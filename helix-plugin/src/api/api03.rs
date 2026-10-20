@@ -214,6 +214,18 @@ impl decorations::Host for State {
             .collect();
         State::set_annotations(self, doc, layer, annotations)
     }
+    fn set_overlays(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        overlays: Vec<decorations::Annotation>,
+    ) -> std::result::Result<(), String> {
+        let overlays = overlays
+            .into_iter()
+            .map(|a| (a.position, a.text, a.scope))
+            .collect();
+        State::set_overlays(self, doc, layer, overlays)
+    }
     fn set_signs(
         &mut self,
         doc: DocumentId,

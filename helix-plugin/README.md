@@ -55,6 +55,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
+| [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
 | [`todos`](examples/todos) | `list`; highlights TODO / FIXME / NOTE, signs, end-of-line notes, a statusline count | – |
 | [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
 
@@ -408,6 +409,9 @@ decorations::set_statusline("count", "3 todos")?;
   ones in one layer: the first wins.
 - Virtual text goes before the char at its position; the offset of a line's
   line break puts it at the end of the line. No line breaks in the text.
+- Overlays (`set_overlays`, `decorations::overlay`) draw other characters
+  *over* the text (one over each char), e.g. `◉` over `#`; the text itself
+  is unchanged. Hiding characters (conceal) isn't possible.
 - Signs are one character on a line, shown in the `plugins` gutter, which
   users add to `editor.gutters`.
 - The statusline text shows in the `plugins` element of

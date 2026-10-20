@@ -578,6 +578,14 @@ Small, self-contained; each one is a good single task.
   (`fuzzing_through_the_abi`, 300 seeds).
 - [x] **Caching `find_workspace`** in `plugins::snapshot`.
 
+- [ ] **Conceal decorations:** hide ranges of text (for Markdown `**`,
+  backticks, link URLs). Needs `helix-core`'s `DocumentFormatter` to skip
+  graphemes; cursor movement over hidden text must still work. Larger than
+  other decorations: design with the owner first.
+- [ ] **Full-line backgrounds:** a highlight that extends to the window's
+  edge (heading and code-block backgrounds), e.g. a line-level style in
+  `PluginDecorations` applied in `render_view`.
+
 ## Guidelines for agents (lessons from earlier work)
 
 - **Push often.** An earlier agent built M1.1–M1.3 and lost all of it

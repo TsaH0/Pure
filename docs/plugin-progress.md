@@ -570,3 +570,27 @@ Rerun: build both with `cargo build --release`, then
 `python3 docs/bench/vs-helix.py '{"helix": ["<hx>", "<runtime>"], "pure":
 ["<pure>", "<runtime>"]}' start|work|idle <rounds>`. It expects `work/big.rs`
 and a `bench-cfg` config dir next to the script; see the paths at the top.
+
+## render-markdown.nvim-style plugin (examples/markdown, 2026-10-20)
+
+The owner asked whether a render-markdown.nvim-like plugin is possible.
+Mostly yes, after adding one decoration kind, **overlays** (`set-overlays`:
+characters drawn over the text, Helix's jump-label mechanism; mapped through
+edits and dropped with their char).
+
+| render-markdown feature | In Pure |
+| --- | --- |
+| Heading icons and colours per level | Yes (overlay `#` -> `◉◎○◆◇▸`, highlight) |
+| Bullets by depth, checkboxes | Yes (`•◦▪▫`, `☐` / `✔`, checked dimmed) |
+| Block quotes | Yes (`▋`) |
+| Full-width rules | Yes (overlay + end-of-line virtual text) |
+| Tables with box borders | Yes (`│`, `├──┼──┤`) |
+| Code blocks with the language | Yes (fence rule, label, block highlight) |
+| Raw text on the cursor line (anti-conceal) | Yes (selection-change events) |
+| Toggle | Yes (`markdown/toggle`, `space M`) |
+| Hiding `**`, backticks, link URLs (conceal) | **No**: Helix can't draw fewer chars than there are |
+| Heading backgrounds across the whole window | Partly: highlight covers the text only |
+
+Gaps that would need editor work: conceal (a new kind of text annotation in
+`helix-core`'s document formatter) and full-line backgrounds. Both are
+possible but larger upstream diffs; logged as TODOs.
