@@ -100,6 +100,43 @@ fn outside<'a, T>(
     }
 }
 
+/// The old-text ranges `changes` deletes, and the points where it inserts
+/// (empty ranges), in order.
+fn edited_spans(changes: &ChangeSet) -> Vec<Range<usize>> {
+    use helix_core::Operation;
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    for change in changes.changes() {
+        match change {
+            Operation::Retain(n) => pos += n,
+            Operation::Delete(n) => {
+                spans.push(pos..pos + n);
+                pos += n;
+            }
+            Operation::Insert(_) => spans.push(pos..pos),
+        }
+    }
+    spans
+}
+
+/// Whether an edit in `spans` changes text inside `start..end`: a deletion
+/// overlapping it, or an insertion strictly inside (one at either edge only
+/// adds text next to it).
+fn touches(spans: &[Range<usize>], start: usize, end: usize) -> bool {
+    // The first span that doesn't end before `start`.
+    let first = spans.partition_point(|span| span.end < start);
+    spans[first..]
+        .iter()
+        .take_while(|span| span.start <= end)
+        .any(|span| {
+            if span.is_empty() {
+                start < span.start && span.start < end
+            } else {
+                span.start < end && span.end > start
+            }
+        })
+}
+
 impl PluginDecorations {
     pub fn is_empty(&self) -> bool {
         self.highlights.is_empty()
@@ -344,16 +381,15 @@ impl PluginDecorations {
 
     /// Follow an edit: `len` is the new text's length.
     pub fn map(&mut self, changes: &ChangeSet, len: usize) {
+        // Each layer's positions go through the changes in one pass (they
+        // are mostly sorted): O(decorations + changes), not their product.
         for highlights in self.highlights.values_mut() {
-            for (range, _) in highlights.iter_mut() {
-                changes.update_positions(
-                    [
-                        (&mut range.start, Assoc::After),
-                        (&mut range.end, Assoc::Before),
-                    ]
-                    .into_iter(),
-                );
-            }
+            changes.update_positions(highlights.iter_mut().flat_map(|(range, _)| {
+                [
+                    (&mut range.start, Assoc::After),
+                    (&mut range.end, Assoc::Before),
+                ]
+            }));
             highlights.retain(|(range, _)| range.start < range.end && range.end <= len);
         }
         self.highlights
@@ -371,28 +407,38 @@ impl PluginDecorations {
             for (_, overlays) in groups.iter_mut() {
                 // Drawn over a char: it moves with the char, and goes when the
                 // char is deleted (its start and end then map to one place).
-                overlays.retain_mut(|overlay| {
-                    let start = changes.map_pos(overlay.char_idx, Assoc::After);
-                    let end = changes.map_pos(overlay.char_idx + 1, Assoc::Before);
-                    overlay.char_idx = start;
-                    end == start + 1 && start < len
+                let mut ends: Vec<usize> = overlays.iter().map(|o| o.char_idx + 1).collect();
+                changes.update_positions(
+                    overlays
+                        .iter_mut()
+                        .map(|overlay| &mut overlay.char_idx)
+                        .zip(ends.iter_mut())
+                        .flat_map(|(start, end)| [(start, Assoc::After), (end, Assoc::Before)]),
+                );
+                let mut ends = ends.into_iter();
+                overlays.retain(|overlay| {
+                    let end = ends.next().unwrap();
+                    end == overlay.char_idx + 1 && overlay.char_idx < len
                 });
             }
         }
-        for groups in self.conceals.values_mut() {
-            for (_, conceals) in groups.iter_mut() {
-                // Hidden text that is edited shows again until the plugin
-                // sets the layer anew.
-                conceals.retain_mut(|conceal| {
-                    let start = changes.map_pos(conceal.start, Assoc::After);
-                    let end = changes.map_pos(conceal.end, Assoc::Before);
-                    let kept = end > start && end - start == conceal.end - conceal.start;
-                    conceal.start = start;
-                    conceal.end = end;
-                    kept && end <= len
-                });
+        if !self.conceals.is_empty() {
+            let edited = edited_spans(changes);
+            for groups in self.conceals.values_mut() {
+                for (_, conceals) in groups.iter_mut() {
+                    // Hidden text that is edited (even keeping its length)
+                    // shows again until the plugin sets the layer anew.
+                    conceals.retain(|conceal| !touches(&edited, conceal.start, conceal.end));
+                    changes.update_positions(conceals.iter_mut().flat_map(|conceal| {
+                        [
+                            (&mut conceal.start, Assoc::After),
+                            (&mut conceal.end, Assoc::Before),
+                        ]
+                    }));
+                    conceals.retain(|conceal| conceal.start < conceal.end && conceal.end <= len);
+                }
+                groups.retain(|(_, conceals)| !conceals.is_empty());
             }
-            groups.retain(|(_, conceals)| !conceals.is_empty());
         }
         self.conceals.retain(|_, groups| !groups.is_empty());
         for lines in self.line_backgrounds.values_mut() {
@@ -704,5 +750,116 @@ mod test {
         assert_eq!(shown(&decorations, &text, None), "za *y*b c  ");
         decorations.clear_plugin("md");
         assert!(decorations.is_empty());
+    }
+
+    #[test]
+    fn edits_inside_hidden_text_show_it_even_keeping_the_length() {
+        let text = Rope::from("a **b** c\n");
+        let conceals = |decorations: &PluginDecorations| -> Vec<(usize, usize)> {
+            decorations.conceals["md/c"]
+                .iter()
+                .flat_map(|(_, c)| c.iter().map(|c| (c.start, c.end)))
+                .collect()
+        };
+        let set = || {
+            let mut decorations = PluginDecorations::default();
+            decorations.set_conceals(
+                "md/c".into(),
+                vec![(2..4, String::new(), "s".into()), (5..7, String::new(), "s".into())],
+                text.len_chars(),
+            );
+            decorations
+        };
+        // `*` replaced by `_`: same length, inside the first range.
+        let mut decorations = set();
+        let edit = Transaction::change(&text, [(3, 4, Some("_".into()))].into_iter());
+        decorations.map(edit.changes(), text.len_chars());
+        assert_eq!(conceals(&decorations), [(5, 7)]);
+        // Typing right before or right after a range keeps it.
+        let mut decorations = set();
+        let edit = Transaction::change(&text, [(2, 2, Some("x".into())), (7, 7, Some("y".into()))].into_iter());
+        decorations.map(edit.changes(), text.len_chars() + 2);
+        assert_eq!(conceals(&decorations), [(3, 5), (6, 8)]);
+        // Deleting into a range from outside drops it.
+        let mut decorations = set();
+        let edit = Transaction::change(&text, [(1, 3, None)].into_iter());
+        decorations.map(edit.changes(), text.len_chars() - 2);
+        assert_eq!(conceals(&decorations), [(3, 5)]);
+    }
+
+    #[test]
+    fn batched_mapping_matches_mapping_each_position() {
+        let mut seed: u64 = 7;
+        let mut next = |n: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % n.max(1)
+        };
+        for _ in 0..200 {
+            let text = Rope::from("x".repeat(200));
+            let mut ranges: Vec<Range<usize>> = (0..20)
+                .map(|_| {
+                    let start = next(190);
+                    start..start + 1 + next(9)
+                })
+                .collect();
+            ranges.sort_by_key(|r| r.start);
+            let mut decorations = PluginDecorations::default();
+            decorations.set_highlights(
+                "p/h".into(),
+                ranges.iter().map(|r| (r.clone(), "s".to_string())).collect(),
+                text.len_chars(),
+            );
+            decorations.set_overlays(
+                "p/o".into(),
+                ranges.iter().map(|r| (r.start, "*".to_string(), "s".to_string())).collect(),
+                text.len_chars(),
+            );
+            let mut edits: Vec<(usize, usize, Option<helix_core::Tendril>)> = Vec::new();
+            let mut pos = 0;
+            while pos < 195 && edits.len() < 8 {
+                pos += next(30);
+                let len = next(4);
+                if pos + len > 200 {
+                    break;
+                }
+                let insert = if next(2) == 0 { Some("ab".into()) } else { None };
+                edits.push((pos, pos + len, insert));
+                pos += len + 1;
+            }
+            let edit = Transaction::change(&text, edits.into_iter());
+            let mut new = text.clone();
+            edit.apply(&mut new);
+            let expected_highlights: Vec<_> = decorations.highlights["p/h"]
+                .iter()
+                .map(|(r, _)| {
+                    let start = edit.changes().map_pos(r.start, Assoc::After);
+                    let end = edit.changes().map_pos(r.end, Assoc::Before);
+                    start..end
+                })
+                .filter(|r| r.start < r.end && r.end <= new.len_chars())
+                .collect();
+            let expected_overlays: Vec<_> = decorations.overlays["p/o"]
+                .iter()
+                .flat_map(|(_, o)| o.iter())
+                .filter_map(|o| {
+                    let start = edit.changes().map_pos(o.char_idx, Assoc::After);
+                    let end = edit.changes().map_pos(o.char_idx + 1, Assoc::Before);
+                    (end == start + 1 && start < new.len_chars()).then_some(start)
+                })
+                .collect();
+            decorations.map(edit.changes(), new.len_chars());
+            let highlights: Vec<_> = decorations
+                .highlights
+                .get("p/h")
+                .map(|h| h.iter().map(|(r, _)| r.clone()).collect())
+                .unwrap_or_default();
+            assert_eq!(highlights, expected_highlights);
+            let overlays: Vec<_> = decorations
+                .overlays
+                .get("p/o")
+                .map(|g| g.iter().flat_map(|(_, o)| o.iter().map(|o| o.char_idx)).collect())
+                .unwrap_or_default();
+            assert_eq!(overlays, expected_overlays);
+        }
     }
 }
