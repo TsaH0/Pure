@@ -1066,7 +1066,7 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
     let command = match kind {
         PendingKind::Process => "arm-process",
         PendingKind::Picker => "arm-picker",
-        PendingKind::Prompt | PendingKind::Popup => unreachable!(),
+        PendingKind::Prompt | PendingKind::Popup | PendingKind::Background => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -3249,4 +3249,104 @@ fn todos_example_decorates_documents() {
     assert!(actions
         .iter()
         .any(|action| matches!(action, Action::StatusLine { text, .. } if text == "2 todos")));
+}
+
+/// Start a background task through testplugin3 and wait for its result.
+fn background(host: &mut PluginHost, task: &str, input: &str) -> Result<String, String> {
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "background",
+            vec![task.into(), input.into()],
+            snapshot("main text", 0, 0),
+        )
+        .unwrap();
+    let (id, task, input) = match &actions[..] {
+        [Action::RunBackground {
+            id, task, input, ..
+        }] => (*id, task.clone(), input.clone()),
+        other => panic!("expected a background task, got {other:?}"),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    host.run_background(
+        "testplugin3",
+        id,
+        task,
+        input,
+        Box::new(move |result| {
+            sender.send(result).unwrap();
+        }),
+    );
+    let result = receiver.recv_timeout(Duration::from_secs(20)).unwrap();
+    // The result goes back to the plugin's main instance.
+    let actions = host
+        .callback(
+            "testplugin3",
+            Callback::BackgroundDone {
+                id,
+                result: result.clone(),
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    let expected = match &result {
+        Ok(value) => format!("background:{value}"),
+        Err(error) => format!("background-error:{error}"),
+    };
+    assert_eq!(statuses(&actions), [expected]);
+    result
+}
+
+#[test]
+fn background_tasks_run_in_a_separate_instance() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    assert_eq!(background(&mut host, "square", "12"), Ok("144".into()));
+    // Its own memory (the main instance counted 2 commands; the background
+    // one 2 tasks), and no documents even with read-buffers.
+    assert_eq!(
+        background(&mut host, "isolation", ""),
+        Ok("runs:2;document:None;text:None".into())
+    );
+    assert_eq!(
+        background(&mut host, "nope", ""),
+        Err("unknown task nope".into())
+    );
+    // A plugin may only have so many at once.
+    for _ in 0..MAX_BACKGROUND {
+        host.run_command(
+            "testplugin3",
+            "background",
+            vec!["square".into(), "1".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    }
+    let err = host
+        .run_command(
+            "testplugin3",
+            "background",
+            vec!["square".into(), "1".into()],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("at most"), "{err}");
+}
+
+#[test]
+fn runaway_background_tasks_time_out_without_disabling_the_plugin() {
+    let mut host = host_with_limits(Limits {
+        background: Duration::from_millis(300),
+        ..Limits::default()
+    });
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    let started = Instant::now();
+    let err = background(&mut host, "spin", "").unwrap_err();
+    assert!(err.contains("took longer than 300 ms"), "{err}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+    // The plugin keeps working, and the next task gets a fresh instance.
+    assert!(host.plugins[0].disabled().is_none());
+    assert_eq!(background(&mut host, "square", "3"), Ok("9".into()));
 }

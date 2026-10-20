@@ -16,6 +16,8 @@ type QueryCallback = Box<dyn FnMut(RequestId, u64, &str) -> Result<Option<Vec<It
 type StreamCallback = Box<dyn FnMut(&str) -> Result<(), String>>;
 #[cfg(not(feature = "api-v0-2"))]
 type PopupCallback = Box<dyn FnOnce(RequestId) -> Result<(), String>>;
+#[cfg(not(feature = "api-v0-2"))]
+type BackgroundCallback = Box<dyn FnOnce(Result<String, String>) -> Result<(), String>>;
 
 enum Completion {
     Process(ProcessCallback),
@@ -23,6 +25,8 @@ enum Completion {
     Prompt(PromptCallback),
     #[cfg(not(feature = "api-v0-2"))]
     Popup(PopupCallback),
+    #[cfg(not(feature = "api-v0-2"))]
+    Background(BackgroundCallback),
 }
 
 enum ItemUndo {
@@ -504,6 +508,38 @@ pub fn picker_done(id: RequestId, result: PickerResult) {
         }
     });
     if let Some(Completion::Picker(callback)) = callback {
+        report(callback(result));
+    }
+}
+
+/// Run `task` with `input` in the plugin's background instance
+/// ([`crate::Plugin::run_background`]): on another thread, with up to 30 s
+/// and no editor access, so heavy work doesn't freeze the editor. `callback`
+/// gets what it returned. At most 4 at once.
+#[cfg(not(feature = "api-v0-2"))]
+pub fn run_background(
+    task: &str,
+    input: impl Into<String>,
+    callback: impl FnOnce(Result<String, String>) -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    let id = crate::bindings::helix::plugin::worker::run_background(task, &input.into())?;
+    PENDING.with_borrow_mut(|pending| {
+        pending.insert(id, Completion::Background(Box::new(callback)));
+    });
+    Ok(id)
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "api-v0-2"))]
+pub fn background_done(id: RequestId, result: Result<String, String>) {
+    let callback = PENDING.with_borrow_mut(|pending| {
+        if matches!(pending.get(&id), Some(Completion::Background(_))) {
+            pending.remove(&id)
+        } else {
+            None
+        }
+    });
+    if let Some(Completion::Background(callback)) = callback {
         report(callback(result));
     }
 }

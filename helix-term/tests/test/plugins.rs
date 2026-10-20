@@ -1531,3 +1531,17 @@ async fn plugin_commands_run_as_colon_commands() -> anyhow::Result<()> {
     assert_error(&app, "no plugin named 'no-such'");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn background_tasks_deliver_without_blocking_the_editor() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":testplugin3/background square 7<ret>").await;
+    assert_eq!(
+        wait_for_status(&mut app, |s| s.starts_with("background")).await,
+        "background:49"
+    );
+    // The editor goes on as usual (a key press clears the status line).
+    keys(&mut app, "ix<esc>").await;
+    assert_eq!(text(&app), "xa\n");
+    Ok(())
+}

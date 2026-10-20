@@ -1,7 +1,7 @@
 //! API 0.3 adapters. Older worlds retain their generated types unchanged.
 use super::{types, v0_3, CommandInfo, DocumentId, Event, EventKind, Mode, State};
 use crate::{Callback, OpenAction};
-use v0_3::helix::plugin::{decorations, process, ui};
+use v0_3::helix::plugin::{decorations, process, ui, worker};
 use wasmtime::{Result, Store};
 
 impl v0_3::helix::plugin::types::Host for State {}
@@ -183,6 +183,12 @@ impl process::Host for State {
         State::kill(self, id)
     }
 }
+impl worker::Host for State {
+    fn run_background(&mut self, task: String, input: String) -> std::result::Result<u32, String> {
+        State::run_background(self, task, input)
+    }
+}
+
 impl decorations::Host for State {
     fn set_highlights(
         &mut self,
@@ -325,6 +331,15 @@ pub(super) async fn callback(
             callbacks.call_on_process_output(store, *id, chunk).await
         }
         Callback::PopupClosed { id } => callbacks.call_on_popup_close(store, *id).await,
+        Callback::BackgroundDone { id, result } => {
+            callbacks
+                .call_on_background_done(
+                    store,
+                    *id,
+                    result.as_ref().map(String::as_str).map_err(String::as_str),
+                )
+                .await
+        }
         Callback::ProcessDone { id, result } => {
             let result = result.as_ref().map(|output| process::Output {
                 exit_code: output.exit_code,

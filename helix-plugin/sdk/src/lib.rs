@@ -73,7 +73,8 @@ pub mod editor {
     pub use crate::bindings::helix::plugin::host::*;
     #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2")))]
     pub use crate::requests::{
-        close_popup, popup_with_options, push_items_for_query, set_items_for_query, spawn_stream,
+        close_popup, popup_with_options, push_items_for_query, run_background, set_items_for_query,
+        spawn_stream,
     };
     #[cfg(not(feature = "api-v0-1"))]
     pub use crate::requests::{
@@ -143,6 +144,13 @@ pub trait Plugin {
     fn on_selection_change(_doc: DocumentId) {}
     /// Called after a key command, if subscribed (API 0.3).
     fn on_post_command(_command: &str) {}
+    /// Runs in the plugin's *background instance* (API 0.3), for tasks
+    /// started with `editor::run_background`: a separate instance with its
+    /// own memory, on another thread, without editor access. Compute from
+    /// `input` only and return the result.
+    fn run_background(task: &str, _input: String) -> Result<String, String> {
+        Err(format!("no background task '{task}'"))
+    }
     /// Called when the terminal gains focus, if subscribed (API 0.3).
     fn on_focus_gained() {}
     /// Called when the terminal loses focus, if subscribed (API 0.3).
@@ -295,6 +303,14 @@ macro_rules! __export_callbacks {
             }
             fn on_prompt_done(id: $crate::RequestId, answer: Option<String>) {
                 $crate::requests::prompt_done(id, answer)
+            }
+            fn on_background_done(id: $crate::RequestId, result: Result<String, String>) {
+                $crate::requests::background_done(id, result)
+            }
+        }
+        impl $crate::bindings::exports::helix::plugin::background::Guest for $export {
+            fn run(task: String, input: String) -> Result<String, String> {
+                <$plugin as $crate::Plugin>::run_background(&task, input)
             }
         }
         impl $crate::bindings::exports::helix::plugin::events::Guest for $export {

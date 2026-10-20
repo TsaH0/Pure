@@ -829,6 +829,24 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
                 helix_event::request_redraw();
             }
+            Action::RunBackground {
+                plugin,
+                id,
+                task,
+                input,
+            } => {
+                // `done` runs on the worker thread: hand the result to the
+                // editor's runtime.
+                let runtime = tokio::runtime::Handle::current();
+                let owner = plugin.clone();
+                let done = Box::new(move |result| {
+                    runtime.spawn(deliver_async(
+                        owner,
+                        Callback::BackgroundDone { id, result },
+                    ));
+                });
+                with_host(|host| host.run_background(&plugin, id, task, input, done));
+            }
             Action::StatusLine {
                 plugin,
                 segment,

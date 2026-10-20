@@ -334,6 +334,9 @@ impl Instance {
         match callback {
             super::Callback::ProcessOutput { .. } => anyhow::bail!("streaming requires API 0.3"),
             super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
+            super::Callback::BackgroundDone { .. } => {
+                anyhow::bail!("background tasks require API 0.3")
+            }
             super::Callback::ProcessDone { id, result } => {
                 callbacks
                     .call_on_process_done(store, *id, result.as_ref().map_err(|err| err.as_str()))
@@ -351,6 +354,22 @@ impl Instance {
                 callbacks.call_on_picker_query(store, *id, query).await
             }
         }
+    }
+
+    /// The `background.run` export (API 0.3).
+    pub async fn call_background(
+        &self,
+        store: &mut Store<State>,
+        task: &str,
+        input: &str,
+    ) -> Result<std::result::Result<String, String>> {
+        let Self::V0_3(instance) = self else {
+            anyhow::bail!("background tasks require API 0.3")
+        };
+        instance
+            .helix_plugin_background()
+            .call_run(store, task, input)
+            .await
     }
 
     pub async fn call_event(&self, store: &mut Store<State>, event: Event) -> Result<()> {

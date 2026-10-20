@@ -9,6 +9,8 @@ thread_local! {
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static OUTPUT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static PICKER: Cell<Option<u32>> = const { Cell::new(None) };
+    /// Counted in the instance that runs: the background one has its own.
+    static RUNS: Cell<u32> = const { Cell::new(0) };
 }
 fn item(text: &str) -> helix::plugin::ui::Item {
     helix::plugin::ui::Item {
@@ -43,6 +45,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "interactive-reload",
                 "interactive-disable",
                 "interactive-twice",
+                "background",
                 "pause",
                 "loop",
                 "output-events",
@@ -92,6 +95,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 let first = helix::plugin::process::run_interactive(&args, &options)?;
                 let second = helix::plugin::process::run_interactive(&args, &options)?;
                 host::log(&format!("twice:{first}:{second}"));
+                Ok(())
+            }
+            // background <task> <input>: the result arrives in a callback.
+            "background" => {
+                let (task, input) = (&args[0], args.get(1).map_or("", String::as_str));
+                RUNS.set(RUNS.get() + 1);
+                let id = helix::plugin::worker::run_background(task, input)?;
+                host::log(&format!("background:{id}"));
                 Ok(())
             }
             "interactive-reload" | "interactive-disable" => {
@@ -322,6 +333,12 @@ impl exports::helix::plugin::callbacks::Guest for TestPlugin {
         host::set_status(&format!("popup-closed:{id}"));
     }
     fn on_prompt_done(_id: u32, _answer: Option<String>) {}
+    fn on_background_done(_id: u32, result: Result<String, String>) {
+        host::set_status(&match result {
+            Ok(value) => format!("background:{value}"),
+            Err(error) => format!("background-error:{error}"),
+        });
+    }
 }
 impl exports::helix::plugin::events::Guest for TestPlugin {
     fn on_document_save(_doc: u32) {}
@@ -340,4 +357,27 @@ impl exports::helix::plugin::events::Guest for TestPlugin {
         record("idle".into());
     }
 }
+impl exports::helix::plugin::background::Guest for TestPlugin {
+    fn run(task: String, input: String) -> Result<String, String> {
+        RUNS.set(RUNS.get() + 1);
+        match task.as_str() {
+            "square" => {
+                let n: u64 = input.parse().map_err(|_| "not a number")?;
+                Ok((n * n).to_string())
+            }
+            // This instance's own counter, and what it can see of the editor.
+            "isolation" => Ok(format!(
+                "runs:{};document:{:?};text:{:?}",
+                RUNS.get(),
+                host::current_document(),
+                host::current_document().map(host::text)
+            )),
+            "spin" => loop {
+                std::hint::spin_loop();
+            },
+            _ => Err(format!("unknown task {task}")),
+        }
+    }
+}
+
 export!(TestPlugin);

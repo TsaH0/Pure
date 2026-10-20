@@ -167,6 +167,11 @@ pub enum Decorations {
     Signs(Vec<(usize, String, String)>),
 }
 
+/// Most background tasks a plugin may have at once, and their default time
+/// limit ([`Limits::background`]).
+pub const MAX_BACKGROUND: usize = 4;
+pub const BACKGROUND_LIMIT: Duration = Duration::from_secs(30);
+
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
 /// Longest statusline segment, in chars.
@@ -359,6 +364,15 @@ pub enum Action {
         layer: String,
         decorations: Decorations,
     },
+    /// Run `task` in the plugin's background instance
+    /// ([`PluginHost::run_background`]) and deliver
+    /// [`Callback::BackgroundDone`].
+    RunBackground {
+        plugin: String,
+        id: u32,
+        task: String,
+        input: String,
+    },
     /// Set (or, empty, remove) a statusline segment.
     StatusLine {
         plugin: String,
@@ -391,6 +405,7 @@ pub enum PendingKind {
     Picker,
     Prompt,
     Popup,
+    Background,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -423,6 +438,11 @@ pub enum Callback {
     PopupClosed {
         id: u32,
     },
+    /// What the plugin's background instance returned.
+    BackgroundDone {
+        id: u32,
+        result: Result<String, String>,
+    },
 }
 
 impl Callback {
@@ -436,6 +456,7 @@ impl Callback {
             }
             Self::PromptDone { id, .. } => (*id, PendingKind::Prompt),
             Self::PopupClosed { id } => (*id, PendingKind::Popup),
+            Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
         }
     }
 
@@ -505,6 +526,8 @@ pub struct Limits {
     pub event: Duration,
     /// Maximum linear memory of a plugin, in bytes.
     pub memory: usize,
+    /// Maximum time for a background task (`run-background`).
+    pub background: Duration,
 }
 
 impl Default for Limits {
@@ -514,6 +537,7 @@ impl Default for Limits {
             command: Duration::from_secs(2),
             event: Duration::from_millis(250),
             memory: 256 << 20,
+            background: BACKGROUND_LIMIT,
         }
     }
 }
@@ -543,6 +567,36 @@ struct State {
 
 /// `log` lines kept per plugin.
 const LOG_LINES: usize = 1000;
+
+impl State {
+    /// For a background instance: no permissions, grants, files or snapshot.
+    fn background(plugin: &str, memory: usize) -> Self {
+        Self {
+            wasi: WasiCtx::builder().build(),
+            table: ResourceTable::new(),
+            limits: StoreLimitsBuilder::new()
+                .memory_size(memory)
+                .instances(16)
+                .tables(64)
+                .memories(16)
+                .build(),
+            plugin: plugin.to_string(),
+            permissions: HashSet::new(),
+            snapshot: Snapshot::default(),
+            actions: Vec::new(),
+            context: CallContext::Init,
+            next_id: &NEXT_REQUEST_ID,
+            pending: HashMap::new(),
+            picker_items: HashMap::new(),
+            picker_generations: HashMap::new(),
+            streaming: HashSet::new(),
+            process: ProcessGrant::None,
+            files: FileGrant::None,
+            data_dir: None,
+            log: Default::default(),
+        }
+    }
+}
 
 impl WasiView for State {
     fn ctx(&mut self) -> WasiCtxView<'_> {
@@ -1030,6 +1084,30 @@ impl State {
         Ok(())
     }
 
+    fn run_background(&mut self, task: String, input: String) -> Result<u32, String> {
+        if self.context == CallContext::Init {
+            return Err("run-background can't be used from init".into());
+        }
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Background)
+            .count();
+        if running >= MAX_BACKGROUND {
+            return Err(format!(
+                "at most {MAX_BACKGROUND} background tasks can run at once"
+            ));
+        }
+        let id = self.request(PendingKind::Background)?;
+        self.actions.push(Action::RunBackground {
+            plugin: self.plugin.clone(),
+            id,
+            task,
+            input,
+        });
+        Ok(id)
+    }
+
     fn set_statusline(&mut self, segment: String, text: String) -> Result<(), String> {
         if segment.is_empty() || segment.len() > 64 || segment.contains('/') {
             return Err(format!(
@@ -1184,6 +1262,88 @@ pub struct Plugin {
     disabled: Option<String>,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
+    /// For the background instance (API 0.3), made on first use.
+    component: Component,
+    worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
+}
+
+/// A task for a plugin's background instance.
+struct BackgroundTask {
+    task: String,
+    input: String,
+    done: Box<dyn FnOnce(Result<String, String>) + Send>,
+}
+
+/// The thread running a plugin's background instance: a second instance of
+/// the component with its own memory, no permissions, no snapshot (its host
+/// calls see nothing and change nothing), and `limit` per task.
+/// It ends when the plugin is dropped (the sender goes).
+fn spawn_worker(
+    engine: Engine,
+    linker: Linker<State>,
+    component: Component,
+    ticker: Arc<Ticker>,
+    name: String,
+    memory: usize,
+    limit: Duration,
+) -> std::io::Result<std::sync::mpsc::Sender<BackgroundTask>> {
+    let (sender, tasks) = std::sync::mpsc::channel::<BackgroundTask>();
+    std::thread::Builder::new()
+        .name(format!("plugin-{name}-background"))
+        .spawn(move || {
+            let Ok(runtime) = CallRuntime::new() else {
+                return;
+            };
+            let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
+            let mut instance: Option<(Store<State>, Instance)> = None;
+            while let Ok(job) = tasks.recv() {
+                if instance.is_none() {
+                    let mut store = Store::new(&engine, State::background(&name, memory));
+                    store.limiter(|state| &mut state.limits);
+                    store.set_epoch_deadline(ticks);
+                    let busy = ticker.busy();
+                    let started = runtime.run(limit, async {
+                        v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                            .await
+                            .map(Instance::V0_3)
+                    });
+                    drop(busy);
+                    match started {
+                        Ok(started) => instance = Some((store, started)),
+                        Err(err) => {
+                            (job.done)(Err(format!(
+                                "the background instance failed to start: {err:#}"
+                            )));
+                            continue;
+                        }
+                    }
+                }
+                let (store, guest) = instance.as_mut().unwrap();
+                store.set_epoch_deadline(ticks);
+                let busy = ticker.busy();
+                let result =
+                    runtime.run(limit, guest.call_background(store, &job.task, &job.input));
+                drop(busy);
+                // It has no editor access: what it asked for is dropped.
+                store.data_mut().actions.clear();
+                let result = match result {
+                    Ok(result) => result,
+                    Err(err) => {
+                        // Start a fresh instance for the next task.
+                        instance = None;
+                        Err(match err.downcast_ref::<Trap>() {
+                            Some(Trap::Interrupt) => format!(
+                                "the background task took longer than {} ms",
+                                limit.as_millis()
+                            ),
+                            _ => format!("the background task crashed: {err:#}"),
+                        })
+                    }
+                };
+                (job.done)(result);
+            }
+        })?;
+    Ok(sender)
 }
 
 impl Plugin {
@@ -1658,6 +1818,8 @@ impl PluginHost {
             disabled: None,
             ticker: self.ticker.clone(),
             runtime: self.runtime.clone(),
+            component: component.clone(),
+            worker: None,
         };
         let config = settings.config;
         let (registration, actions) = plugin.call(
@@ -1805,6 +1967,49 @@ impl PluginHost {
                 *current = generation;
                 state.picker_items.insert(id, 0);
             }
+        }
+    }
+
+    /// Run `plugin`'s background request `id` in its background instance;
+    /// `done` gets the result (on the worker thread). Starts the instance's
+    /// thread on first use.
+    pub fn run_background(
+        &mut self,
+        plugin: &str,
+        id: u32,
+        task: String,
+        input: String,
+        done: Box<dyn FnOnce(Result<String, String>) + Send>,
+    ) {
+        let (memory, limit) = (self.limits.memory, self.limits.background);
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.name() == plugin && p.disabled.is_none())
+        else {
+            return;
+        };
+        if plugin.store.data().pending.get(&id) != Some(&PendingKind::Background) {
+            return;
+        }
+        if plugin.worker.is_none() {
+            match spawn_worker(
+                self.engine.clone(),
+                self.linker.clone(),
+                plugin.component.clone(),
+                plugin.ticker.clone(),
+                plugin.manifest.name.clone(),
+                memory,
+                limit,
+            ) {
+                Ok(worker) => plugin.worker = Some(worker),
+                Err(err) => return done(Err(format!("failed to start a worker: {err}"))),
+            }
+        }
+        let job = BackgroundTask { task, input, done };
+        if let Err(std::sync::mpsc::SendError(job)) = plugin.worker.as_ref().unwrap().send(job) {
+            plugin.worker = None;
+            (job.done)(Err("the background worker stopped".into()));
         }
     }
 

@@ -429,3 +429,37 @@ They only fill keys nothing else binds (neither the user's config nor Pure's
 defaults), so they never replace a binding. Users turn them off with
 `keys = false` in the plugin's `plugins.toml` table. Plugin commands also
 run as `:<plugin>/<command>` and appear in the command palette.
+
+## Background tasks (API 0.3)
+
+Heavy work (parsing a big file, building an index) would freeze the editor
+in a command or event handler, which have 2 s and 250 ms. Run it in the
+background instead:
+
+```rust,ignore
+// In a command or event handler: send the text to work on.
+editor::run_background("outline", editor::text(doc)?, move |result| {
+    let outline = result?;            // what run_background returned
+    editor::set_status(&outline);     // back in the main instance
+    Ok(())
+})?;
+
+// In the plugin:
+impl Plugin for MyPlugin {
+    fn run_background(task: &str, input: String) -> Result<String, String> {
+        match task {
+            "outline" => Ok(compute_outline(&input)),
+            _ => Err(format!("unknown task {task}")),
+        }
+    }
+    // ...
+}
+```
+
+`run_background` runs in a *second instance* of the plugin, on its own
+thread, with up to 30 s. It has its own memory (statics are not shared with
+the main instance) and no editor access: documents read as missing and
+anything it asks the editor to do is dropped. Pass everything it needs in
+`input` and return the result as a string. At most 4 tasks run at once per
+plugin; a task that crashes or runs out of time gives an error result and
+the next task gets a fresh instance (the plugin stays enabled).

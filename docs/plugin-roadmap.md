@@ -338,13 +338,30 @@ the hook first and keep it generic.
 
 ## M7. Long-running work
 
-- [ ] **M7.1 Background calls.** Run an export on a worker thread without
+- [x] **M7.1 Background calls.** Run an export on a worker thread without
   editor access (pure computation on data the plugin was given), with a
   longer limit, and deliver the result as a callback. Lets plugins do heavy
   parsing without freezing the editor and without WASI 0.3.
-- [ ] **M7.2 WASI 0.3 async.** Once the toolchain pin allows a Wasmtime with
+  - Done (API 0.3): `worker.run-background(task, input)` runs the plugin's
+    `background.run` export in a second instance (own memory, no
+    permissions, no snapshot; actions dropped) on a per-plugin thread made
+    on first use, with `Limits::background` (30 s); the result arrives in
+    `callbacks.on-background-done`. At most 4 at once; a trap or timeout
+    gives an error result and a fresh instance next time, without disabling
+    the plugin. SDK: `editor::run_background`, `Plugin::run_background`.
+- [x] **M7.2 WASI 0.3 async.** Once the toolchain pin allows a Wasmtime with
   stable component-model async, allow `async` exports. Research task first:
   report which Wasmtime/Rust versions are needed.
+  - Research done (2026-10-20): Wasmtime 41.0.4 has component-model async
+    (the `component-model-async` crate feature, `Config::
+    wasm_component_model_async`, `wasmtime-wasi` `p3`), but its own docs
+    call it "very incomplete", and Rust 1.90 has no `wasm32-wasip3` target
+    (only `wasm32-wasip2`); guests would need an async `wit-bindgen` too.
+    Decision: don't adopt. The host already runs exports as async with
+    `tokio::time::timeout` (M11.1) and heavy work has background instances
+    (M7.1), which covers the use cases. Revisit when Wasmtime marks
+    component-model async stable and Rust ships `wasm32-wasip3`: then add
+    `async` exports in a new API version, behind the same timeouts.
 
 ## M8. Distribution
 

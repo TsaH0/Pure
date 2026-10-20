@@ -233,6 +233,25 @@ interface callbacks {
   on-process-output: func(id: request-id, chunk: string);
   on-popup-close: func(id: request-id);
   on-prompt-done: func(id: request-id, answer: option<string>);
+  /// The result of `worker.run-background`.
+  on-background-done: func(id: request-id, %result: result<string, string>);
+}
+
+/// Heavy computation without freezing the editor: `run-background` runs the
+/// plugin's `background.run` export in a second instance of the plugin, on
+/// another thread, with up to 30 s, and delivers what it returns to
+/// `callbacks.on-background-done`. The second instance has its own memory
+/// and no editor access (no documents, no actions, no programs, no files):
+/// pass it everything it needs in `input`.
+interface worker {
+  use types.{request-id};
+  /// From commands, callbacks and event handlers. At most 4 at once.
+  run-background: func(task: string, input: string) -> result<request-id, string>;
+}
+
+/// Implemented by the plugin; runs in the background instance.
+interface background {
+  run: func(task: string, input: string) -> result<string, string>;
 }
 
 /// Event handlers added in 0.2 (subscribe in `init`'s registration).
@@ -293,7 +312,9 @@ world helix-plugin {
   import process;
   import ui;
   import decorations;
+  import worker;
   export plugin;
   export callbacks;
   export events;
+  export background;
 }
