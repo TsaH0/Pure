@@ -6,7 +6,8 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
 ## Status (2026-10-20)
 
 - Done: M0–M12. API 0.1 and 0.2 are frozen (compatibility fixtures in
-  `helix-plugin/tests/fixtures`); API 0.3 is the current one.
+  `helix-plugin/tests/fixtures`); API 0.4 is the current one (0.3 still
+  gets new imports).
 - Still open: the Future TODOs in the roadmap (one item is blocked
   upstream). Conceal is done (render-markdown.nvim's behaviour, the owner's
   choice).
