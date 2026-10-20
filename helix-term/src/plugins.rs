@@ -229,7 +229,8 @@ pub fn load_in_background() {
         .await;
         let Ok((host, actions, errors, loaded)) = built else {
             LOADING.store(false, Ordering::Relaxed);
-            if let Some(dir) = PENDING_DIRECTORY.lock().take() {
+            let pending = PENDING_DIRECTORY.lock().take();
+            if let Some(dir) = pending {
                 job::dispatch(move |editor, compositor| {
                     open_file_picker(editor, compositor, dir, "loading plugins failed")
                 })
