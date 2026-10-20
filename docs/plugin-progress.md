@@ -789,3 +789,15 @@ were checked; implementation-specific tests and measurements remain explicit
 acceptance requirements, not completed validation.
 Workspace formatting and Clippy passed without warnings; runtime test suites
 were not repeated for this documentation-only follow-up.
+
+## Verification of the working-branch fixes
+
+Checked `claude/youthful-cerf-f620zv` at `4bd8f2e9`; master was still
+`1268b872`. Details and per-finding status are in
+[`plugin-fix-verification.md`](plugin-fix-verification.md). Host, editor library,
+plugin integration, decoration, auto-reload, quickfix, oil and Markdown tests
+passed. Bounded probes still found oversized single preview expansions,
+background cancellation that leaves queued work, and incorrect grep conversion
+for combining text. The imported capabilities/revisions/snippet completion
+path exists, but the initial future-roadmap delivery remains partial. This
+task records verification and follow-up guidance, with no runtime fixes.
