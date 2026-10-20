@@ -58,6 +58,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "diagnose-bad",
                 "timer",
                 "timer-cancel",
+                "cancel-timer",
                 "scratch",
                 "buffer",
                 "registers",
@@ -309,6 +310,11 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 let id = helix::plugin::timers::set_timer(1)?;
                 helix::plugin::timers::cancel_timer(id);
                 host::log(&format!("timer-cancelled:{id}"));
+                Ok(())
+            }
+            "cancel-timer" => {
+                let id = args.first().and_then(|id| id.parse().ok()).unwrap_or(0);
+                helix::plugin::timers::cancel_timer(id);
                 Ok(())
             }
             "scratch" => host::open_scratch("scratch text\n", Some("markdown"), types::OpenAction::Replace),

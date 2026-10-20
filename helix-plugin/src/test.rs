@@ -2335,18 +2335,29 @@ fn api_03_timers_fire_once_and_can_be_cancelled() {
         .unwrap();
     assert!(again.is_empty());
 
+    // Set and cancelled in one call: never started.
     let actions = host
         .run_command("testplugin3", "timer-cancel", vec![], Snapshot::default())
+        .unwrap();
+    assert!(actions.is_empty(), "{actions:?}");
+
+    // Cancelled by a later call: the editor is told to stop it.
+    let actions = host
+        .run_command("testplugin3", "timer", vec!["60000".into()], Snapshot::default())
         .unwrap();
     let [Action::SetTimer { id, .. }] = &actions[..] else {
         panic!("{actions:?}");
     };
+    let id = *id;
+    let actions = host
+        .run_command("testplugin3", "cancel-timer", vec![id.to_string()], Snapshot::default())
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::CancelTimer { id: cancelled, .. }] if *cancelled == id),
+        "{actions:?}"
+    );
     let fired = host
-        .callback(
-            "testplugin3",
-            Callback::Timer { id: *id },
-            &Snapshot::default(),
-        )
+        .callback("testplugin3", Callback::Timer { id }, &Snapshot::default())
         .unwrap();
     assert!(fired.is_empty(), "a cancelled timer must not fire");
 }

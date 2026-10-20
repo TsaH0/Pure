@@ -80,6 +80,52 @@ runtime_local! {
     static GENERATION: AtomicUsize = AtomicUsize::new(0);
     /// The plugin directory and settings loaded last, to reload them.
     static LOADED: Mutex<Option<(PathBuf, toml::Table)>> = Mutex::new(None);
+    /// Running timers: `(plugin, id, task)`, aborted when cancelled or when
+    /// their plugin goes.
+    static TIMERS: Mutex<Vec<(String, u32, tokio::task::AbortHandle)>> = Mutex::new(Vec::new());
+}
+
+/// How many plugin timers are running (for tests).
+#[doc(hidden)]
+pub fn running_timers() -> usize {
+    TIMERS.lock().len()
+}
+
+/// Stop the timers of `plugin` (`None`: all of them).
+fn abort_timers(plugin: Option<&str>) {
+    TIMERS.lock().retain(|(owner, _, task)| {
+        let keep = plugin.is_some_and(|plugin| plugin != owner);
+        if !keep {
+            task.abort();
+        }
+        keep
+    });
+}
+
+/// Remove what a disabled plugin left behind: processes, timers, completion
+/// requests, decorations, diagnostics, statusline text and its sidebar.
+fn tear_down(editor: &mut Editor, plugin: &str) {
+    process::kill_plugin(plugin);
+    abort_timers(Some(plugin));
+    COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
+    for doc in editor.documents.values_mut() {
+        if !doc.plugin_decorations.is_empty() {
+            doc.plugin_decorations.clear_plugin(plugin);
+        }
+    }
+    editor.clear_plugin_diagnostics(plugin);
+    let prefix = format!("{plugin}/");
+    editor
+        .plugin_statusline
+        .retain(|key, _| !key.starts_with(&prefix));
+    if editor
+        .sidebar
+        .as_ref()
+        .is_some_and(|sidebar| sidebar.owner == plugin)
+    {
+        editor.sidebar = None;
+    }
+    helix_event::request_redraw();
 }
 
 fn event_bit(kind: EventKind) -> u32 {
@@ -399,6 +445,7 @@ fn install(
     }
     editor.plugin_statusline.clear();
     editor.sidebar = None;
+    abort_timers(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -713,7 +760,7 @@ pub fn run_command(
     let actions = match result {
         Ok(actions) => actions,
         Err(error) => {
-            refresh_wanted();
+            refresh_wanted(editor);
             return Err(error);
         }
     };
@@ -1189,9 +1236,23 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::SetTimer { plugin, id, delay } => {
-                tokio::spawn(async move {
+                let owner = plugin.clone();
+                let task = tokio::spawn(async move {
                     tokio::time::sleep(delay).await;
+                    TIMERS
+                        .lock()
+                        .retain(|(timer_plugin, timer, _)| (timer_plugin, *timer) != (&plugin, id));
                     deliver_async(plugin, Callback::Timer { id }).await;
+                });
+                TIMERS.lock().push((owner, id, task.abort_handle()));
+            }
+            Action::CancelTimer { plugin, id } => {
+                TIMERS.lock().retain(|(owner, timer, task)| {
+                    let cancelled = (owner, *timer) == (&plugin, id);
+                    if cancelled {
+                        task.abort();
+                    }
+                    !cancelled
                 });
             }
             Action::Completions { plugin, id, items } => {
@@ -1505,7 +1566,7 @@ pub fn write_buffer(editor: &mut Editor, jobs: &mut Jobs, doc: DocumentId) -> an
             Ok(())
         }
         Err(err) => {
-            refresh_wanted();
+            refresh_wanted(editor);
             Err(err)
         }
     }
@@ -1597,7 +1658,7 @@ fn deliver(editor: &mut Editor, jobs: &mut Jobs, plugin: &str, callback: Callbac
     match with_host(|host| host.callback(plugin, callback, &snapshot)) {
         Some(Ok(actions)) => apply(editor, Some(jobs), actions),
         Some(Err(err)) => {
-            refresh_wanted();
+            refresh_wanted(editor);
             editor.set_error(err.to_string());
         }
         None => {}
@@ -1694,7 +1755,7 @@ pub fn editor_idle(editor: &mut Editor) {
     }
 }
 
-fn refresh_wanted() {
+fn refresh_wanted(editor: &mut Editor) {
     let (mask, disabled) = with_host(|host| {
         let mask = EVENT_KINDS
             .into_iter()
@@ -1716,7 +1777,7 @@ fn refresh_wanted() {
         Ordering::Relaxed,
     );
     for plugin in disabled {
-        process::kill_plugin(&plugin);
+        tear_down(editor, &plugin);
     }
 }
 
@@ -1763,7 +1824,7 @@ fn report(editor: &mut Editor, _plugin: &str, result: anyhow::Result<Vec<Action>
     match result {
         Ok(actions) => apply(editor, None, actions),
         Err(error) => {
-            refresh_wanted();
+            refresh_wanted(editor);
             editor.set_error(error.to_string());
         }
     }
@@ -1788,7 +1849,7 @@ fn deliver_event(editor: &mut Editor, event: Event) {
         match result.flatten() {
             Some(Ok(actions)) => apply(editor, None, actions),
             Some(Err(error)) => {
-                refresh_wanted();
+                refresh_wanted(editor);
                 editor.set_error(error.to_string());
             }
             None => {}

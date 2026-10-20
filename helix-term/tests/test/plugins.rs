@@ -1726,6 +1726,31 @@ async fn plugin_timers_fire_later() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_timers_stop_on_reload() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_v3_settings(ALL, "");
+    let before = helix_term::plugins::running_timers();
+    keys(&mut app, ":plugin-run testplugin3/timer 60000<ret>").await;
+    assert_eq!(helix_term::plugins::running_timers(), before + 1);
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert_eq!(helix_term::plugins::running_timers(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabled_plugins_leave_nothing_behind() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/diagnose<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/timer 60000<ret>").await;
+    assert_eq!(helix_view::doc!(app.editor).diagnostics().len(), 1);
+    // It runs too long and is disabled: its diagnostics and timers go.
+    keys(&mut app, ":plugin-run testplugin3/loop<ret>").await;
+    assert_error(&app, "disabled");
+    assert!(helix_view::doc!(app.editor).diagnostics().is_empty());
+    assert_eq!(helix_term::plugins::running_timers(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_buffers_are_written_by_their_plugin() -> anyhow::Result<()> {
     let (mut app, _dir) = app_with_v3_settings(ALL, "");
     keys(&mut app, ":plugin-run testplugin3/buffer<ret>").await;

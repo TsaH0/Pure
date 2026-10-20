@@ -552,6 +552,8 @@ pub enum Action {
         id: u32,
         delay: Duration,
     },
+    /// Stop timer `id` started by an earlier call.
+    CancelTimer { plugin: String, id: u32 },
     /// The answer to completion request `id`
     /// ([`PluginHost::request_completion`]).
     Completions {
@@ -1699,6 +1701,20 @@ impl State {
     fn cancel_timer(&mut self, id: u32) {
         if self.pending.get(&id) == Some(&PendingKind::Timer) {
             self.pending.remove(&id);
+            // Set in this same call: never start it. Otherwise stop it.
+            let queued = self
+                .actions
+                .iter()
+                .position(|action| matches!(action, Action::SetTimer { id: set, .. } if *set == id));
+            match queued {
+                Some(index) => {
+                    self.actions.remove(index);
+                }
+                None => self.actions.push(Action::CancelTimer {
+                    plugin: self.plugin.clone(),
+                    id,
+                }),
+            }
         }
     }
 
