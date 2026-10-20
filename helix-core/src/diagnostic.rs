@@ -64,14 +64,16 @@ pub enum DiagnosticProvider {
         /// not clear the pull diagnostics and vice-versa.
         identifier: Option<Arc<str>>,
     },
-    // Future internal features can go here...
+    /// A plugin (Pure): one set of diagnostics per plugin and document.
+    /// Positions are in chars (UTF-32).
+    Plugin { name: Arc<str> },
 }
 
 impl DiagnosticProvider {
     pub fn language_server_id(&self) -> Option<LanguageServerId> {
         match self {
             Self::Lsp { server_id, .. } => Some(*server_id),
-            // _ => None,
+            Self::Plugin { .. } => None,
         }
     }
 }

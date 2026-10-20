@@ -239,14 +239,14 @@ async fn test_multi_selection_shell_commands() -> anyhow::Result<()> {
     ))
     .await?;
 
-    // insert-output
+    // insert-output (`space z` in Pure)
     test((
         indoc! {"\
             #[|lorem]#
             #(|ipsum)#
             #(|dolor)#
             "},
-        "!echo foo<ret>",
+        "<space>zecho foo<ret>",
         indoc! {"\
             #[|foo]#lorem
             #(|foo)#ipsum

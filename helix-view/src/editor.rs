@@ -1965,6 +1965,8 @@ impl Editor {
                 let remove_empty_scratch = !doc.is_modified()
                     // If the buffer has no path and is not modified, it is an empty scratch buffer.
                     && doc.path().is_none()
+                    // A plugin's buffer (Pure) is named and kept, for the jumplist.
+                    && doc.plugin_owner.is_none()
                     // If the buffer we are changing to is not this buffer
                     && id != doc.id
                     // Ensure the buffer is not displayed in any other splits.
@@ -2082,6 +2084,18 @@ impl Editor {
             action,
             Document::default(self.config.clone(), self.syn_loader.clone()),
         )
+    }
+
+    /// A new scratch buffer holding `text`, unmodified and with no undo
+    /// history before it.
+    pub fn new_file_with_text(&mut self, action: Action, text: &str) -> DocumentId {
+        let doc = Document::from(
+            helix_core::Rope::from(text),
+            None,
+            self.config.clone(),
+            self.syn_loader.clone(),
+        );
+        self.new_file_from_document(action, doc)
     }
 
     pub fn new_file_from_stdin(&mut self, action: Action) -> Result<DocumentId, Error> {
@@ -2400,29 +2414,33 @@ impl Editor {
             .and_then(|uri| diagnostics.get(&uri))
             .map(|diags| {
                 diags.iter().filter_map(move |(diagnostic, provider)| {
-                    let server_id = provider.language_server_id()?;
-                    let ls = language_servers.get_by_id(server_id)?;
-                    language_config
-                        .as_ref()
-                        .and_then(|c| {
-                            c.language_servers.iter().find(|features| {
-                                features.name == ls.name()
-                                    && features.has_feature(LanguageServerFeature::Diagnostics)
-                            })
-                        })
-                        .and_then(|_| {
-                            if filter(diagnostic, provider) {
-                                Document::lsp_diagnostic_to_diagnostic(
-                                    &text,
-                                    language_config.as_deref(),
-                                    diagnostic,
-                                    provider.clone(),
-                                    ls.offset_encoding(),
-                                )
-                            } else {
-                                None
-                            }
-                        })
+                    let offset_encoding = match provider {
+                        // Plugins (Pure) count in chars and need no server.
+                        DiagnosticProvider::Plugin { .. } => helix_lsp::OffsetEncoding::Utf32,
+                        DiagnosticProvider::Lsp { server_id, .. } => {
+                            let ls = language_servers.get_by_id(*server_id)?;
+                            language_config
+                                .as_ref()?
+                                .language_servers
+                                .iter()
+                                .find(|features| {
+                                    features.name == ls.name()
+                                        && features.has_feature(LanguageServerFeature::Diagnostics)
+                                })?;
+                            ls.offset_encoding()
+                        }
+                    };
+                    if filter(diagnostic, provider) {
+                        Document::lsp_diagnostic_to_diagnostic(
+                            &text,
+                            language_config.as_deref(),
+                            diagnostic,
+                            provider.clone(),
+                            offset_encoding,
+                        )
+                    } else {
+                        None
+                    }
                 })
             })
             .into_iter()

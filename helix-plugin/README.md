@@ -52,7 +52,11 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | Example | Commands | `plugins.toml` |
 | --- | --- | --- |
 | [`text-tools`](examples/text-tools) | `upper`, `lower`, `sort-lines`, `count` | – |
-| [`yazi`](examples/yazi) | `open`: pick files with [yazi](https://yazi-rs.github.io) | `[yazi]` `allow-process = ["yazi"]` |
+| [`oil`](examples/oil) | `open` (`-`): edit directories as buffers like oil.nvim; rename, move, copy, create and delete with `:w` | `[oil]` `allow-files = "write"`, `allow-dirs = ["~"]` |
+| [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
+| [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
+| [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
+| [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
@@ -62,7 +66,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 ```toml
 # config.toml
 [keys.normal.space]
-e = ":plugin-run yazi/open"
+f = ":plugin-run finder/files"
 "/" = ":plugin-run finder/grep"
 ```
 
@@ -79,8 +83,11 @@ e = ":plugin-run yazi/open"
     one also needs the user's `allow-process` grant.
   - `filesystem`: read (or write) the workspace, see [Files](#files). This one
     also needs the user's `allow-files` grant.
+  - `registers`: read and write registers (API 0.3; the clipboard can only
+    be written).
 - No network, environment variables or standard streams; no files except
-  the plugin's own directory and, if granted, the workspace.
+  the plugin's own directory and, if granted, the workspace and the
+  `allow-dirs` directories.
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
   5 s for `init`) and plugins get at most **256 MiB** of memory. A plugin that
   runs out of time, out of memory or crashes is **disabled** (until
@@ -369,6 +376,32 @@ to another workspace, plugins with `allow-files` are reloaded to see it. Also
 available: `editor::cwd()`, `editor::config_dir()` and
 `editor::document_modified(doc)`.
 
+Users can grant more directories than the workspace (absolute, `~` is the
+home directory); `files::roots()` lists what the plugin got:
+
+```toml
+[oil]
+allow-files = "write"
+allow-dirs = ["~", "/tmp"]
+```
+
+### Changing files through the editor (API 0.3)
+
+`std::fs` changes files behind the editor's back. `helix_plugin_api::files`
+asks the editor instead, like `:move` does, so buffers follow renamed files
+and language servers hear about it (and can, say, update imports):
+
+```rust,ignore
+files::create_path("/work/src/new.rs", false)?;      // or true: a directory
+files::rename_path("/work/a.rs", "/work/src/a.rs")?; // its buffer follows
+files::delete_path("/work/old")?;                    // directories recursively
+```
+
+They need `filesystem` and `allow-files = "write"`, take absolute paths
+inside `roots()` (no `..`, and no symlink leading out), and are carried out
+after the call returns, in order; failures are shown to the user. Read the
+result in a later callback, e.g. a 1 ms timer.
+
 ## Events
 
 Subscribe in `init`'s `Registration { events, .. }` and implement the
@@ -420,6 +453,78 @@ decorations::set_statusline("count", "3 todos")?;
 
 See `examples/todos`.
 
+## Diagnostics (API 0.3)
+
+Linters report problems with `helix_plugin_api::diagnostics`. They show
+like a language server's: gutter, inline and end-of-line text, `]d` / `[d`,
+the diagnostics pickers and the statusline counts.
+
+```rust,ignore
+use helix_plugin_api::diagnostics::{self, diagnostic, Severity};
+
+let mut d = diagnostic(from, to, Severity::Warning, "unused variable");
+d.code = Some("W001".into());
+diagnostics::set_diagnostics(doc, &[d])?; // replaces this plugin's, [] clears
+```
+
+Positions are char offsets; the diagnostics follow edits until set again.
+Each plugin has one set per document (`source` defaults to its name);
+reloading plugins removes them. See `examples/lint`.
+
+## Completion sources (API 0.3)
+
+Subscribe to `EventKind::Completion` and the editor asks the plugin for
+completions while typing, next to language servers and words:
+
+```rust,ignore
+fn on_completion(id: u32, doc: DocumentId, position: u32) {
+    let mut item = completion::item("println!");
+    item.kind = Some("snippet".into());
+    item.documentation = Some("Print a line".into());
+    let _ = completion::complete(id, &[item]);
+}
+```
+
+Answer once per request, now or from a later callback (e.g. after a
+program ran); the menu waits up to 1 s, and a new request replaces an
+unanswered one. Items replace the word before the cursor, or the text from
+`replace-from`; the editor filters them by what was typed. See
+`examples/emoji`.
+
+## Timers (API 0.3)
+
+`editor::set_timer(ms, callback)` runs `callback` once, later; set another
+from it to repeat, `editor::cancel_timer(id)` stops one. At most 16 run at
+once. Nothing runs (or wakes the editor) while no timer is set, so prefer
+a timer to `on_editor_idle` only when the plugin needs a clock. The
+callback is a callback: it can open UI and run commands. See
+`examples/pomodoro`.
+
+## Buffers (API 0.3)
+
+- `editor::open_scratch(text, language, action)` opens a new scratch buffer
+  (no file) with `text`, e.g. command output or a REPL transcript.
+- `editor::open_buffer(name, text, language, action)` opens a buffer the
+  plugin **owns**, shown as `name` (e.g. `oil:///work/`). `:write` on it
+  calls the plugin's `on_buffer_write(doc)` instead of writing a file (as a
+  command: prompts and pickers work); call `editor::mark_saved(doc)` once
+  it's applied, else it stays modified and `:q` warns. Opening the same
+  name again shows that buffer. After it opens, the owner's
+  `on_document_open(doc)` runs (without subscribing), so it learns the id;
+  `editor::buffer_name(doc)` tells its own buffers apart.
+- `[keys.buffer.<mode>]` in `plugin.toml` binds keys only in the plugin's
+  own buffers, where they take precedence (like Neovim's buffer-local
+  mappings); elsewhere they do nothing.
+
+`examples/oil` uses all of them: a directory as an editable buffer.
+
+## Registers (API 0.3)
+
+With the `registers` permission, `editor::register(name)` reads a register
+(one value per selection) and `editor::set_register(name, values)` writes
+one. The clipboard registers (`+`, `*`) can be written, not read. See
+`examples/yank-history`.
+
 ## Default key bindings
 
 A plugin can suggest bindings in `plugin.toml`, in the same shape as
@@ -431,7 +536,9 @@ T = "list"          # runs :todos/list
 ```
 
 They only fill keys nothing else binds (neither the user's config nor Pure's
-defaults), so they never replace a binding. Users turn them off with
+defaults), so they never replace a binding. `[keys.buffer.<mode>]` is the
+exception: those apply only in the plugin's own buffers (see
+[Buffers](#buffers-api-03)). Users turn them off with
 `keys = false` in the plugin's `plugins.toml` table. Plugin commands also
 run as `:<plugin>/<command>` and appear in the command palette.
 

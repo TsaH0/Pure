@@ -6,7 +6,7 @@ use crate::editor::Action;
 use crate::events::{
     DiagnosticsDidChange, DocumentDidChange, DocumentDidClose, LanguageServerInitialized,
 };
-use crate::{DocumentId, Editor, ViewId};
+use crate::{Document, DocumentId, Editor, ViewId};
 use helix_core::diagnostic::DiagnosticProvider;
 use helix_core::Uri;
 use helix_event::register_hook;
@@ -366,6 +366,58 @@ impl Editor {
 
             let doc = doc.id();
             helix_event::dispatch(DiagnosticsDidChange { editor: self, doc });
+        }
+    }
+
+    /// Replace `plugin`'s diagnostics on `doc` (Pure). Positions are in chars
+    /// (UTF-32). Documents with a path also get them in the diagnostics
+    /// pickers.
+    pub fn set_plugin_diagnostics(
+        &mut self,
+        doc: DocumentId,
+        plugin: &str,
+        diagnostics: Vec<lsp::Diagnostic>,
+    ) {
+        let provider = DiagnosticProvider::Plugin {
+            name: plugin.into(),
+        };
+        let Some(document) = self.documents.get_mut(&doc) else {
+            return;
+        };
+        match document.uri() {
+            Some(uri) => self.handle_lsp_diagnostics(&provider, uri, None, diagnostics),
+            None => {
+                let text = document.text().clone();
+                let language_config = document.language.clone();
+                let converted = diagnostics.iter().filter_map(|diagnostic| {
+                    Document::lsp_diagnostic_to_diagnostic(
+                        &text,
+                        language_config.as_deref(),
+                        diagnostic,
+                        provider.clone(),
+                        OffsetEncoding::Utf32,
+                    )
+                });
+                document.replace_diagnostics(converted, &[], Some(&provider));
+                helix_event::dispatch(DiagnosticsDidChange { editor: self, doc });
+            }
+        }
+    }
+
+    /// Remove every diagnostic `plugin` set (it was unloaded or reloaded).
+    pub fn clear_plugin_diagnostics(&mut self, plugin: &str) {
+        let provider = DiagnosticProvider::Plugin {
+            name: plugin.into(),
+        };
+        for diagnostics in self.diagnostics.values_mut() {
+            diagnostics.retain(|(_, p)| p != &provider);
+        }
+        self.diagnostics
+            .retain(|_, diagnostics| !diagnostics.is_empty());
+        for doc in self.documents.values_mut() {
+            if doc.diagnostics().iter().any(|d| d.provider == provider) {
+                doc.replace_diagnostics([], &[], Some(&provider));
+            }
         }
     }
 

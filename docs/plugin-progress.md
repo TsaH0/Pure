@@ -19,7 +19,13 @@ Task list and design: [`plugin-roadmap.md`](plugin-roadmap.md),
   for file-manager style plugins.
 - Owner's rules: nothing built into the editor (the built-in yazi command was
   removed); plugins written to try the API are kept as examples in
-  `helix-plugin/examples/` (`text-tools`, `yazi`, `finder`, `api-demo`).
+  `helix-plugin/examples/` (`text-tools`, `finder`, `api-demo`, `todos`,
+  `markdown`, `js-upper`, `oil`, `lint`, `emoji`, `pomodoro`,
+  `yank-history`). The `yazi` example was removed at the owner's request
+  (2026-10-20) and replaced by `oil`.
+- Done: M12, more kinds of plugins (linters, completion sources, timers,
+  plugin buffers, registers, file operations); see the roadmap for what
+  still isn't possible.
 
 ## Open questions for the owner
 
@@ -467,7 +473,8 @@ API 0.2 was extended in place (it is not released yet):
 - SDK: `prompt`, `popup`, `pick_live` (handler gets the picker id and may
   answer later), `set_items`, `Item::new`, `Item::with_file_preview`,
   handlers for the new events.
-- Examples: `examples/yazi` (chooser through `run-interactive`) and
+- Examples: `examples/yazi` (chooser through `run-interactive`; later
+  removed at the owner's request, replaced by `examples/oil`) and
   `examples/finder` (files, live grep, git branches), checked by hand in
   tmux.
 - Tests: 52 host tests, 26 in-editor plugin tests (prompts, live picker,
@@ -622,4 +629,47 @@ Same harness and builds as above; the third column loads five plugins: yazi
 - Memory: ~3 MiB per loaded plugin (its Wasm instance and compiled code).
 - TODO: incremental rendering for markdown (re-render only changed lines)
   would cut the per-edit cost on very large files.
+
+## M12: what kinds of plugins can be built (2026-10-20)
+
+The owner asked which kinds of plugins Pure couldn't support yet. Compared
+with Neovim's ecosystem, these needed new API, now in API 0.3:
+
+| Kind (Neovim example) | Needed | Pure | Example |
+| --- | --- | --- | --- |
+| Linters (nvim-lint) | diagnostics | `diagnostics.set-diagnostics` | `lint` |
+| Completion sources (nvim-cmp sources) | completion provider | `on-completion` + `complete` | `emoji` |
+| File managers (oil.nvim) | editable plugin buffers, file operations | `open-buffer`, `on-buffer-write`, `[keys.buffer]`, `files.*`, `allow-dirs` | `oil` |
+| Timers, clocks, auto-save (pomodoro) | timers | `timers.set-timer` | `pomodoro` |
+| Yank history (yanky.nvim) | registers | `register`, `set-register` | `yank-history` |
+| Output/REPL buffers | scratch buffers | `open-scratch` | – |
+
+Already possible before: pickers and finders (telescope), git and other
+tools through programs (`spawn`, `run-interactive`), popups and prompts,
+decorations (todo-comments, render-markdown), statusline segments, key
+bindings and commands, background work. Still impossible: see the table in
+the roadmap's M12 (panes and sidebars, embedded terminals, conceal, folds).
+
+Design notes:
+
+- Plugin diagnostics reuse the LSP diagnostic path with
+  `DiagnosticProvider::Plugin` and UTF-32 positions, so every place that
+  shows diagnostics works without per-feature code.
+- Completion requests are answered asynchronously: the editor registers a
+  oneshot per request, the plugin's `complete` action fills it, and the
+  menu task waits up to 1 s. A new request replaces an unanswered one.
+- File operations go through `Editor::move_path` and friends, which tell
+  language servers (`willRename`, ...) and retarget open buffers; for a
+  renamed directory, buffers of files inside it follow too. The host
+  checks each path's real parent against the real roots, so a symlink in
+  the workspace can't lead the editor outside it.
+- Plugin buffers are excluded from Helix's "drop the empty scratch buffer
+  when switching away" rule, so `ctrl-o` can return to them.
+- Cost: none unless a plugin uses them. Completion checks one atomic bit
+  per request; registers are copied into snapshots only while a plugin
+  with the `registers` permission is loaded; timers are sleeping tasks.
+- Tests: host tests per interface (`api_03_*`) and per example
+  (`*_example_*`), editor tests for diagnostics, timers, plugin buffers,
+  buffer keys, completion and the oil workflow
+  (`oil_example_edits_directories_as_buffers`).
 

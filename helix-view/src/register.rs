@@ -77,6 +77,14 @@ impl Registers {
         }
     }
 
+    /// The stored registers without the clipboard ones, values in order.
+    pub fn stored(&self) -> impl Iterator<Item = (char, Vec<String>)> + '_ {
+        self.inner
+            .iter()
+            .filter(|(name, _)| !matches!(name, '*' | '+'))
+            .map(|(name, values)| (*name, values.iter().rev().cloned().collect()))
+    }
+
     pub fn write(&mut self, name: char, mut values: Vec<String>) -> Result<()> {
         match name {
             '_' => Ok(()),

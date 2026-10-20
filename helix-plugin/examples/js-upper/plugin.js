@@ -28,11 +28,12 @@ export const plugin = {
 
 export const callbacks = {
   onProcessDone: noop, onPickerDone: noop, onPickerQuery: noop, onProcessOutput: noop,
-  onPopupClose: noop, onPromptDone: noop, onBackgroundDone: noop,
+  onPopupClose: noop, onPromptDone: noop, onBackgroundDone: noop, onTimer: noop,
 };
 export const events = {
   onDocumentSave: noop, onDocumentClose: noop, onSelectionChange: noop, onPostCommand: noop,
-  onFocusGained: noop, onFocusLost: noop, onEditorIdle: noop,
+  onFocusGained: noop, onFocusLost: noop, onEditorIdle: noop, onCompletion: noop,
+  onBufferWrite: noop,
 };
 export const background = {
   run(task, _input) { throw `no background task ${task}`; },

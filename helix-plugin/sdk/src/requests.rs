@@ -27,7 +27,12 @@ enum Completion {
     Popup(PopupCallback),
     #[cfg(not(feature = "api-v0-2"))]
     Background(BackgroundCallback),
+    #[cfg(not(feature = "api-v0-2"))]
+    Timer(TimerCallback),
 }
+
+#[cfg(not(feature = "api-v0-2"))]
+type TimerCallback = Box<dyn FnOnce() -> Result<(), String>>;
 
 enum ItemUndo {
     Truncate(usize),
@@ -541,6 +546,47 @@ pub fn background_done(id: RequestId, result: Result<String, String>) {
     });
     if let Some(Completion::Background(callback)) = callback {
         report(callback(result));
+    }
+}
+
+/// Run `callback` once after `delay_ms` milliseconds (API 0.3). Set
+/// another timer from it to repeat. Nothing runs while no timer is set. At
+/// most 16 at once.
+#[cfg(not(feature = "api-v0-2"))]
+pub fn set_timer(
+    delay_ms: u32,
+    callback: impl FnOnce() -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    let id = crate::bindings::helix::plugin::timers::set_timer(delay_ms)?;
+    PENDING.with_borrow_mut(|pending| {
+        pending.insert(id, Completion::Timer(Box::new(callback)));
+    });
+    Ok(id)
+}
+
+/// Stop a timer from [`set_timer`] before it goes off.
+#[cfg(not(feature = "api-v0-2"))]
+pub fn cancel_timer(id: RequestId) {
+    crate::bindings::helix::plugin::timers::cancel_timer(id);
+    PENDING.with_borrow_mut(|pending| {
+        if matches!(pending.get(&id), Some(Completion::Timer(_))) {
+            pending.remove(&id);
+        }
+    });
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "api-v0-2"))]
+pub fn timer_fired(id: RequestId) {
+    let callback = PENDING.with_borrow_mut(|pending| {
+        if matches!(pending.get(&id), Some(Completion::Timer(_))) {
+            pending.remove(&id)
+        } else {
+            None
+        }
+    });
+    if let Some(Completion::Timer(callback)) = callback {
+        report(callback());
     }
 }
 

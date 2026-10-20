@@ -230,7 +230,7 @@ fn to_v2_mode(mode: Mode) -> v0_2::helix::plugin::types::Mode {
 pub(crate) enum Instance {
     V0_1(v0_1::HelixPlugin),
     V0_2(v0_2::HelixPlugin),
-    V0_3(v0_3::HelixPlugin),
+    V0_3(Box<v0_3::HelixPlugin>),
 }
 impl Instance {
     /// `init`: the plugin's commands and the events it subscribes to.
@@ -334,6 +334,7 @@ impl Instance {
         match callback {
             super::Callback::ProcessOutput { .. } => anyhow::bail!("streaming requires API 0.3"),
             super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
+            super::Callback::Timer { .. } => anyhow::bail!("timers require API 0.3"),
             super::Callback::BackgroundDone { .. } => {
                 anyhow::bail!("background tasks require API 0.3")
             }
@@ -390,7 +391,9 @@ impl Instance {
                     | Event::PostCommand(_)
                     | Event::FocusGained
                     | Event::FocusLost
-                    | Event::EditorIdle => Ok(()),
+                    | Event::EditorIdle
+                    | Event::Completion { .. }
+                    | Event::BufferWrite(_) => Ok(()),
                 }
             }
             Self::V0_2(instance) => {
@@ -424,7 +427,9 @@ impl Instance {
                     Event::PostCommand(_)
                     | Event::FocusGained
                     | Event::FocusLost
-                    | Event::EditorIdle => Ok(()),
+                    | Event::EditorIdle
+                    | Event::Completion { .. }
+                    | Event::BufferWrite(_) => Ok(()),
                 }
             }
         }

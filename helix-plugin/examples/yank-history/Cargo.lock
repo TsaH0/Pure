@@ -331,7 +331,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yazi"
+name = "yank-history"
 version = "0.1.0"
 dependencies = [
  "helix-plugin-api",

@@ -1,0 +1,6 @@
+name = "lint"
+version = "0.1.0"
+api = "0.3"
+description = "A small linter: trailing whitespace, long lines, mixed indentation, conflict markers (as diagnostics)"
+permissions = ["read-buffers"]
+wasm = "plugin.wasm"

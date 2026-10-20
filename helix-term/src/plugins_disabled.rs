@@ -71,3 +71,26 @@ pub fn describe() -> String {
 pub fn log_lines(_plugin: &str) -> anyhow::Result<Vec<String>> {
     anyhow::bail!(DISABLED)
 }
+
+pub fn write_buffer(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _doc: DocumentId,
+) -> anyhow::Result<()> {
+    anyhow::bail!(DISABLED)
+}
+
+pub fn request_completions(
+    _editor: &mut Editor,
+) -> Vec<(u16, tokio::sync::oneshot::Receiver<Vec<PluginCompletion>>)> {
+    Vec::new()
+}
+
+/// What a plugin completion source answers (never, without plugins).
+pub struct PluginCompletion {
+    pub label: String,
+    pub insert: Option<String>,
+    pub kind: Option<String>,
+    pub documentation: Option<String>,
+    pub replace_from: Option<usize>,
+}

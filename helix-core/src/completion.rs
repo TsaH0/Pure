@@ -17,6 +17,8 @@ pub enum CompletionProvider {
     Lsp(LanguageServerId),
     Path,
     Word,
+    /// A plugin (Pure), by its position in the plugin list.
+    Plugin(u16),
 }
 
 impl From<LanguageServerId> for CompletionProvider {
