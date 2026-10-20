@@ -3519,6 +3519,10 @@ fn background_tasks_run_in_a_separate_instance() {
     let root = tempfile::tempdir().unwrap();
     load_v3(&mut host, root.path(), &["read-buffers"]);
     assert_eq!(background(&mut host, "square", "12"), Ok("144".into()));
+    // Calls are timed for :plugin-list.
+    let timing = host.info()[0].timing;
+    assert!(timing.calls >= 2, "{timing:?}");
+    assert!(timing.slowest >= timing.total / timing.calls as u32);
     // Its own memory (the main instance counted 2 commands; the background
     // one 2 tasks), and no documents even with read-buffers.
     assert_eq!(

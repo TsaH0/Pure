@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context as _};
 use helix_core::{Range as CoreRange, Rope, Selection, Transaction};
@@ -1979,6 +1979,16 @@ pub struct Plugin {
     /// For the background instance (API 0.3), made on first use.
     component: Component,
     worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
+    /// How long its calls took.
+    timing: CallTiming,
+}
+
+/// Calls to a plugin and their time, for `:plugin-list`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CallTiming {
+    pub calls: u64,
+    pub total: Duration,
+    pub slowest: Duration,
 }
 
 /// A task for a plugin's background instance.
@@ -2122,8 +2132,13 @@ impl Plugin {
         let store = &mut self.store;
         let busy = self.ticker.busy();
         let runtime = &self.runtime;
+        let started = Instant::now();
         let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
         drop(busy);
+        let took = started.elapsed();
+        self.timing.calls += 1;
+        self.timing.total += took;
+        self.timing.slowest = self.timing.slowest.max(took);
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
@@ -2166,6 +2181,7 @@ pub struct PluginInfo {
     pub files: FileGrant,
     /// `[keys]` from `plugin.toml`.
     pub keys: Option<toml::Table>,
+    pub timing: CallTiming,
 }
 
 /// Loads and runs plugins.
@@ -2323,6 +2339,7 @@ impl PluginHost {
                 process: plugin.store.data().process.clone(),
                 files: plugin.store.data().files,
                 keys: plugin.manifest.keys.clone(),
+                timing: plugin.timing,
             })
             .collect()
     }
@@ -2578,6 +2595,7 @@ impl PluginHost {
             runtime: self.runtime.clone(),
             component: component.clone(),
             worker: None,
+            timing: CallTiming::default(),
         };
         let config = settings.config;
         let (registration, actions) = plugin.call(

@@ -1900,7 +1900,17 @@ fn deliver_event(editor: &mut Editor, event: Event) {
     let Some(plugins) = with_host(|host| host.subscribers(event.kind())) else {
         return;
     };
-    for plugin in plugins {
+    deliver_event_to(editor, event, plugins);
+}
+
+/// Handlers of one event may take this long together before the rest wait
+/// for the editor to handle pending input.
+const EVENT_BUDGET: Duration = Duration::from_millis(50);
+
+fn deliver_event_to(editor: &mut Editor, event: Event, plugins: Vec<String>) {
+    let started = std::time::Instant::now();
+    let mut plugins = plugins.into_iter();
+    while let Some(plugin) = plugins.next() {
         let snapshot = snapshot(editor);
         let result = with_host(|host| host.dispatch_to(&plugin, event.clone(), &snapshot));
         match result.flatten() {
@@ -1910,6 +1920,14 @@ fn deliver_event(editor: &mut Editor, event: Event) {
                 editor.set_error(error.to_string());
             }
             None => {}
+        }
+        if started.elapsed() > EVENT_BUDGET {
+            let rest: Vec<String> = plugins.collect();
+            if !rest.is_empty() {
+                let event = event.clone();
+                later(move |editor, _| deliver_event_to(editor, event, rest));
+            }
+            return;
         }
     }
 }
@@ -1929,6 +1947,15 @@ pub fn describe() -> String {
             out.push_str(&format!(" — *disabled: {reason}*"));
         }
         out.push('\n');
+        let timing = plugin.timing;
+        if timing.calls > 0 {
+            out.push_str(&format!(
+                "calls: {}, {:.2} ms on average, slowest {:.1} ms\n",
+                timing.calls,
+                timing.total.as_secs_f64() * 1000.0 / timing.calls as f64,
+                timing.slowest.as_secs_f64() * 1000.0
+            ));
+        }
         if !plugin.description.is_empty() {
             out.push_str(&format!("{}\n", plugin.description));
         }
