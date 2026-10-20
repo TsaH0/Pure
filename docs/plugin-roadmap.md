@@ -659,10 +659,14 @@ Small, self-contained; each one is a good single task.
 - **Push often.** An earlier agent built M1.1–M1.3 and lost all of it
   because it was never pushed before its session ended. Commit and push
   every finished task to your branch.
-- **API versions:** 0.1 and 0.2 are frozen (never edit a released WIT);
-  new functions go in a new version. Add new *exports* in separate interfaces (like `callbacks`
-  and `events`): the SDK's `register_plugin!` implements `plugin` for both
-  API versions, so changing `plugin` breaks the 0.1 ABI.
+- **API versions:** 0.1 and 0.2 are frozen; 0.3 is frozen for exports
+  and 0.4 is current. A released version may gain host functions
+  (imports), never exports: components lacking an export fail to load. New
+  exports mean a new version, with the old one's fixtures frozen in
+  `tests/fixtures/` and its adapters shared via `api/world.rs`. Add new
+  *exports* in separate interfaces (like `callbacks` and `events`): the
+  SDK's `register_plugin!` implements `plugin` for all versions, so
+  changing `plugin` breaks the 0.1 ABI.
 - **Fixtures:** after changing the WIT, the SDK or a guest, run
   `helix-plugin/build-plugins.sh` and commit the `.wasm` files. A stale
   fixture fails at load time with "a matching implementation was not found

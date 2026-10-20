@@ -960,11 +960,9 @@ impl EditorView {
         let styles = doc
             .plugin_decorations
             .line_backgrounds(text, theme, lines, cursor_line);
-        (!styles.is_empty()).then(|| {
-            move |renderer: &mut TextRenderer, pos: LinePos| {
-                if let Some(style) = styles.get(&pos.doc_line) {
-                    renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), *style);
-                }
+        (!styles.is_empty()).then_some(move |renderer: &mut TextRenderer, pos: LinePos| {
+            if let Some(style) = styles.get(&pos.doc_line) {
+                renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), *style);
             }
         })
     }
