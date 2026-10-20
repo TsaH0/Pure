@@ -1,8 +1,38 @@
 # Suggested improvements: Pure system review
 
 Reviewed on **2026-10-20**, against **master `1268b872`** (after pulling PR #29).
-This is a review and implementation backlog; the fixes below have **not** been
-applied by this review.
+This was a review and implementation backlog; see "Status" for what has
+since been fixed.
+
+## Status (2026-10-20, after the fixes)
+
+Each finding was checked against the code first; all were valid. What was
+done, and what is left on purpose:
+
+| ID | Done | Left |
+| --- | --- | --- |
+| S01 | Commands containing `%sh` need `allow-process` (test) | — |
+| S02 | No wake-ups without files or with auto-reload off (measured 0 context switches / 5 s); FIFOs and devices skipped (test) | Reading a changed file is still synchronous (as `:reload`); file watches belong to F09 |
+| S03 | Ticker runs until running calls end; queued tasks refused after host drop (test fails without the fix) | — |
+| S04 | `Manifest::parse` rejects non-local `wasm` before any copy (test) | — |
+| S05 | `create_new`, `RENAME_NOREPLACE`, `O_NOFOLLOW`; grants re-checked when each operation runs (tests) | Full handle-relative (`openat`) operations; the re-check narrows, not closes, the parent-swap window |
+| S06 | Cancel removes same-call timers or aborts the task; reload aborts all (tests) | — |
+| S07 | At most 2 linear memories per store; log lines capped at 4 KiB | Aggregate byte budgets for retained layers, picker/sidebar text |
+| S08 | Preview builds at most 1 MiB of replacements (test) | — |
+| S09 | Install/update commit and reload run in the background (checked in a terminal) | LSP `will*` waits and `%sh` expansion are upstream behaviour, unchanged |
+| S10 | ≤ 4 batches per plugin, batches serialized, FIFOs refused (tests) | Cancelling a batch mid-way |
+| S11 | Disabled plugins lose processes, timers, completions, decorations, diagnostics, statusline, sidebar (test) | — |
+| S12 | Markdown forgets closed documents, sets render settings once | Delta reads need F02 |
+| S13 | One `update_positions` pass per layer; randomized equivalence test | — |
+| S14 | Per-plugin call timing in `:plugin-list`; 50 ms budget per event, the rest after pending input | p95/p99 telemetry |
+| S15 | Compiles ≤ available parallelism (max 8); no host when all plugins are off | Cache pruning on warm hits kept: it removes other versions' entries and costs microseconds |
+| S16 | A reload during the startup load opens the waiting directory (test fails without the fix) | Focus checks for deferred opens (F03) |
+| S17 | Old copy restored if the update or the lock write fails (test fails without the fix); unreadable lock loads nothing; git has no prompts and a 2-minute limit | Inter-process lock serialization |
+| S18 | `:grep` capped at 32 MiB / 100,000 entries, newest wins, byte columns (test) | `:compile` buffer is unbounded, like Emacs' |
+| S19 | Oil orders operations by dependency, swaps through a temporary name, makes new directories once (tests) | — |
+| S20 | Conceals drop on any edit inside them (test) | — |
+| S21 | CI job: plugin-less build, native tests of examples, committed components | Release benchmark gates |
+| S22 | Moved to the future roadmap's F01 | — |
 
 ## What was reviewed
 
