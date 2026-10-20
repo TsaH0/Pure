@@ -348,6 +348,18 @@ interface decorations {
   }
   set-signs: func(doc: document-id, layer: string, signs: list<sign>) -> result<_, string>;
 
+  record line-background {
+    /// 0-based line.
+    line: u32,
+    /// A theme scope whose background fills the line's text area to the
+    /// window's edge (wrapped rows too), e.g. `markup.raw.block`. Text,
+    /// selections and the cursor line draw over it. Several scopes separated
+    /// by commas: the first one the theme defines (themes differ a lot).
+    /// Added in 0.3.x.
+    scope: string,
+  }
+  set-line-backgrounds: func(doc: document-id, layer: string, lines: list<line-background>) -> result<_, string>;
+
   /// Hide `layer` on the line holding the primary cursor, so the line shows
   /// its plain text while being edited (the way render-markdown.nvim does).
   /// The editor follows the cursor itself: the plugin needs no

@@ -624,9 +624,13 @@ Small, self-contained; each one is a good single task.
   backticks, link URLs). Needs `helix-core`'s `DocumentFormatter` to skip
   graphemes; cursor movement over hidden text must still work. Larger than
   other decorations: design with the owner first.
-- [ ] **Full-line backgrounds:** a highlight that extends to the window's
-  edge (heading and code-block backgrounds), e.g. a line-level style in
-  `PluginDecorations` applied in `render_view`.
+- [x] **Full-line backgrounds:** `decorations.set-line-backgrounds` (added
+  to 0.3 and 0.4: an import). Stored at line starts and mapped through
+  edits; `render_view` looks up only the visible lines and paints the text
+  area of each view (wrapped rows too) before the cursor line, text and
+  selections. Raw-on-cursor-line layers skip the cursor's line. Scopes may
+  list comma-separated fallbacks. The markdown example uses it for code
+  blocks.
 - [x] **Directory arguments for file-manager plugins:**
   `editor.directory-handler = "oil/open"` runs that plugin command with the
   directory for `pure <dir>` and `:open <dir>`. At startup the request waits
@@ -646,6 +650,11 @@ Small, self-contained; each one is a good single task.
   (see the overhead numbers in `plugin-progress.md`).
 
 ## Guidelines for agents (lessons from earlier work)
+
+- `cargo test -p helix-term --features integration` relinks
+  `target/debug/pure` with the in-memory test terminal: run by hand, it
+  draws nothing. Before checking the real editor (tmux, pty scripts),
+  `touch helix-term/src/main.rs && cargo build`.
 
 - **Push often.** An earlier agent built M1.1–M1.3 and lost all of it
   because it was never pushed before its session ended. Commit and push

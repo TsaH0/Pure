@@ -129,6 +129,14 @@ pub mod decorations {
         annotation(position, text, scope)
     }
 
+    /// A background for a whole 0-based line, to the window's edge.
+    pub fn line_background(line: u32, scope: &str) -> LineBackground {
+        LineBackground {
+            line,
+            scope: scope.into(),
+        }
+    }
+
     /// A one-character sign on a 0-based line.
     pub fn sign(line: u32, text: impl Into<String>, scope: &str) -> Sign {
         Sign {

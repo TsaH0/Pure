@@ -15,7 +15,10 @@
 //! ```toml
 //! [markdown]
 //! width = 80   # how far rules extend
+//! code-background = "ui.cursorline.primary,ui.virtual.ruler"  # first defined
 //! ```
+//!
+//! Code blocks get a background across the whole window width.
 //!
 //! Not possible in Pure (yet): hiding markup such as `**` or the link URL of
 //! `[text](url)` (concealing), since Helix has no way to draw fewer
@@ -31,6 +34,9 @@ use helix_plugin_api::{
 thread_local! {
     static ENABLED: Cell<bool> = const { Cell::new(true) };
     static WIDTH: Cell<u32> = const { Cell::new(80) };
+    /// The theme scope whose background code blocks get.
+    static CODE_BACKGROUND: std::cell::RefCell<String> =
+        std::cell::RefCell::new("ui.cursorline.primary,ui.virtual.ruler".into());
 }
 
 const HEADINGS: [char; 6] = ['◉', '◎', '○', '◆', '◇', '▸'];
@@ -41,6 +47,8 @@ struct Rendered {
     highlights: Vec<Highlight>,
     overlays: Vec<Annotation>,
     annotations: Vec<Annotation>,
+    /// Whole-line backgrounds (code blocks).
+    blocks: Vec<decorations::LineBackground>,
 }
 
 impl Rendered {
@@ -80,9 +88,11 @@ fn render(source: &str) -> Rendered {
                 out.highlights.push(highlight(at(indent + fence), start + len, "label"));
             }
             in_code = !in_code;
+            out.blocks.push(line_background(number as u32));
             continue;
         }
         if in_code {
+            out.blocks.push(line_background(number as u32));
             out.highlights.push(highlight(start, start + len, "markup.raw.block"));
             continue;
         }
@@ -177,6 +187,10 @@ fn render(source: &str) -> Rendered {
     out
 }
 
+fn line_background(line: u32) -> decorations::LineBackground {
+    CODE_BACKGROUND.with_borrow(|scope| decorations::line_background(line, scope))
+}
+
 fn update(doc: DocumentId) -> Result<(), String> {
     if !is_markdown(doc) {
         return Ok(());
@@ -192,6 +206,7 @@ fn update(doc: DocumentId) -> Result<(), String> {
     }
     decorations::set_highlights(doc, "text", &rendered.highlights)?;
     decorations::set_overlays(doc, "marks", &rendered.overlays)?;
+    decorations::set_line_backgrounds(doc, "blocks", &rendered.blocks)?;
     decorations::set_annotations(doc, "rules", &rendered.annotations)
 }
 
@@ -213,6 +228,13 @@ impl Plugin for Markdown {
             .and_then(|n| n.trim().parse().ok())
         {
             WIDTH.set(width);
+        }
+        if let Some(scope) = config
+            .split("\"code-background\":\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+        {
+            CODE_BACKGROUND.set(scope.to_string());
         }
         Ok(Registration {
             commands: vec![CommandInfo {
@@ -264,6 +286,9 @@ mod test {
         assert!(overlays.iter().any(|(_, t)| *t == "✔  "));
         assert!(overlays.iter().any(|(_, t)| *t == "▋"));
         assert!(overlays.iter().any(|(_, t)| *t == "├───┼───┤"));
+        // The code block, fences included, gets a line background.
+        let blocks: Vec<_> = out.blocks.iter().map(|b| b.line).collect();
+        assert_eq!(blocks, [7, 8, 9]);
     }
 }
 

@@ -178,6 +178,8 @@ pub enum Decorations {
     Overlays(Vec<(usize, String, String)>),
     /// `(char position of the line start, one-char text, theme scope)`.
     Signs(Vec<(usize, String, String)>),
+    /// `(char position of the line start, theme scope)`.
+    LineBackgrounds(Vec<(usize, String)>),
     /// Not a replacement: whether the layer is hidden on the cursor's line.
     RawOnCursorLine(bool),
 }
@@ -1267,6 +1269,28 @@ impl State {
             checked.push((text.line_to_char(line as usize), sign, scope));
         }
         self.decorate(doc, layer, Decorations::Signs(checked));
+        Ok(())
+    }
+
+    fn set_line_backgrounds(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        lines: Vec<(u32, String)>,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, lines.len())?;
+        let text = &self.document(doc)?.text;
+        let count = text.len_lines();
+        let mut checked = Vec::with_capacity(lines.len());
+        for (line, scope) in lines {
+            if line as usize >= count {
+                return Err(format!(
+                    "invalid line {line} for a document of {count} lines"
+                ));
+            }
+            checked.push((text.line_to_char(line as usize), scope));
+        }
+        self.decorate(doc, layer, Decorations::LineBackgrounds(checked));
         Ok(())
     }
 

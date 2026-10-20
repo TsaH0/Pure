@@ -467,6 +467,11 @@ decorations::set_statusline("count", "3 todos")?;
   is unchanged. Hiding characters (conceal) isn't possible.
 - Signs are one character on a line, shown in the `plugins` gutter, which
   users add to `editor.gutters`.
+- Line backgrounds (`set_line_backgrounds`, `decorations::line_background`)
+  fill whole lines, wrapped rows included, to the window's edge (not the
+  gutter), e.g. code blocks. Text, selections and the cursor line draw over
+  them. Themes differ, so the scope may list fallbacks:
+  `"ui.cursorline.primary,ui.virtual.ruler"` uses the first one defined.
 - The statusline text shows in the `plugins` element of
   `editor.statusline` (one line, at most 200 chars per segment).
 - At most 100,000 decorations per layer. Reloading plugins clears them.

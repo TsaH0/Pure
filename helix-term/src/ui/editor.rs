@@ -94,6 +94,11 @@ impl EditorView {
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
 
+        // Plugins' line backgrounds, under the cursor line and the text.
+        if let Some(backgrounds) = Self::plugin_line_backgrounds(doc, view, theme, inner) {
+            decorations.add_decoration(backgrounds);
+        }
+
         if is_focused && config.cursorline {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
@@ -932,6 +937,38 @@ impl EditorView {
     }
 
     /// Apply the highlighting on the lines where a cursor is active
+    /// Plugins' whole-line backgrounds for the visible lines, filling the
+    /// text area of the view (not the gutter).
+    fn plugin_line_backgrounds(
+        doc: &Document,
+        view: &View,
+        theme: &Theme,
+        inner: Rect,
+    ) -> Option<impl Decoration> {
+        if doc.plugin_decorations.is_empty() {
+            return None;
+        }
+        let text = doc.text().slice(..);
+        let anchor = doc.view_offset(view.id).anchor.min(text.len_chars());
+        let first = text.char_to_line(anchor);
+        // Wrapped lines take more rows, never fewer: this covers the view.
+        let lines = first..first + inner.height as usize + 1;
+        let cursor_line = doc
+            .plugin_decorations
+            .wants_cursor_line()
+            .then(|| text.char_to_line(doc.selection(view.id).primary().cursor(text)));
+        let styles = doc
+            .plugin_decorations
+            .line_backgrounds(text, theme, lines, cursor_line);
+        (!styles.is_empty()).then(|| {
+            move |renderer: &mut TextRenderer, pos: LinePos| {
+                if let Some(style) = styles.get(&pos.doc_line) {
+                    renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), *style);
+                }
+            }
+        })
+    }
+
     pub fn cursorline(doc: &Document, view: &View, theme: &Theme) -> impl Decoration {
         let text = doc.text().slice(..);
         // TODO only highlight the visual line that contains the cursor instead of the full visual line

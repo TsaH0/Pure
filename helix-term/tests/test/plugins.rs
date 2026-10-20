@@ -1459,7 +1459,7 @@ async fn plugins_decorate_documents() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Result<()> {
     let file = tempfile::Builder::new().suffix(".md").tempfile()?;
-    std::fs::write(file.path(), "# Title\n- item\n")?;
+    std::fs::write(file.path(), "# Title\n- item\n```\ncode\n```\n")?;
     let mut app = AppBuilder::new()
         .with_file(file.path(), None)
         .build()
@@ -1480,6 +1480,13 @@ async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Resu
     assert!(!decorations.is_empty());
     // The editor hides the rendering on the cursor's line: no cursor events.
     assert!(decorations.wants_cursor_line());
+    // Code blocks get full-line backgrounds.
+    let doc = helix_view::doc!(app.editor);
+    let lines: Vec<_> = decorations
+        .line_backgrounds(doc.text().slice(..), &app.editor.theme, 0..10, None)
+        .into_keys()
+        .collect();
+    assert_eq!(lines, [2, 3, 4]);
     Ok(())
 }
 

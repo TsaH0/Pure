@@ -285,6 +285,15 @@ macro_rules! world_adapters {
                     .collect();
                 State::set_signs(self, doc, layer, signs)
             }
+            fn set_line_backgrounds(
+                &mut self,
+                doc: DocumentId,
+                layer: String,
+                lines: Vec<decorations::LineBackground>,
+            ) -> std::result::Result<(), String> {
+                let lines = lines.into_iter().map(|l| (l.line, l.scope)).collect();
+                State::set_line_backgrounds(self, doc, layer, lines)
+            }
             fn set_raw_on_cursor_line(
                 &mut self,
                 doc: DocumentId,

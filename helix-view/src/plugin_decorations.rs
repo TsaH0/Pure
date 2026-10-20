@@ -11,6 +11,7 @@ use helix_core::syntax::OverlayHighlights;
 use helix_core::text_annotations::{InlineAnnotation, Overlay, TextAnnotations};
 use helix_core::{Assoc, ChangeSet, RopeSlice};
 
+use crate::graphics::Style;
 use crate::Theme;
 
 /// One layer's virtual text, grouped by scope (one style per group, which is
@@ -39,6 +40,8 @@ pub struct PluginDecorations {
     overlays: BTreeMap<String, Vec<(String, Vec<Overlay>)>>,
     /// Sorted by position per layer.
     signs: BTreeMap<String, Vec<Sign>>,
+    /// Whole-line backgrounds: `(line start, theme scope)`, sorted per layer.
+    line_backgrounds: BTreeMap<String, Vec<(usize, String)>>,
     /// Layers not drawn on the line with the view's cursor, so it shows the
     /// raw text (e.g. rendered Markdown).
     raw_on_cursor_line: std::collections::BTreeSet<String>,
@@ -66,6 +69,7 @@ impl PluginDecorations {
             && self.annotations.is_empty()
             && self.overlays.is_empty()
             && self.signs.is_empty()
+            && self.line_backgrounds.is_empty()
     }
 
     /// Replace `layer`'s highlights. Ranges past `len` are dropped, and later
@@ -156,6 +160,56 @@ impl PluginDecorations {
         }
     }
 
+    /// Replace `layer`'s line backgrounds: `(char position of the line
+    /// start, theme scope)`.
+    pub fn set_line_backgrounds(
+        &mut self,
+        layer: String,
+        mut lines: Vec<(usize, String)>,
+        len: usize,
+    ) {
+        lines.retain(|(pos, _)| *pos <= len);
+        lines.sort_by_key(|(pos, _)| *pos);
+        lines.dedup_by_key(|(pos, _)| *pos);
+        if lines.is_empty() {
+            self.line_backgrounds.remove(&layer);
+        } else {
+            self.line_backgrounds.insert(layer, lines);
+        }
+    }
+
+    /// The background style of each line in `lines` (first layer wins);
+    /// raw-on-cursor-line layers skip `cursor_line`.
+    pub fn line_backgrounds(
+        &self,
+        text: RopeSlice,
+        theme: &Theme,
+        lines: Range<usize>,
+        cursor_line: Option<usize>,
+    ) -> BTreeMap<usize, Style> {
+        let mut styles = BTreeMap::new();
+        if lines.start >= text.len_lines() {
+            return styles;
+        }
+        let from = text.line_to_char(lines.start);
+        let to = text.line_to_char(lines.end.min(text.len_lines()));
+        for (layer, backgrounds) in &self.line_backgrounds {
+            let raw = self.raw_on_cursor_line.contains(layer);
+            let first = backgrounds.partition_point(|(pos, _)| *pos < from);
+            for (pos, scope) in backgrounds[first..].iter().take_while(|(pos, _)| *pos < to) {
+                let line = text.char_to_line(*pos);
+                if raw && Some(line) == cursor_line {
+                    continue;
+                }
+                // Comma-separated scopes: the first the theme has.
+                if let Some(style) = scope.split(',').find_map(|s| theme.try_get(s.trim())) {
+                    styles.entry(line).or_insert(style);
+                }
+            }
+        }
+        styles
+    }
+
     /// Replace `layer`'s gutter signs.
     pub fn set_signs(&mut self, layer: String, mut signs: Vec<Sign>, len: usize) {
         signs.retain(|sign| sign.pos <= len && !sign.text.is_empty());
@@ -185,6 +239,8 @@ impl PluginDecorations {
             .retain(|layer, _| !layer.starts_with(&prefix));
         self.overlays.retain(|layer, _| !layer.starts_with(&prefix));
         self.signs.retain(|layer, _| !layer.starts_with(&prefix));
+        self.line_backgrounds
+            .retain(|layer, _| !layer.starts_with(&prefix));
         self.raw_on_cursor_line
             .retain(|layer| !layer.starts_with(&prefix));
     }
@@ -225,6 +281,9 @@ impl PluginDecorations {
                     end == start + 1 && start < len
                 });
             }
+        }
+        for lines in self.line_backgrounds.values_mut() {
+            changes.update_positions(lines.iter_mut().map(|(pos, _)| (pos, Assoc::After)));
         }
         for signs in self.signs.values_mut() {
             changes.update_positions(signs.iter_mut().map(|sign| (&mut sign.pos, Assoc::After)));
@@ -429,5 +488,34 @@ mod test {
         assert!(decorations.wants_cursor_line());
         decorations.clear_plugin("md");
         assert!(!decorations.wants_cursor_line());
+    }
+
+    #[test]
+    fn line_backgrounds_follow_edits_and_skip_the_raw_cursor_line() {
+        let mut text = Rope::from("a\nb\nc\n");
+        let mut decorations = PluginDecorations::default();
+        let theme: Theme = toml::from_str(r#""ui.selection" = { bg = "red" }"#).unwrap();
+        decorations.set_line_backgrounds(
+            "md/blocks".into(),
+            vec![(2, "ui.selection".into()), (4, "ui.selection".into())],
+            text.len_chars(),
+        );
+        let lines = |d: &PluginDecorations, text: &Rope, cursor| {
+            d.line_backgrounds(text.slice(..), &theme, 0..10, cursor)
+                .into_keys()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines(&decorations, &text, None), [1, 2]);
+        // A new line above moves them down.
+        let transaction = Transaction::change(&text, [(0, 0, Some("x\n".into()))].into_iter());
+        transaction.apply(&mut text);
+        decorations.map(transaction.changes(), text.len_chars());
+        assert_eq!(lines(&decorations, &text, None), [2, 3]);
+        // Only the visible lines are looked at.
+        assert!(decorations
+            .line_backgrounds(text.slice(..), &theme, 3..4, None)
+            .contains_key(&3));
+        decorations.set_raw_on_cursor_line("md/blocks".into(), true);
+        assert_eq!(lines(&decorations, &text, Some(2)), [3]);
     }
 }
