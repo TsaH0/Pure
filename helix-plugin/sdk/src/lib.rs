@@ -96,6 +96,15 @@ pub mod editor {
     pub use crate::requests::{
         kill, pick, pick_live, popup, prompt, push_items, run_interactive, set_items, spawn,
     };
+    /// Optional features of this Pure ("cancel-request", "revisions",
+    /// "snippet-completions"): a plugin using them only loads on a Pure
+    /// that has them, so this is for features a plugin can do without.
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+    pub use crate::bindings::helix::plugin::requests::capabilities;
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+    pub use crate::bindings::helix::plugin::revisions::{apply_edits_at, revision};
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+    pub use crate::requests::cancel;
 }
 
 /// How documents look (API 0.3): highlights, virtual text, gutter signs and
@@ -233,6 +242,12 @@ pub mod completion {
             replace_from: None,
         }
     }
+
+    /// Answer with snippets: each item's `insert` (or `label`) has tab
+    /// stops (`$1`, `${2:default}`, `${3|a,b|}`, `$0`) the user tabs
+    /// through, like a language server's snippets.
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+    pub use crate::bindings::helix::plugin::snippets::complete as complete_snippets;
 }
 
 /// A Pure plugin. Only `init` and `run_command` have to be implemented; the

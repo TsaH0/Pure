@@ -1,8 +1,9 @@
-//! Optional SDK 0.3 trial plugin. Installed only when the user copies it.
+//! Optional SDK trial plugin (API 0.3 and 0.4 additions). Installed only
+//! when the user copies it.
 use std::cell::Cell;
 
 use helix_plugin_api::{
-    editor, register_plugin, CommandInfo, EventKind, Item, OpenAction, Picker, Plugin,
+    editor, register_plugin, CommandInfo, Edit, EventKind, Item, OpenAction, Picker, Plugin,
     PopupOptions, Registration, SpawnOptions,
 };
 
@@ -17,6 +18,7 @@ impl Plugin for Demo {
         Ok(Registration {
             commands: [
                 "popup", "close", "live", "update", "push", "rollback", "stream", "open-at",
+                "sort",
             ]
             .into_iter()
             .map(|name| CommandInfo {
@@ -127,9 +129,36 @@ impl Plugin for Demo {
                     coordinate(3)?,
                 )?;
             }
+            // Sort the lines in the background; the result only replaces
+            // the text if it didn't change meanwhile (API 0.4 revisions).
+            "sort" => {
+                let doc = editor::current_document().ok_or("no document")?;
+                let revision = editor::revision(doc)?;
+                let text = editor::text(doc)?;
+                let len = text.chars().count() as u32;
+                editor::run_background("sort", text, move |sorted| {
+                    let edit = Edit {
+                        from: 0,
+                        to: len,
+                        text: sorted?,
+                    };
+                    match editor::apply_edits_at(doc, revision, &[edit]) {
+                        Ok(()) => editor::set_status("sorted"),
+                        Err(_) => editor::set_status("the text changed while sorting: not applied"),
+                    }
+                    Ok(())
+                })?;
+            }
             _ => return Err(format!("unknown command {name}")),
         }
         Ok(())
+    }
+
+    fn run_background(task: &str, input: String) -> Result<String, String> {
+        match task {
+            "sort" => Ok(sort_lines(&input)),
+            _ => Err(format!("no background task '{task}'")),
+        }
     }
 
     fn on_post_command(command: &str) {
@@ -144,6 +173,18 @@ impl Plugin for Demo {
     fn on_editor_idle() {
         editor::log("event:idle");
     }
+}
+
+/// `text`'s lines in order, keeping a final line break.
+fn sort_lines(text: &str) -> String {
+    let trailing = text.ends_with('\n');
+    let mut lines: Vec<&str> = text.lines().collect();
+    lines.sort_unstable();
+    let mut sorted = lines.join("\n");
+    if trailing {
+        sorted.push('\n');
+    }
+    sorted
 }
 
 fn number(args: &[String], index: usize) -> Result<u32, String> {

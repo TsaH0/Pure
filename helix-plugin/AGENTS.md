@@ -328,7 +328,10 @@ Unsubscribed events cost nothing: the editor checks an atomic bitmask.
 - `set_status(&str)`, `set_error(&str)`, `log(&str)` (Helix log file plus
   `:plugin-log`)
 - `run_command(":write")` or a static command name like `"goto_line_end"`
-  (needs `run-commands`; commands and callbacks only)
+  (needs `run-commands`; commands and callbacks only). Commands that open UI
+  behave as if the user pressed their key: `file_picker` opens the picker,
+  `search` its prompt, `replace` waits for the next key. They open once the
+  plugin call has returned.
 - `workspace_root() -> Option<String>`, `cwd()`, `config_dir()`,
   `data_dir()` (`~/.local/share/helix/plugins/<name>/`, always read-write via
   `std::fs`, no permission needed)
@@ -494,6 +497,26 @@ replaces an unanswered one. Always answer, even with an empty list.
 `documentation` (markdown) and `replace_from` (char offset; default: the
 start of the word before the cursor). The editor filters items by what the
 user typed. See `examples/emoji`.
+
+### Snippets, revisions, cancelling (added to API 0.4)
+
+Imports only, so 0.4 plugins built before still load; a plugin using them
+needs a Pure that has them (`editor::capabilities()` lists
+`"cancel-request"`, `"revisions"`, `"snippet-completions"`; on an older
+Pure such a plugin fails to load with "needs a newer Pure").
+
+- `completion::complete_snippets(id, &items)`: like `complete`, but
+  `insert` (or `label`) is an LSP-style snippet (`$1`, `${2:x}`, `${3|a,b|}`,
+  `$0`), expanded by the editor's snippet engine with tab stops. Snippet
+  variables (`${TM_FILENAME}`) are not resolved. See `examples/snippets`.
+- `editor::revision(doc) -> u64` (needs `read-buffers`) and
+  `editor::apply_edits_at(doc, revision, &edits)` (needs `edit-buffers`):
+  apply only if the text is unchanged since `revision`. Always use this
+  for edits computed asynchronously (background tasks, programs, timers).
+  See `api-demo`'s `sort`.
+- `editor::cancel(id)`: stop any request and drop its callback (timer,
+  program, background task, file batch, completion, popup; pickers and
+  prompts stay open but their answer is ignored).
 
 ### Timers (`editor::set_timer`)
 

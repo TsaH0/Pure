@@ -20,6 +20,8 @@ const MAX_LINES: usize = 200;
 
 /// Don't preview over more text than this on every key press.
 const MAX_SCOPE_CHARS: usize = 8 * 1024 * 1024;
+/// Bytes of replacement text the preview computes: enough for its rows.
+const MAX_PREVIEW_BYTES: usize = 1024 * 1024;
 
 struct Preview {
     doc: DocumentId,
@@ -175,18 +177,24 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
     if scopes.iter().map(|(from, to)| to - from).sum::<usize>() > MAX_SCOPE_CHARS {
         return error("too much text to preview".into());
     }
-    let outcome = substitution.apply(text, &scopes);
+    let outcome = substitution.apply_limited(text, &scopes, MAX_PREVIEW_BYTES);
 
     let replacing = command.has_replacement && !command.flags.count_only;
     let mut lines = Vec::new();
     let mut i = 0;
     let changes = &outcome.changes;
-    while i < changes.len() && lines.len() < MAX_LINES {
+    // Only changes whose replacement was computed can be shown.
+    let shown = if replacing {
+        outcome.expanded
+    } else {
+        changes.len()
+    };
+    while i < shown && lines.len() < MAX_LINES {
         // A hunk: whole lines covering a run of changes that share lines.
         let first_line = text.char_to_line(changes[i].0);
         let mut last_line = text.char_to_line(changes[i].1);
         let mut j = i + 1;
-        while j < changes.len() && text.char_to_line(changes[j].0) <= last_line {
+        while j < shown && text.char_to_line(changes[j].0) <= last_line {
             last_line = last_line.max(text.char_to_line(changes[j].1));
             j += 1;
         }

@@ -522,6 +522,48 @@ interface sidebar {
   selected: func() -> option<u32>;
 }
 
+/// Added to 0.4 later: check `capabilities` before relying on it in a
+/// plugin that should also run on older Pure (a component importing these
+/// doesn't load at all on a Pure without them).
+interface requests {
+  use types.{request-id};
+
+  /// The optional features this Pure has: "cancel-request", "revisions",
+  /// "snippet-completions".
+  capabilities: func() -> list<string>;
+  /// Stop request `id` of this plugin, whatever kind it is: a timer, a
+  /// program (killed), a background task, a files.apply batch (operations
+  /// not started yet are skipped; one already running finishes), a
+  /// completion request (answered with nothing), a popup (closed, from
+  /// commands and callbacks). Its callback is never called. A picker or
+  /// prompt stays open, but its answer is dropped. Unknown ids are ignored.
+  cancel: func(id: request-id);
+}
+
+/// Edits that only apply to the text they were computed for. A document's
+/// revision changes with every change to its text (edits, undo, reload);
+/// a background result for an older revision must not edit newer text.
+interface revisions {
+  use types.{document-id, edit};
+
+  /// The revision of `doc` (needs `read-buffers`).
+  revision: func(doc: document-id) -> result<u64, string>;
+  /// `host.apply-edits`, but only if `doc` is still at `revision`;
+  /// otherwise nothing changes and the error says the text changed.
+  apply-edits-at: func(doc: document-id, revision: u64, edits: list<edit>) -> result<_, string>;
+}
+
+/// Completions inserted as snippets, with tab stops (`$1`, `${2:default}`,
+/// `${3|one,two|}`, `$0`), like a language server's.
+interface snippets {
+  use types.{request-id};
+  use completion.{completion-item};
+
+  /// Like `completion.complete`, but each item's `insert` (or `label`) is
+  /// a snippet; `\$` is a literal dollar.
+  complete: func(id: request-id, items: list<completion-item>) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -533,6 +575,9 @@ world helix-plugin {
   import completion;
   import files;
   import sidebar;
+  import requests;
+  import revisions;
+  import snippets;
   export plugin;
   export callbacks;
   export events;

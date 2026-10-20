@@ -52,7 +52,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use helix_plugin_api::{
     decorations::{self, annotation, highlight, overlay, Annotation, Highlight},
-    editor, files, register_plugin, text, CommandInfo, DocumentId, Edit, OpenAction, Plugin,
+    editor, files, register_plugin, text, CommandInfo, DocumentId, Edit, EventKind, OpenAction, Plugin,
     PopupOptions, Range, Registration,
 };
 
@@ -380,6 +380,7 @@ fn plan(buffers: &[(PathBuf, String, bool)]) -> Result<Vec<Op>, String> {
             }
         }
         ops.extend(creates);
+        let mut ops = order(ops);
         // What a failed `:w` already did isn't done again.
         ops.retain(|op| !oil.applied.contains(op));
         // Nothing may overwrite an existing entry that stays.
@@ -401,6 +402,90 @@ fn plan(buffers: &[(PathBuf, String, bool)]) -> Result<Vec<Op>, String> {
         }
         Ok(ops)
     })
+}
+
+impl Op {
+    /// The path this operation frees: a move's source, a deleted path.
+    fn vacates(&self) -> Option<&Path> {
+        match self {
+            Op::Move { from, .. } => Some(from),
+            Op::Delete { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The path this operation fills.
+    fn occupies(&self) -> Option<&Path> {
+        match self {
+            Op::Create { path, .. } => Some(path),
+            Op::Copy { to, .. } | Op::Move { to, .. } => Some(to),
+            Op::Delete { .. } => None,
+        }
+    }
+
+    /// The path this operation needs to still be there.
+    fn reads(&self) -> Option<&Path> {
+        match self {
+            Op::Copy { from, .. } | Op::Move { from, .. } => Some(from),
+            _ => None,
+        }
+    }
+}
+
+/// Whether `a` must run before `b`: `a` frees where `b` goes, `a` reads
+/// something `b` removes, or `a` creates the directory `b` goes into.
+fn before(a: &Op, b: &Op) -> bool {
+    let frees_target = a
+        .vacates()
+        .zip(b.occupies())
+        .is_some_and(|(gone, target)| target.starts_with(gone));
+    let reads_removed = b
+        .vacates()
+        .zip(a.reads())
+        .is_some_and(|(gone, source)| source.starts_with(gone));
+    let makes_parent = a
+        .occupies()
+        .zip(b.occupies())
+        .is_some_and(|(dir, target)| target != dir && target.starts_with(dir));
+    frees_target || reads_removed || makes_parent
+}
+
+/// `ops` in an order that works: frees before fills, copies before their
+/// source moves or goes. Renames in a cycle (`a`↔`b`) go through a
+/// temporary name (always the same one, so a retry after a failure plans
+/// the same steps).
+fn order(mut ops: Vec<Op>) -> Vec<Op> {
+    let mut ordered = Vec::with_capacity(ops.len());
+    while !ops.is_empty() {
+        // The first operation nothing else has to precede.
+        let ready = (0..ops.len()).find(|&i| {
+            !ops.iter()
+                .enumerate()
+                .any(|(j, other)| j != i && before(other, &ops[i]))
+        });
+        if let Some(i) = ready {
+            ordered.push(ops.remove(i));
+            continue;
+        }
+        // Only a cycle of renames is left: move one aside first.
+        let cycle = ops.iter().position(|op| matches!(op, Op::Move { .. }));
+        let Some(i) = cycle else {
+            // Can't happen (only moves wait on each other); keep the rest as is.
+            ordered.append(&mut ops);
+            break;
+        };
+        let Op::Move { from, to } = ops.remove(i) else {
+            unreachable!()
+        };
+        let name = from.file_name().map_or_else(Default::default, |n| n.to_string_lossy().into_owned());
+        let aside = from.with_file_name(format!(".oil-swap-{name}"));
+        ordered.push(Op::Move {
+            from,
+            to: aside.clone(),
+        });
+        ops.insert(i, Op::Move { from: aside, to });
+    }
+    ordered
 }
 
 /// The editor's form of an operation.
@@ -430,19 +515,23 @@ fn file_op(op: &Op) -> files::FileOp {
 /// read again (and so saved); otherwise the edits stay, the failures are
 /// shown, and what did succeed won't be repeated by the next `:w`.
 fn execute(ops: Vec<Op>) -> Result<(), String> {
-    let mut editor_ops = Vec::new();
+    // Directories that moves go into and that don't exist yet: made first,
+    // once each (copies and creates make their own).
+    let mut editor_ops: Vec<Op> = Vec::new();
     for op in &ops {
-        // Moving into a directory that doesn't exist yet.
         if let Op::Move { to, .. } = op {
             if let Some(parent) = to.parent().filter(|parent| !parent.exists()) {
-                editor_ops.push(Op::Create {
+                let create = Op::Create {
                     path: parent.to_path_buf(),
                     dir: true,
-                });
+                };
+                if !editor_ops.contains(&create) && !ops.contains(&create) {
+                    editor_ops.push(create);
+                }
             }
         }
-        editor_ops.push(op.clone());
     }
+    editor_ops.extend(ops.iter().cloned());
     let requests: Vec<_> = editor_ops.iter().map(file_op).collect();
     OIL.with_borrow_mut(|oil| oil.confirming = true);
     let started = files::apply(&requests, move |results| {
@@ -851,7 +940,7 @@ impl Plugin for OilPlugin {
                     doc: doc.into(),
                 })
                 .collect(),
-            events: Vec::new(),
+            events: vec![EventKind::DocumentClose],
         })
     }
 
@@ -960,6 +1049,27 @@ impl Plugin for OilPlugin {
         }
     }
 
+    /// A closed listing's entries aren't needed any more (its directory is
+    /// read again if it is opened again).
+    fn on_document_close(_doc: DocumentId) {
+        let buffers = our_buffers();
+        // An edited listing may refer to entries of a closed one (moved
+        // there): keep everything until it is written.
+        if buffers
+            .iter()
+            .any(|(doc, _)| editor::document_modified(*doc).unwrap_or(true))
+        {
+            return;
+        }
+        let open: HashSet<PathBuf> = buffers.into_iter().map(|(_, dir)| dir).collect();
+        OIL.with_borrow_mut(|oil| {
+            oil.listed.retain(|dir, _| open.contains(dir));
+            let kept: HashSet<u32> = oil.listed.values().flatten().copied().collect();
+            oil.entries.retain(|id, _| kept.contains(id));
+            oil.ids.retain(|_, id| kept.contains(id));
+        });
+    }
+
     fn on_buffer_write(_doc: DocumentId) -> Result<(), String> {
         write()
     }
@@ -1038,6 +1148,35 @@ mod test {
         .unwrap();
         assert_eq!(again.len(), ops.len() - 1);
         assert!(!again.contains(&ops[1]));
+    }
+
+    #[test]
+    fn swaps_and_moves_into_new_directories_are_ordered() {
+        let p = |s: &str| PathBuf::from(s);
+        let mv = |from: &str, to: &str| Op::Move { from: p(from), to: p(to) };
+        // a ↔ b: through a temporary name.
+        assert_eq!(
+            order(vec![mv("/d/a", "/d/b"), mv("/d/b", "/d/a")]),
+            [mv("/d/a", "/d/.oil-swap-a"), mv("/d/b", "/d/a"), mv("/d/.oil-swap-a", "/d/b")]
+        );
+        // A chain: c → d after d → e.
+        assert_eq!(
+            order(vec![mv("/d/c", "/d/d"), mv("/d/d", "/d/e")]),
+            [mv("/d/d", "/d/e"), mv("/d/c", "/d/d")]
+        );
+        // Copy before its source moves; a moved-out child before its
+        // directory is deleted; a new directory before what goes in it.
+        let ops = order(vec![
+            Op::Delete { path: p("/d/old"), dir: true },
+            mv("/d/x", "/d/y"),
+            Op::Copy { from: p("/d/x"), to: p("/d/z") },
+            mv("/d/old/keep", "/d/new/keep"),
+            Op::Create { path: p("/d/new"), dir: true },
+        ]);
+        let at = |op: &Op| ops.iter().position(|o| o == op).unwrap();
+        assert!(at(&Op::Copy { from: p("/d/x"), to: p("/d/z") }) < at(&mv("/d/x", "/d/y")));
+        assert!(at(&mv("/d/old/keep", "/d/new/keep")) < at(&Op::Delete { path: p("/d/old"), dir: true }));
+        assert!(at(&Op::Create { path: p("/d/new"), dir: true }) < at(&mv("/d/old/keep", "/d/new/keep")));
     }
 
     #[test]

@@ -61,9 +61,13 @@ pub(super) fn completions(
                         CompletionItem::Other(core::CompletionItem {
                             transaction,
                             label: item.label.into(),
-                            kind: item.kind.map_or(Cow::Borrowed("plugin"), Cow::Owned),
+                            kind: item.kind.map_or(
+                                Cow::Borrowed(if item.snippet { "snippet" } else { "plugin" }),
+                                Cow::Owned,
+                            ),
                             documentation: item.documentation,
                             provider,
+                            snippet: item.snippet.then(|| (insert.clone(), replaced)),
                         })
                     })
                     .collect();

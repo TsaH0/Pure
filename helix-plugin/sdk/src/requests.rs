@@ -599,6 +599,21 @@ pub fn files_done(id: RequestId, results: Vec<Result<(), String>>) {
     }
 }
 
+/// Stop request `id` (API 0.4 `requests.cancel`), whatever it is: a
+/// timer, a program, a background task, a file batch (operations not
+/// started yet are skipped), a completion request, a popup. Its callback is
+/// dropped without being called. A picker or prompt stays open, but its
+/// answer is ignored.
+#[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+pub fn cancel(id: RequestId) {
+    crate::bindings::helix::plugin::requests::cancel(id);
+    PENDING.with_borrow_mut(|pending| pending.remove(&id));
+    PICKER_ITEMS.with_borrow_mut(|items| items.remove(&id));
+    QUERIES.with_borrow_mut(|queries| queries.remove(&id));
+    STREAMS.with_borrow_mut(|streams| streams.remove(&id));
+    GENERATIONS.with_borrow_mut(|generations| generations.remove(&id));
+}
+
 /// Stop a timer from [`set_timer`] before it goes off.
 #[cfg(not(feature = "api-v0-2"))]
 pub fn cancel_timer(id: RequestId) {

@@ -1,0 +1,6 @@
+name = "snippets"
+version = "0.1.0"
+api = "0.4"
+description = "Snippets with tab stops in the completion menu (like LuaSnip)"
+permissions = ["read-buffers"]
+wasm = "plugin.wasm"

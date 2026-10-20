@@ -240,6 +240,20 @@ async fn plugins_run_editor_commands() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_commands_that_open_ui() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_plugins("#[h|]#ello\nworld", ALL, "");
+    // A command waiting for the next key (`r`): the key goes to it.
+    keys(&mut app, ":plugin-run testplugin/run replace<ret>").await;
+    keys(&mut app, "j").await;
+    assert_eq!(text(&app), "jello\nworld");
+    // A command opening a prompt (`/`): it shows and takes the input.
+    keys(&mut app, ":plugin-run testplugin/run search<ret>").await;
+    keys(&mut app, "wor<ret>").await;
+    assert_eq!(primary(&app), (6, 9));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugins_open_files() -> anyhow::Result<()> {
     let file = helpers::temp_file_with_contents("from disk")?;
     let (mut app, _dir) = app_with_plugins("#[h|]#ello", ALL, "");
@@ -1298,6 +1312,17 @@ fn app_with_example(name: &str, settings: &str) -> (Application, tempfile::TempD
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn api_demo_sorts_in_the_background_at_a_revision() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_example("api-demo", "");
+    set_text(&mut app, "pear\napple\nfig\n");
+    keys(&mut app, ":plugin-run api-demo/sort<ret>").await;
+    let status = wait_for_status(&mut app, |s| s == "sorted" || s.contains("changed")).await;
+    assert_eq!(status, "sorted");
+    assert_eq!(text(&app), "apple\nfig\npear\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn sdk_03_example_callbacks_and_positioned_open_work_in_editor() -> anyhow::Result<()> {
     let (mut app, _dir) = app_with_example("api-demo", "");
     keys(&mut app, ":plugin-run api-demo/popup centered<ret>").await;
@@ -1726,6 +1751,31 @@ async fn plugin_timers_fire_later() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_timers_stop_on_reload() -> anyhow::Result<()> {
+    let (mut app, dir) = app_with_v3_settings(ALL, "");
+    let before = helix_term::plugins::running_timers();
+    keys(&mut app, ":plugin-run testplugin3/timer 60000<ret>").await;
+    assert_eq!(helix_term::plugins::running_timers(), before + 1);
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert_eq!(helix_term::plugins::running_timers(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabled_plugins_leave_nothing_behind() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/diagnose<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/timer 60000<ret>").await;
+    assert_eq!(helix_view::doc!(app.editor).diagnostics().len(), 1);
+    // It runs too long and is disabled: its diagnostics and timers go.
+    keys(&mut app, ":plugin-run testplugin3/loop<ret>").await;
+    assert_error(&app, "disabled");
+    assert!(helix_view::doc!(app.editor).diagnostics().is_empty());
+    assert_eq!(helix_term::plugins::running_timers(), 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_buffers_are_written_by_their_plugin() -> anyhow::Result<()> {
     let (mut app, _dir) = app_with_v3_settings(ALL, "");
     keys(&mut app, ":plugin-run testplugin3/buffer<ret>").await;
@@ -1809,6 +1859,73 @@ async fn plugins_can_be_completion_sources() -> anyhow::Result<()> {
         log.iter().any(|line| line.starts_with("completion:")),
         "{log:?}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_snippets_have_tab_stops() -> anyhow::Result<()> {
+    let (mut app, _dir) =
+        app_with_v3_settings(ALL, "[testplugin3]\ncompletion = true\nsnippets = true\n");
+    keys(&mut app, "ifn").await;
+    deliver_events(&mut app).await;
+    // Accept `fn ${1:name}() {$0}`: `name` is selected, tab goes to `$0`.
+    keys(&mut app, "<C-n><ret>").await;
+    keys(&mut app, "foo<tab>x<esc>").await;
+    let text = text(&app);
+    assert!(text.starts_with("fn foo() {x}"), "{text:?}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snippets_example_expands_with_tab_stops() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("main.rs");
+    std::fs::write(&file, "")?;
+    let mut app = AppBuilder::new().with_file(&file, None).build().unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("snippets");
+    std::fs::create_dir(&plugin)?;
+    for name in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/snippets").join(name),
+            plugin.join(name),
+        )?;
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, "itest").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-n><ret>").await;
+    // `#[test]\nfn ${1:name}() {\n    $0\n}`
+    keys(&mut app, "works<tab>assert!(true);<esc>").await;
+    assert_eq!(text(&app), "#[test]\nfn works() {\n    assert!(true);\n}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn edits_for_an_old_revision_are_refused() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "");
+    keys(&mut app, ":plugin-run testplugin3/rev<ret>").await;
+    let (message, _) = status(&app);
+    let after: u64 = message.rsplit(':').next().unwrap().parse()?;
+    // The text changes: an edit computed for `after` no longer applies...
+    keys(&mut app, "itext<esc>").await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/edit-at {after}<ret>"),
+    )
+    .await;
+    let (message, _) = status(&app);
+    assert!(message.starts_with("edit-at:err:"), "{message}");
+    assert!(!text(&app).contains('@'));
+    // ...one for the current revision does.
+    let current = helix_view::doc!(app.editor).version();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/edit-at {current}<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, "edit-at:ok");
+    assert!(text(&app).starts_with('@'));
     Ok(())
 }
 
@@ -1956,6 +2073,42 @@ async fn directory_handler_opens_directories_with_a_plugin() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_reload_during_the_startup_load_opens_the_waiting_directory() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    let mut config = test_config();
+    config.editor.directory_handler = Some("oil/open".into());
+    let mut app = AppBuilder::new().with_config(config).build().unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    // `pure <dir>` while plugins load in the background: the directory waits.
+    helix_term::plugins::start_loading_for_tests();
+    assert!(helix_term::plugins::open_directory(
+        &app.editor,
+        work.clone()
+    ));
+    // A manual reload replaces that load (whose result is then dropped).
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "").await;
+    deliver_events(&mut app).await;
+    let name = helix_view::doc!(app.editor).display_name().to_string();
+    assert_eq!(name, format!("oil://{}/", work.display()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let work = helix_stdx::path::canonicalize(root.path());
@@ -2005,6 +2158,122 @@ async fn file_operations_report_results_in_order() -> anyhow::Result<()> {
     assert!(
         work.join("b").is_file(),
         "the delete after the failure didn't run"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn file_operations_never_replace_or_follow_into_existing_files() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let outside = tempfile::tempdir()?;
+    let target = outside.path().join("target.txt");
+    std::fs::write(&target, "keep")?;
+    std::os::unix::fs::symlink(&target, work.join("link"))?;
+    std::fs::write(work.join("x"), "x")?;
+    std::fs::write(work.join("y"), "y")?;
+    assert!(std::process::Command::new("mkfifo")
+        .arg(work.join("fifo"))
+        .status()?
+        .success());
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"write\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    let (mut app, _dir) = app_with_v3_settings(&format!("{ALL}, \"filesystem\""), &settings);
+    let p = |name: &str| work.join(name).display().to_string();
+    for (ops, expected) in [
+        // A symlink to a file outside: not followed and emptied.
+        (format!("create:{}", p("link")), "files-done:err("),
+        // An existing destination is never replaced.
+        (format!("rename:{}:{}", p("x"), p("y")), "files-done:err("),
+        (format!("copy:{}:{}", p("x"), p("y")), "files-done:err("),
+        // A FIFO isn't copied (it would block).
+        (format!("copy:{}:{}", p("fifo"), p("z")), "files-done:err("),
+    ] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/files {ops}<ret>"),
+        )
+        .await;
+        let status = wait_for_status(&mut app, |s| s.starts_with("files-done:")).await;
+        assert!(status.starts_with(expected), "{ops}: {status}");
+        app.editor.clear_status();
+    }
+    assert_eq!(std::fs::read_to_string(&target)?, "keep");
+    assert_eq!(std::fs::read_to_string(work.join("y"))?, "y");
+    assert_eq!(std::fs::read_to_string(work.join("x"))?, "x");
+    assert!(!work.join("z").exists());
+
+    // The editor's own create (LSP CreateFile with overwrite) still empties
+    // a file, but not through a symlink.
+    assert!(app.editor.create_path(&work.join("link"), false).is_err());
+    assert_eq!(std::fs::read_to_string(&target)?, "keep");
+    app.editor.create_path(&work.join("x"), false)?;
+    assert_eq!(std::fs::read_to_string(work.join("x"))?, "");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oil_example_swaps_names_and_fills_new_directories() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    std::fs::write(work.join("b.txt"), "b")?;
+    std::fs::write(work.join("c.txt"), "c")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    // a.txt ↔ b.txt, and c.txt into a new directory twice over (moved and
+    // copied there).
+    let listing = text(&app);
+    let id = |name: &str| {
+        listing
+            .lines()
+            .find(|line| line.ends_with(&format!(" {name}")))
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap()
+            .to_string()
+    };
+    let edited = format!(
+        "{} b.txt\n{} a.txt\n{} new/c.txt\n{} new/c2.txt\n",
+        id("a.txt"),
+        id("b.txt"),
+        id("c.txt"),
+        id("c.txt")
+    );
+    set_text(&mut app, &edited);
+    keys(&mut app, ":w<ret>").await;
+    deliver_events(&mut app).await;
+    deliver_events(&mut app).await;
+    assert_eq!(std::fs::read_to_string(work.join("a.txt"))?, "b");
+    assert_eq!(std::fs::read_to_string(work.join("b.txt"))?, "a");
+    assert_eq!(std::fs::read_to_string(work.join("new/c.txt"))?, "c");
+    assert_eq!(std::fs::read_to_string(work.join("new/c2.txt"))?, "c");
+    assert!(!work.join("c.txt").exists());
+    assert!(!work.join(".oil-swap-a.txt").exists());
+    assert!(
+        !helix_view::doc!(app.editor).is_modified(),
+        "{:?}",
+        app.editor.get_status()
     );
     Ok(())
 }

@@ -11,6 +11,7 @@ thread_local! {
     static PICKER: Cell<Option<u32>> = const { Cell::new(None) };
     /// Counted in the instance that runs: the background one has its own.
     static RUNS: Cell<u32> = const { Cell::new(0) };
+    static SNIPPETS: Cell<bool> = const { Cell::new(false) };
 }
 fn item(text: &str) -> helix::plugin::ui::Item {
     helix::plugin::ui::Item {
@@ -27,6 +28,7 @@ struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn init(config: String) -> Result<types::Registration, String> {
         POPUP_ON_OPEN.set(config.contains("popup-on-open"));
+        SNIPPETS.set(config.contains("snippets"));
         Ok(types::Registration {
             commands: [
                 "inspect",
@@ -58,6 +60,11 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "diagnose-bad",
                 "timer",
                 "timer-cancel",
+                "cancel-timer",
+                "caps",
+                "rev",
+                "edit-at",
+                "cancel",
                 "scratch",
                 "buffer",
                 "registers",
@@ -311,6 +318,38 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::log(&format!("timer-cancelled:{id}"));
                 Ok(())
             }
+            "cancel-timer" => {
+                let id = args.first().and_then(|id| id.parse().ok()).unwrap_or(0);
+                helix::plugin::timers::cancel_timer(id);
+                Ok(())
+            }
+            "caps" => {
+                host::set_status(&format!("caps:{}", helix::plugin::requests::capabilities().join(",")));
+                Ok(())
+            }
+            "rev" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let before = helix::plugin::revisions::revision(doc)?;
+                host::apply_edits(doc, &[types::Edit { from: 0, to: 0, text: "r".into() }])?;
+                let after = helix::plugin::revisions::revision(doc)?;
+                host::set_status(&format!("rev:{before}:{after}"));
+                Ok(())
+            }
+            "edit-at" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let revision = args.first().and_then(|r| r.parse().ok()).unwrap_or(0);
+                let edit = types::Edit { from: 0, to: 0, text: "@".into() };
+                match helix::plugin::revisions::apply_edits_at(doc, revision, &[edit]) {
+                    Ok(()) => host::set_status("edit-at:ok"),
+                    Err(err) => host::set_status(&format!("edit-at:err:{err}")),
+                }
+                Ok(())
+            }
+            "cancel" => {
+                let id = args.first().and_then(|id| id.parse().ok()).unwrap_or(0);
+                helix::plugin::requests::cancel(id);
+                Ok(())
+            }
             "scratch" => host::open_scratch("scratch text\n", Some("markdown"), types::OpenAction::Replace),
             "buffer" => host::open_buffer("test://buffer", "one\n", None, types::OpenAction::Replace),
             "registers" => {
@@ -458,6 +497,17 @@ impl exports::helix::plugin::events::Guest for TestPlugin {
             replace_from: None,
         };
         host::log(&format!("completion:{id}:{position}"));
+        if SNIPPETS.get() {
+            let snippet = CompletionItem {
+                label: "fn".into(),
+                insert: Some("fn ${1:name}() {$0}".into()),
+                kind: None,
+                documentation: None,
+                replace_from: None,
+            };
+            let _ = helix::plugin::snippets::complete(id, &[snippet]);
+            return;
+        }
         let _ = complete(id, &[item("alpha"), item("alphabet")]);
     }
     fn on_buffer_write(doc: u32) {

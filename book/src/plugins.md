@@ -49,6 +49,7 @@ Ready-made examples are in
 | `tree` | A file tree in a sidebar, like nvim-tree: `space B` shows it; `enter` opens files and folders |
 | `finder` | `files`, `grep` (live), `branches` (git) |
 | `todos` | Highlights TODO / FIXME / NOTE with signs and a count; `list` |
+| `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
 ## Using plugins

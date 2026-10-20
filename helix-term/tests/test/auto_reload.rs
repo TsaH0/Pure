@@ -86,3 +86,22 @@ async fn own_writes_and_disabled_config_dont_reload() -> anyhow::Result<()> {
     app.close().await;
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn special_files_are_not_read() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("pipe");
+    std::fs::write(&path, "one\n")?;
+    let mut app = helpers::AppBuilder::new().with_file(&path, None).build()?;
+    // Replaced by a FIFO nobody writes to: opening it would block.
+    std::fs::remove_file(&path)?;
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()?
+        .success());
+    assert!(!app.editor.reload_changed_documents());
+    assert_eq!(text(&app), "one\n");
+    app.close().await;
+    Ok(())
+}

@@ -1569,6 +1569,16 @@ impl EditorView {
             _ => EventResult::Ignored(None),
         }
     }
+    /// Make the next key go to `callback` (a command run by a plugin asked
+    /// for it, like `r` does).
+    pub(crate) fn set_on_next_key(
+        &mut self,
+        callback: commands::OnKeyCallback,
+        kind: commands::OnKeyCallbackKind,
+    ) {
+        self.on_next_key = Some((callback, kind));
+    }
+
     fn on_next_key(
         &mut self,
         kind: OnKeyCallbackKind,

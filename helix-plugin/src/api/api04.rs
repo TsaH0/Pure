@@ -73,3 +73,55 @@ impl v0_4::helix::plugin::sidebar::Host for State {
         State::sidebar_selected(self)
     }
 }
+
+impl v0_4::helix::plugin::requests::Host for State {
+    fn capabilities(&mut self) -> Vec<String> {
+        crate::CAPABILITIES.iter().map(|c| c.to_string()).collect()
+    }
+    fn cancel(&mut self, id: u32) {
+        State::cancel_request(self, id)
+    }
+}
+
+impl v0_4::helix::plugin::revisions::Host for State {
+    fn revision(&mut self, doc: u32) -> std::result::Result<u64, String> {
+        State::document_revision(self, doc)
+    }
+    fn apply_edits_at(
+        &mut self,
+        doc: u32,
+        revision: u64,
+        edits: Vec<v0_4::helix::plugin::types::Edit>,
+    ) -> std::result::Result<(), String> {
+        let edits = edits
+            .into_iter()
+            .map(|edit| crate::types::Edit {
+                from: edit.from,
+                to: edit.to,
+                text: edit.text,
+            })
+            .collect();
+        State::apply_edits_at(self, doc, revision, edits)
+    }
+}
+
+impl v0_4::helix::plugin::snippets::Host for State {
+    fn complete(
+        &mut self,
+        id: u32,
+        items: Vec<v0_4::helix::plugin::completion::CompletionItem>,
+    ) -> std::result::Result<(), String> {
+        let items = items
+            .into_iter()
+            .map(|item| crate::PluginCompletion {
+                label: item.label,
+                insert: item.insert,
+                kind: item.kind,
+                documentation: item.documentation,
+                replace_from: item.replace_from.map(|from| from as usize),
+                snippet: true,
+            })
+            .collect();
+        State::complete(self, id, items)
+    }
+}

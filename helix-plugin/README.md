@@ -59,10 +59,11 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`oil`](examples/oil) | `open` (`-`): edit directories as buffers like oil.nvim; rename, move, copy, create and delete with `:w` | `[oil]` `allow-files = "write"`, `allow-dirs = ["~"]` |
 | [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
+| [`snippets`](examples/snippets) | snippets with tab stops in the completion menu (`fn`, `test`, `for`...), like LuaSnip | `[snippets.snippets.rust]` `dbg = "dbg!($1)"` |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
 | [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"` |
-| [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens | `[api-demo]` `allow-process = ["sh"]` for streaming |
+| [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens, `sort` (in the background, applied only if the text didn't change) | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
 | [`todos`](examples/todos) | `list`; highlights TODO / FIXME / NOTE, signs, end-of-line notes, a statusline count | – |
@@ -84,8 +85,11 @@ f = ":plugin-run finder/files"
   - `open-files`: open files
   - `run-commands`: run editor commands (only from the plugin's own commands
     and callbacks). Commands that start programs (`:sh`, `:pipe`,
-    `:insert-output`, `!`, `:compile`, `:grep`, ...) also need the user's
-    `allow-process = true`, since they can run anything.
+    `:insert-output`, `!`, `:compile`, `:grep`, ...) and commands with a
+    `%sh{...}` expansion also need the user's
+    `allow-process = true`, since they can run anything. Commands that open
+    UI work like a key press: `file_picker` opens the picker, `search` its
+    prompt, `replace` (`r`) takes the next key the user presses.
   - `process`: run programs, see [Running programs](#running-programs). This
     one also needs the user's `allow-process` grant.
   - `filesystem`: read (or write) the workspace, see [Files](#files). This one
@@ -425,9 +429,14 @@ files::apply(&ops, |results| {
 They need `filesystem` and `allow-files = "write"` and take absolute paths
 inside `files::roots()` (no `..`, and no symlink leading out). They run in
 order after the call, off the editor's thread for copies and the trash;
-none overwrites an existing path. `Trash` uses the system's trash and fails
-rather than deleting if it can't. (API 0.3 has fire-and-forget
-`create_path`, `rename_path` and `delete_path` instead.)
+none overwrites an existing path (checked by the create or rename itself
+where the system can), and a symlink at the path is never followed. The
+grant is checked again just before each operation runs. Copies take
+regular files, directories and symlinks; FIFOs and devices are refused.
+At most 4 batches of a plugin wait or run at once, and batches run one
+after another. `Trash` uses the system's trash and fails rather than
+deleting if it can't. (API 0.3 has fire-and-forget `create_path`,
+`rename_path` and `delete_path` instead; they don't overwrite either.)
 
 ## Events
 
@@ -536,6 +545,50 @@ program ran); the menu waits up to 1 s, and a new request replaces an
 unanswered one. Items replace the word before the cursor, or the text from
 `replace-from`; the editor filters them by what was typed. See
 `examples/emoji`.
+
+### Snippets (API 0.4)
+
+`completion::complete_snippets(id, &items)` answers like `complete`, but
+each item's `insert` (or `label`) is a snippet: `$1`, `${2:default}`,
+`${3|one,two|}` and `$0` are tab stops the user goes through with tab,
+handled by the editor's own snippet engine (as a language server's
+snippets are). `\$` is a literal dollar. Variables such as
+`${TM_FILENAME}` aren't filled in yet. See `examples/snippets`.
+
+## Revisions and cancelling (API 0.4)
+
+Added to API 0.4 after its release, as imports only: a component using
+them doesn't load on an older Pure (the error says a newer Pure is
+needed); `editor::capabilities()` lists them (`"cancel-request"`,
+`"revisions"`, `"snippet-completions"`).
+
+- `editor::revision(doc)` is the document's revision: it changes with
+  every change to the text (edits, undo, reload) and counts the plugin's
+  own edits within a call.
+- `editor::apply_edits_at(doc, revision, &edits)` applies the edits only if
+  `doc` is still at `revision`, and fails otherwise. Use it for results
+  computed in the background or by a program, so they never edit text that
+  changed meanwhile:
+
+```rust,ignore
+let revision = editor::revision(doc)?;
+let text = editor::text(doc)?;
+let len = text.chars().count() as u32;
+editor::run_background("sort", text, move |sorted| {
+    let edit = Edit { from: 0, to: len, text: sorted? };
+    if editor::apply_edits_at(doc, revision, &[edit]).is_err() {
+        editor::set_status("the text changed meanwhile: not applied");
+    }
+    Ok(())
+})?;
+```
+
+- `editor::cancel(id)` stops any request of the plugin: a timer, a program
+  (killed), a background task, a `files::apply` batch (operations not yet
+  started are skipped; the running one finishes), a completion request
+  (answered with nothing), a popup (closed). Its callback is dropped
+  without being called. A picker or prompt stays open, but its answer is
+  ignored.
 
 ## Timers (API 0.3)
 

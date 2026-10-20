@@ -2917,6 +2917,7 @@ fn cdiagnostics(
                 path: path.to_path_buf(),
                 line: diagnostic.range.start.line as usize,
                 column: diagnostic.range.start.character as usize,
+                byte_column: false,
                 text: format!(
                     "{severity}{}",
                     diagnostic.message.lines().next().unwrap_or("")
@@ -2934,6 +2935,9 @@ fn grep(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
     if event != PromptEvent::Validate {
         return Ok(());
     }
+    // A newer :grep wins over a slower older one.
+    static GENERATION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
     let title = format!("grep {}", args.join(" "));
     let cwd = helix_stdx::env::current_working_dir();
@@ -2941,11 +2945,11 @@ fn grep(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
         .set_status(format!("Searching: {}", args.join(" ")));
     cx.jobs.callback(async move {
         let mut rg = tokio::process::Command::new("rg");
-        rg.args(["--vimgrep", "--smart-case", "--"])
+        rg.args(["--vimgrep", "--smart-case", "--max-columns=1000", "--"])
             .args(&args)
             .current_dir(&cwd);
-        let output = match rg.output().await {
-            Ok(output) => output,
+        let (output, rg) = match capped_output(rg).await {
+            Ok(output) => (output, true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 let mut grep = tokio::process::Command::new("grep");
                 grep.args(["-rnH", "--exclude-dir=.git", "-e"])
@@ -2954,21 +2958,87 @@ fn grep(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
                 if args.len() == 1 {
                     grep.arg(".");
                 }
-                grep.output().await?
+                (capped_output(grep).await?, false)
             }
             Err(err) => return Err(err.into()),
         };
-        // grep tools exit with 1 when nothing matched.
-        if !output.status.success() && output.status.code() != Some(1) {
+        // grep tools exit with 1 when nothing matched; a cut-off one was killed.
+        if !output.truncated && !output.status.success() && output.status.code() != Some(1) {
             let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
             bail!("{title} failed: {message}");
         }
-        let entries = super::quickfix::parse(&String::from_utf8_lossy(&output.stdout), &cwd);
+        let entries =
+            super::quickfix::parse_with(&String::from_utf8_lossy(&output.stdout), &cwd, rg);
+        let cut = output.truncated || entries.len() == super::quickfix::MAX_ENTRIES;
         Ok(Callback::Editor(Box::new(move |editor: &mut Editor| {
-            quickfix_filled(editor, &title, entries)
+            if GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
+            quickfix_filled(editor, &title, entries);
+            if cut {
+                editor.set_warning(format!(
+                    "{title}: too many results, only the first {} are listed",
+                    super::quickfix::list_len()
+                ));
+            }
         })))
     });
     Ok(())
+}
+
+struct CappedOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// Stopped at `MAX_GREP_OUTPUT` (and killed).
+    truncated: bool,
+}
+
+/// Most output read from a :grep tool.
+const MAX_GREP_OUTPUT: u64 = 32 * 1024 * 1024;
+
+/// Run `command`, reading at most `MAX_GREP_OUTPUT` of its stdout.
+async fn capped_output(mut command: tokio::process::Command) -> std::io::Result<CappedOutput> {
+    use tokio::io::AsyncReadExt;
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    // Keep the start of stderr, but drain all of it so the tool can't block.
+    let mut err = child.stderr.take().unwrap();
+    let stderr = tokio::spawn(async move {
+        let mut stderr = Vec::new();
+        let mut buf = [0u8; 8192];
+        while let Ok(n @ 1..) = err.read(&mut buf).await {
+            let room = (64 * 1024usize).saturating_sub(stderr.len());
+            stderr.extend_from_slice(&buf[..n.min(room)]);
+        }
+        stderr
+    });
+    let mut stdout = Vec::new();
+    let mut out = child.stdout.take().unwrap().take(MAX_GREP_OUTPUT + 1);
+    out.read_to_end(&mut stdout).await?;
+    let truncated = stdout.len() as u64 > MAX_GREP_OUTPUT;
+    if truncated {
+        let _ = child.start_kill();
+        stdout.truncate(MAX_GREP_OUTPUT as usize);
+        // Drop the last, possibly partial, line.
+        let end = stdout
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map_or(0, |i| i + 1);
+        stdout.truncate(end);
+    }
+    let stderr = stderr.await.unwrap_or_default();
+    let status = child.wait().await?;
+    Ok(CappedOutput {
+        status,
+        stdout,
+        stderr,
+        truncated,
+    })
 }
 
 fn plugin_run(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {

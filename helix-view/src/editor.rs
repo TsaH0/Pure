@@ -1558,7 +1558,12 @@ impl Editor {
             .documents
             .values()
             .filter_map(|doc| {
-                let mtime = doc.path()?.metadata().ok()?.modified().ok()?;
+                let metadata = doc.path()?.metadata().ok()?;
+                // Reading a FIFO or a device would block the editor.
+                if !metadata.is_file() {
+                    return None;
+                }
+                let mtime = metadata.modified().ok()?;
                 (mtime != doc.last_saved_time()).then_some((doc.id(), mtime))
             })
             .collect();
@@ -1788,7 +1793,29 @@ impl Editor {
     /// moves/renames a path, invoking any event handlers (currently only lsp)
     /// and calling `set_doc_path` if the file is open in the editor
     pub fn move_path(&mut self, old_path: &Path, new_path: &Path) -> io::Result<()> {
+        self.move_path_with(old_path, new_path, true)
+    }
+
+    /// Like [`Editor::move_path`], but fails if `new_path` exists, checked
+    /// by the rename itself where the platform can (no window for another
+    /// program to create it in between).
+    pub fn move_path_no_replace(&mut self, old_path: &Path, new_path: &Path) -> io::Result<()> {
+        self.move_path_with(old_path, new_path, false)
+    }
+
+    fn move_path_with(
+        &mut self,
+        old_path: &Path,
+        new_path: &Path,
+        replace: bool,
+    ) -> io::Result<()> {
         let new_path = canonicalize(new_path);
+        if !replace && fs::symlink_metadata(&new_path).is_ok() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists", new_path.display()),
+            ));
+        }
         // sanity check
         if old_path == new_path {
             return Ok(());
@@ -1817,7 +1844,11 @@ impl Editor {
         }
 
         if old_path.exists() {
-            fs::rename(old_path, &new_path)?;
+            if replace {
+                fs::rename(old_path, &new_path)?;
+            } else {
+                rename_no_replace(old_path, &new_path)?;
+            }
         }
 
         if let Some(doc) = self.document_by_path(old_path) {
@@ -1841,7 +1872,18 @@ impl Editor {
         Ok(())
     }
 
+    /// Create a file (emptied if it exists) or directory, telling language
+    /// servers. A symlink at `path` is not followed.
     pub fn create_path(&mut self, path: &Path, is_dir: bool) -> io::Result<()> {
+        self.create_path_with(path, is_dir, false)
+    }
+
+    /// Like [`Editor::create_path`], but fails if `path` exists (atomically).
+    pub fn create_new_path(&mut self, path: &Path, is_dir: bool) -> io::Result<()> {
+        self.create_path_with(path, is_dir, true)
+    }
+
+    fn create_path_with(&mut self, path: &Path, is_dir: bool, exclusive: bool) -> io::Result<()> {
         let path = canonicalize(path);
         let language_servers: Vec<_> = self
             .language_servers
@@ -1873,7 +1915,16 @@ impl Editor {
         if is_dir {
             fs::create_dir(&path)?;
         } else {
-            fs::write(&path, [])?;
+            let mut options = fs::OpenOptions::new();
+            options.write(true);
+            if exclusive {
+                options.create_new(true);
+            } else {
+                options.create(true).truncate(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+            }
+            options.open(&path)?;
         }
 
         for ls in self.language_servers.iter_clients() {
@@ -2872,4 +2923,25 @@ impl CursorCache {
     pub fn reset(&self) {
         self.0.set(None)
     }
+}
+
+/// Rename `from` to `to` unless `to` exists.
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use rustix::fs::{renameat_with, RenameFlags, CWD};
+        match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+            Ok(()) => return Ok(()),
+            // File systems without RENAME_NOREPLACE: check, then rename.
+            Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOSYS) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    if fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", to.display()),
+        ));
+    }
+    fs::rename(from, to)
 }

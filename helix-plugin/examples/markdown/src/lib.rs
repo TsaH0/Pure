@@ -95,6 +95,17 @@ struct Cache {
 thread_local! {
     static CACHE: std::cell::RefCell<std::collections::HashMap<DocumentId, Cache>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Documents whose raw-line and render-mode settings are set (the editor
+    /// keeps them across edits).
+    static CONFIGURED: std::cell::RefCell<std::collections::HashSet<DocumentId>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Forget a document: closed, or no longer Markdown.
+fn forget(doc: DocumentId) -> bool {
+    let cached = CACHE.with_borrow_mut(|cache| cache.remove(&doc)).is_some();
+    let configured = CONFIGURED.with_borrow_mut(|docs| docs.remove(&doc));
+    cached || configured
 }
 
 /// Render `source` from scratch, keeping what an incremental update needs.
@@ -432,6 +443,16 @@ fn line_background(line: u32) -> decorations::LineBackground {
 
 fn update(doc: DocumentId) -> Result<(), String> {
     if !is_markdown(doc) {
+        // Renamed away from Markdown: take the rendering down.
+        if forget(doc) {
+            for layer in ["text", "inline"] {
+                decorations::set_highlights(doc, layer, &[])?;
+            }
+            decorations::set_conceals(doc, "conceal", &[])?;
+            decorations::set_overlays(doc, "marks", &[])?;
+            decorations::set_line_backgrounds(doc, "blocks", &[])?;
+            decorations::set_annotations(doc, "rules", &[])?;
+        }
         return Ok(());
     }
     let rendered = if ENABLED.get() {
@@ -448,12 +469,14 @@ fn update(doc: DocumentId) -> Result<(), String> {
         Rendered::default()
     };
     // The cursor's line stays raw (the editor follows the cursor), and
-    // nothing is drawn while inserting or selecting.
-    for layer in ["text", "marks", "rules", "inline", "conceal"] {
-        decorations::set_raw_on_cursor_line(doc, layer, true)?;
-    }
-    for layer in ["text", "marks", "rules", "inline", "conceal", "blocks"] {
-        decorations::set_render_modes(doc, layer, &[Mode::Normal])?;
+    // nothing is drawn while inserting or selecting. Set once per document.
+    if CONFIGURED.with_borrow_mut(|docs| docs.insert(doc)) {
+        for layer in ["text", "marks", "rules", "inline", "conceal"] {
+            decorations::set_raw_on_cursor_line(doc, layer, true)?;
+        }
+        for layer in ["text", "marks", "rules", "inline", "conceal", "blocks"] {
+            decorations::set_render_modes(doc, layer, &[Mode::Normal])?;
+        }
     }
     decorations::set_highlights(doc, "text", &rendered.highlights)?;
     decorations::set_highlights(doc, "inline", &rendered.inline)?;
@@ -497,6 +520,7 @@ impl Plugin for Markdown {
             events: vec![
                 EventKind::DocumentOpen,
                 EventKind::DocumentChange,
+                EventKind::DocumentClose,
             ],
         })
     }
@@ -520,6 +544,9 @@ impl Plugin for Markdown {
     }
     fn on_document_change(doc: DocumentId) {
         report(update(doc));
+    }
+    fn on_document_close(doc: DocumentId) {
+        forget(doc);
     }
 }
 

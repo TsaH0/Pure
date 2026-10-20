@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context as _};
 use helix_core::{Range as CoreRange, Rope, Selection, Transaction};
@@ -253,6 +253,8 @@ pub enum FileOp {
 
 /// Most operations in one `files.apply`.
 pub const MAX_FILE_OPS: usize = 1000;
+/// File operation batches of one plugin waiting or running at once.
+pub const MAX_FILE_BATCHES: usize = 4;
 
 /// A completion from a plugin. `replace_from` is a char offset, checked by
 /// the editor against the cursor.
@@ -263,7 +265,13 @@ pub struct PluginCompletion {
     pub kind: Option<String>,
     pub documentation: Option<String>,
     pub replace_from: Option<usize>,
+    /// `insert` (or `label`) is a snippet with tab stops (API 0.4
+    /// `snippets.complete`).
+    pub snippet: bool,
 }
+
+/// Optional features, for `requests.capabilities`.
+pub const CAPABILITIES: &[&str] = &["cancel-request", "revisions", "snippet-completions"];
 
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
@@ -326,6 +334,19 @@ impl Manifest {
                 manifest.api
             );
         }
+        // Checked before anything joins it to a directory: a file next to
+        // plugin.toml, never `../x` or an absolute path.
+        let mut components = manifest.wasm.components();
+        if !matches!(
+            (components.next(), components.next()),
+            (Some(std::path::Component::Normal(_)), None)
+        ) {
+            bail!(
+                "plugin '{}': wasm must be a file next to plugin.toml, not {}",
+                manifest.name,
+                manifest.wasm.display()
+            );
+        }
         Ok(manifest)
     }
 }
@@ -350,6 +371,8 @@ pub struct DocumentSnapshot {
     pub modified: bool,
     /// `(plugin, name)` for a plugin's own buffer (`open-buffer`).
     pub owner: Option<(String, String)>,
+    /// Changes with every change to the text.
+    pub revision: u64,
 }
 
 /// The editor state a plugin call can read.
@@ -538,6 +561,16 @@ pub enum Action {
         plugin: String,
         id: u32,
         delay: Duration,
+    },
+    /// Stop timer `id` started by an earlier call.
+    CancelTimer {
+        plugin: String,
+        id: u32,
+    },
+    /// Skip the operations of files.apply batch `id` that haven't started.
+    CancelFiles {
+        plugin: String,
+        id: u32,
     },
     /// The answer to completion request `id`
     /// ([`PluginHost::request_completion`]).
@@ -769,6 +802,8 @@ struct State {
 
 /// `log` lines kept per plugin.
 const LOG_LINES: usize = 1000;
+/// Longest line kept in a plugin's log.
+const LOG_LINE_BYTES: usize = 4096;
 
 impl State {
     /// For a background instance: no permissions, grants, files or snapshot.
@@ -780,7 +815,7 @@ impl State {
                 .memory_size(memory)
                 .instances(16)
                 .tables(64)
-                .memories(16)
+                .memories(2)
                 .build(),
             plugin: plugin.to_string(),
             permissions: HashSet::new(),
@@ -935,8 +970,10 @@ impl State {
         if transaction.changes().is_empty() {
             return Ok(());
         }
-        // Later reads in this call see the edit.
+        // Later reads in this call see the edit (and its revision: the
+        // editor counts one per transaction too).
         transaction.apply(&mut document.text);
+        document.revision += 1;
         if let Some(selection) = document.selection.take() {
             document.selection = Some(selection.map(transaction.changes()));
         }
@@ -1017,7 +1054,16 @@ impl State {
         self.actions.push(Action::Error(message));
     }
 
-    fn log(&mut self, message: String) {
+    fn log(&mut self, mut message: String) {
+        // The log keeps lines, not floods: at most LOG_LINE_BYTES each.
+        if message.len() > LOG_LINE_BYTES {
+            let mut end = LOG_LINE_BYTES;
+            while !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            message.truncate(end);
+            message.push('…');
+        }
         log::info!("[plugin {}] {message}", self.plugin);
         if self.log.len() == LOG_LINES {
             self.log.pop_front();
@@ -1459,6 +1505,16 @@ impl State {
         if ops.len() > MAX_FILE_OPS {
             return Err(format!("at most {MAX_FILE_OPS} file operations at once"));
         }
+        let running = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Files)
+            .count();
+        if running >= MAX_FILE_BATCHES {
+            return Err(format!(
+                "at most {MAX_FILE_BATCHES} files.apply batches can run at once"
+            ));
+        }
         let ops = ops
             .into_iter()
             .map(|op| {
@@ -1686,7 +1742,68 @@ impl State {
     fn cancel_timer(&mut self, id: u32) {
         if self.pending.get(&id) == Some(&PendingKind::Timer) {
             self.pending.remove(&id);
+            // Set in this same call: never start it. Otherwise stop it.
+            let queued = self.actions.iter().position(
+                |action| matches!(action, Action::SetTimer { id: set, .. } if *set == id),
+            );
+            match queued {
+                Some(index) => {
+                    self.actions.remove(index);
+                }
+                None => self.actions.push(Action::CancelTimer {
+                    plugin: self.plugin.clone(),
+                    id,
+                }),
+            }
         }
+    }
+
+    fn document_revision(&mut self, doc: DocumentId) -> Result<u64, String> {
+        self.need(Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.revision)
+    }
+
+    fn apply_edits_at(
+        &mut self,
+        doc: DocumentId,
+        revision: u64,
+        edits: Vec<types::Edit>,
+    ) -> Result<(), String> {
+        self.need(Permission::EditBuffers)?;
+        let current = self.document(doc)?.revision;
+        if current != revision {
+            return Err(format!(
+                "document {doc} changed: it is at revision {current}, not {revision}"
+            ));
+        }
+        self.apply_edits(doc, edits)
+    }
+
+    /// `requests.cancel`: stop request `id`, whatever it is; its callback
+    /// is never called.
+    fn cancel_request(&mut self, id: u32) {
+        let plugin = self.plugin.clone();
+        match self.pending.get(&id).copied() {
+            Some(PendingKind::Timer) => return self.cancel_timer(id),
+            Some(PendingKind::Process) => {
+                self.kill(id);
+                self.streaming.remove(&id);
+            }
+            Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
+            Some(PendingKind::Completion) => self.actions.push(Action::Completions {
+                plugin,
+                id,
+                items: Vec::new(),
+            }),
+            Some(PendingKind::Popup) => self.close_popup(id),
+            Some(PendingKind::Picker) => {
+                self.picker_items.remove(&id);
+                self.picker_generations.remove(&id);
+            }
+            Some(PendingKind::Prompt | PendingKind::Background) => {}
+            None => return,
+        }
+        self.pending.remove(&id);
     }
 
     fn complete(&mut self, id: u32, items: Vec<PluginCompletion>) -> Result<(), String> {
@@ -1927,6 +2044,16 @@ pub struct Plugin {
     /// For the background instance (API 0.3), made on first use.
     component: Component,
     worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
+    /// How long its calls took.
+    timing: CallTiming,
+}
+
+/// Calls to a plugin and their time, for `:plugin-list`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CallTiming {
+    pub calls: u64,
+    pub total: Duration,
+    pub slowest: Duration,
 }
 
 /// A task for a plugin's background instance.
@@ -1960,11 +2087,15 @@ fn spawn_worker(
             let ticks = (limit.as_millis() / EPOCH_TICK.as_millis()).max(1) as u64;
             let mut instance: Option<(Store<State>, Instance)> = None;
             while let Ok(job) = tasks.recv() {
+                // Tasks still queued when the plugins were reloaded aren't run.
+                let Some(busy) = ticker.busy_unless_stopped() else {
+                    (job.done)(Err("the plugins were reloaded".into()));
+                    continue;
+                };
                 if instance.is_none() {
                     let mut store = Store::new(&engine, State::background(&name, memory));
                     store.limiter(|state| &mut state.limits);
                     store.set_epoch_deadline(ticks);
-                    let busy = ticker.busy();
                     let started = runtime.run(limit, async {
                         if api == "0.3" {
                             v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
@@ -1976,10 +2107,10 @@ fn spawn_worker(
                                 .map(|instance| Instance::V0_4(Box::new(instance)))
                         }
                     });
-                    drop(busy);
                     match started {
                         Ok(started) => instance = Some((store, started)),
                         Err(err) => {
+                            drop(busy);
                             (job.done)(Err(format!(
                                 "the background instance failed to start: {err:#}"
                             )));
@@ -1989,7 +2120,6 @@ fn spawn_worker(
                 }
                 let (store, guest) = instance.as_mut().unwrap();
                 store.set_epoch_deadline(ticks);
-                let busy = ticker.busy();
                 let result =
                     runtime.run(limit, guest.call_background(store, &job.task, &job.input));
                 drop(busy);
@@ -2067,8 +2197,13 @@ impl Plugin {
         let store = &mut self.store;
         let busy = self.ticker.busy();
         let runtime = &self.runtime;
+        let started = Instant::now();
         let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
         drop(busy);
+        let took = started.elapsed();
+        self.timing.calls += 1;
+        self.timing.total += took;
+        self.timing.slowest = self.timing.slowest.max(took);
         let state = self.store.data_mut();
         let actions = std::mem::take(&mut state.actions);
         state.snapshot = Snapshot::default();
@@ -2097,6 +2232,33 @@ impl Plugin {
     }
 }
 
+/// Say what an instantiation error means: a component built for a newer
+/// Pure (an import this one lacks) or for another API version.
+fn explain_start_error(name: &str, api: &str, err: anyhow::Error) -> anyhow::Error {
+    let message = format!("{err:#}");
+    let quoted = |after: &str| {
+        let rest = &message[message.find(after)? + after.len()..];
+        let start = rest.find('`')? + 1;
+        let end = start + rest[start..].find('`')?;
+        Some(rest[start..end].to_string())
+    };
+    if message.contains("a matching implementation was not found in the linker") {
+        if let Some(import) = quoted("component imports") {
+            return anyhow!(
+                "plugin '{name}' needs a newer Pure: it uses `{import}`, which this Pure \
+                 doesn't have (update Pure, or use a version of the plugin for this one)"
+            );
+        }
+    }
+    if message.contains("no exported instance named `helix:plugin/") {
+        return anyhow!(
+            "plugin '{name}': plugin.toml says api = \"{api}\", but its component was built \
+             for another API version"
+        );
+    }
+    err.context(format!("failed to start plugin '{name}'"))
+}
+
 /// Information about a plugin, for listing.
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
@@ -2111,6 +2273,7 @@ pub struct PluginInfo {
     pub files: FileGrant,
     /// `[keys]` from `plugin.toml`.
     pub keys: Option<toml::Table>,
+    pub timing: CallTiming,
 }
 
 /// Loads and runs plugins.
@@ -2151,8 +2314,14 @@ impl Ticker {
                 let Ok(ticker) = receiver.recv() else {
                     return;
                 };
-                while !ticker.stop.load(Ordering::Relaxed) {
-                    if ticker.busy.load(Ordering::Acquire) == 0 {
+                // After the host is dropped, keep ticking until the calls
+                // still running (background tasks) are interrupted.
+                loop {
+                    let stopping = ticker.stop.load(Ordering::SeqCst);
+                    if ticker.busy.load(Ordering::SeqCst) == 0 {
+                        if stopping {
+                            break;
+                        }
                         // Woken by `busy()` or on drop.
                         std::thread::park();
                         continue;
@@ -2175,9 +2344,16 @@ impl Ticker {
 
     /// Tick until the returned guard is dropped.
     fn busy(self: &Arc<Self>) -> TickerGuard {
-        self.busy.fetch_add(1, Ordering::AcqRel);
+        self.busy.fetch_add(1, Ordering::SeqCst);
         self.thread.unpark();
         TickerGuard(self.clone())
+    }
+
+    /// Like `busy`, but `None` once the host is gone (the ticker may have
+    /// stopped, so the call couldn't be interrupted).
+    fn busy_unless_stopped(self: &Arc<Self>) -> Option<TickerGuard> {
+        let guard = self.busy();
+        (!self.stop.load(Ordering::SeqCst)).then_some(guard)
     }
 }
 
@@ -2185,13 +2361,13 @@ struct TickerGuard(Arc<Ticker>);
 
 impl Drop for TickerGuard {
     fn drop(&mut self) {
-        self.0.busy.fetch_sub(1, Ordering::AcqRel);
+        self.0.busy.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 impl Drop for PluginHost {
     fn drop(&mut self) {
-        self.ticker.stop.store(true, Ordering::Relaxed);
+        self.ticker.stop.store(true, Ordering::SeqCst);
         self.ticker.thread.unpark();
     }
 }
@@ -2255,6 +2431,7 @@ impl PluginHost {
                 process: plugin.store.data().process.clone(),
                 files: plugin.store.data().files,
                 keys: plugin.manifest.keys.clone(),
+                timing: plugin.timing,
             })
             .collect()
     }
@@ -2318,26 +2495,27 @@ impl PluginHost {
             }
         }
         // Compiling (on a cold cache) is the slow part: do it in parallel,
-        // then load in order.
+        // a few at a time, then load in order.
         let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
-        let components: Vec<_> = std::thread::scope(|scope| {
-            let compiling: Vec<_> = enabled
-                .iter()
-                .map(|(dir, manifest, _)| {
-                    scope.spawn(move || {
-                        compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
+        let mut components = Vec::with_capacity(enabled.len());
+        for batch in enabled.chunks(threads) {
+            std::thread::scope(|scope| {
+                let compiling: Vec<_> = batch
+                    .iter()
+                    .map(|(dir, manifest, _)| {
+                        scope.spawn(move || {
+                            compile(engine, cache_dir, &manifest.name, &dir.join(&manifest.wasm))
+                        })
                     })
-                })
-                .collect();
-            compiling
-                .into_iter()
-                .map(|handle| {
+                    .collect();
+                components.extend(compiling.into_iter().map(|handle| {
                     handle
                         .join()
                         .unwrap_or_else(|_| Err(anyhow!("compiling the plugin panicked")))
-                })
-                .collect()
-        });
+                }));
+            });
+        }
         for ((dir, manifest, settings), component) in enabled.into_iter().zip(components) {
             match self.load_compiled(&dir, manifest, settings, component) {
                 Ok(init_actions) => actions.extend(init_actions),
@@ -2444,7 +2622,7 @@ impl PluginHost {
                 .memory_size(self.limits.memory)
                 .instances(16)
                 .tables(64)
-                .memories(16)
+                .memories(2)
                 .build(),
             plugin: name.clone(),
             permissions: manifest.permissions.iter().copied().collect(),
@@ -2494,7 +2672,7 @@ impl PluginHost {
                 }
             })
         })
-        .with_context(|| format!("failed to start plugin '{name}'"))?;
+        .map_err(|err| explain_start_error(&name, &manifest.api, err))?;
         drop(busy);
 
         let mut plugin = Plugin {
@@ -2509,6 +2687,7 @@ impl PluginHost {
             runtime: self.runtime.clone(),
             component: component.clone(),
             worker: None,
+            timing: CallTiming::default(),
         };
         let config = settings.config;
         let (registration, actions) = plugin.call(
@@ -2702,6 +2881,21 @@ impl PluginHost {
             plugin.worker = None;
             (job.done)(Err("the background worker stopped".into()));
         }
+    }
+
+    /// Check again, just before it happens, that `plugin` may still change
+    /// `path`: its grants or a directory on the way may have changed since
+    /// it asked (a reload, a symlink swapped in).
+    pub fn check_writable(&self, plugin: &str, path: &str) -> Result<(), String> {
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|p| p.name() == plugin)
+            .ok_or_else(|| format!("plugin '{plugin}' was unloaded"))?;
+        if let Some(reason) = &plugin.disabled {
+            return Err(format!("plugin '{}' was disabled: {reason}", plugin.name()));
+        }
+        plugin.store.data().writable(path).map(|_| ())
     }
 
     /// Deliver a completion with the command time limit and a fresh snapshot.

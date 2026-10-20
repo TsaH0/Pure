@@ -71,6 +71,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             selection: Some(Selection::single(anchor, head)),
             modified: true,
             owner: None,
+            revision: 0,
         },
     );
     Snapshot {
@@ -148,6 +149,13 @@ fn manifest_parsing() {
             .contains("unknown variant")
     );
     assert!(err("version = \"1\"\napi = \"0.1\"").contains("missing field"));
+    for wasm in ["../../victim.wasm", "/tmp/x.wasm", "dir/x.wasm", ".", ""] {
+        let source = format!("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nwasm = \"{wasm}\"");
+        assert!(
+            err(&source).contains("wasm must be a file next to"),
+            "{wasm}"
+        );
+    }
 }
 
 #[test]
@@ -806,11 +814,8 @@ fn manifest_selects_the_component_world() {
         .unwrap()
         .replace("api = \"0.1\"", "api = \"0.2\"");
     std::fs::write(path, source).unwrap();
-    assert!(host()
-        .load(&dir, "{}")
-        .unwrap_err()
-        .to_string()
-        .contains("failed to start"));
+    let err = format!("{:#}", host().load(&dir, "{}").unwrap_err());
+    assert!(err.contains("built for another API version"), "{err}");
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
     assert!(err.to_string().contains("supports 0.1 to 0.4"));
 }
@@ -2331,18 +2336,39 @@ fn api_03_timers_fire_once_and_can_be_cancelled() {
         .unwrap();
     assert!(again.is_empty());
 
+    // Set and cancelled in one call: never started.
     let actions = host
         .run_command("testplugin3", "timer-cancel", vec![], Snapshot::default())
+        .unwrap();
+    assert!(actions.is_empty(), "{actions:?}");
+
+    // Cancelled by a later call: the editor is told to stop it.
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "timer",
+            vec!["60000".into()],
+            Snapshot::default(),
+        )
         .unwrap();
     let [Action::SetTimer { id, .. }] = &actions[..] else {
         panic!("{actions:?}");
     };
-    let fired = host
-        .callback(
+    let id = *id;
+    let actions = host
+        .run_command(
             "testplugin3",
-            Callback::Timer { id: *id },
-            &Snapshot::default(),
+            "cancel-timer",
+            vec![id.to_string()],
+            Snapshot::default(),
         )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::CancelTimer { id: cancelled, .. }] if *cancelled == id),
+        "{actions:?}"
+    );
+    let fired = host
+        .callback("testplugin3", Callback::Timer { id }, &Snapshot::default())
         .unwrap();
     assert!(fired.is_empty(), "a cancelled timer must not fire");
 }
@@ -2410,6 +2436,175 @@ fn api_03_completion_requests_are_answered_once() {
         .unwrap();
     assert!(!host.has_request("testplugin3", old, PendingKind::Completion));
     assert_ne!(old, new);
+}
+
+#[test]
+fn api_04_capabilities_revisions_cancel_and_snippets() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_v3_with(
+        &mut host,
+        root.path(),
+        ALL,
+        "{\"completion\": true, \"snippets\": true}",
+    );
+    let status = |host: &mut PluginHost, command: &str, args: Vec<String>, snap: Snapshot| {
+        statuses(
+            &host
+                .run_command("testplugin3", command, args, snap)
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        status(&mut host, "caps", vec![], Snapshot::default()),
+        ["caps:cancel-request,revisions,snippet-completions"]
+    );
+
+    // A document's revision; its own edits count within the call.
+    let mut snap = snapshot("text", 0, 0);
+    snap.documents.get_mut(&1).unwrap().revision = 7;
+    assert_eq!(status(&mut host, "rev", vec![], snap.clone()), ["rev:7:8"]);
+    // Edits for the revision the text is at apply; for an older one not.
+    let actions = host
+        .run_command("testplugin3", "edit-at", vec!["7".into()], snap.clone())
+        .unwrap();
+    assert!(actions.iter().any(|a| matches!(a, Action::Edit { .. })));
+    let actions = host
+        .run_command("testplugin3", "edit-at", vec!["6".into()], snap.clone())
+        .unwrap();
+    assert!(!actions.iter().any(|a| matches!(a, Action::Edit { .. })));
+    assert!(
+        statuses(&actions)[0].contains("at revision 7, not 6"),
+        "{actions:?}"
+    );
+
+    // Cancelling a timer started earlier stops it; its callback never runs.
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "timer",
+            vec!["60000".into()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    let [Action::SetTimer { id, .. }] = &actions[..] else {
+        panic!("{actions:?}");
+    };
+    let id = *id;
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "cancel",
+            vec![id.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::CancelTimer { id: cancelled, .. }] if *cancelled == id)
+    );
+    assert!(!host.has_request("testplugin3", id, PendingKind::Timer));
+    // A file batch: the editor is told to skip the rest.
+    let files = host
+        .register_request("testplugin3", PendingKind::Files)
+        .unwrap();
+    let actions = host
+        .run_command(
+            "testplugin3",
+            "cancel",
+            vec![files.to_string()],
+            Snapshot::default(),
+        )
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::CancelFiles { id, .. }] if *id == files));
+    let late = host
+        .callback(
+            "testplugin3",
+            Callback::FilesDone {
+                id: files,
+                results: vec![],
+            },
+            &Snapshot::default(),
+        )
+        .unwrap();
+    assert!(
+        late.is_empty(),
+        "a cancelled request's callback doesn't run"
+    );
+    // Unknown ids are ignored.
+    assert!(host
+        .run_command(
+            "testplugin3",
+            "cancel",
+            vec!["999".into()],
+            Snapshot::default()
+        )
+        .unwrap()
+        .is_empty());
+
+    // Snippet completions are marked as such.
+    let (_, actions) = host
+        .request_completion("testplugin3", 1, 0, &snapshot("", 0, 0))
+        .unwrap();
+    match &actions.unwrap()[..] {
+        [Action::Completions { items, .. }] => {
+            assert!(items[0].snippet);
+            assert_eq!(items[0].insert.as_deref(), Some("fn ${1:name}() {$0}"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Components that can't start for API reasons get a clear error.
+#[test]
+fn missing_imports_say_a_newer_pure_is_needed() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.3\"");
+    std::fs::write(path, manifest).unwrap();
+    // Built for 0.4, declared 0.3.
+    let err = format!("{:#}", host.load(&dir, "{}").unwrap_err());
+    assert!(err.contains("built for another API version"), "{err}");
+    // What Wasmtime says on a Pure without an import the plugin uses.
+    let missing = anyhow::anyhow!(
+        "component imports instance `helix:plugin/revisions@0.4.0`, but a matching \
+         implementation was not found in the linker"
+    );
+    let err = format!("{:#}", crate::explain_start_error("x", "0.4", missing));
+    assert!(err.contains("needs a newer Pure"), "{err}");
+    assert!(err.contains("`helix:plugin/revisions@0.4.0`"), "{err}");
+}
+
+/// API 0.4 components built before `requests`, `revisions` and `snippets`
+/// were added keep loading and working.
+#[test]
+fn frozen_api_04_components_still_work() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.4.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let actions = host
+        .run_command("testplugin3", "diagnose", vec![], snapshot("hello", 0, 0))
+        .unwrap();
+    assert!(matches!(&actions[..], [Action::Diagnostics { .. }]));
 }
 
 #[test]
@@ -3504,6 +3699,10 @@ fn background_tasks_run_in_a_separate_instance() {
     let root = tempfile::tempdir().unwrap();
     load_v3(&mut host, root.path(), &["read-buffers"]);
     assert_eq!(background(&mut host, "square", "12"), Ok("144".into()));
+    // Calls are timed for :plugin-list.
+    let timing = host.info()[0].timing;
+    assert!(timing.calls >= 2, "{timing:?}");
+    assert!(timing.slowest >= timing.total / timing.calls as u32);
     // Its own memory (the main instance counted 2 commands; the background
     // one 2 tasks), and no documents even with read-buffers.
     assert_eq!(
@@ -3550,6 +3749,50 @@ fn runaway_background_tasks_time_out_without_disabling_the_plugin() {
     // The plugin keeps working, and the next task gets a fresh instance.
     assert!(host.plugins[0].disabled().is_none());
     assert_eq!(background(&mut host, "square", "3"), Ok("9".into()));
+}
+
+#[test]
+fn background_tasks_are_still_interrupted_after_the_host_is_dropped() {
+    let mut host = host_with_limits(Limits {
+        background: Duration::from_millis(300),
+        ..Limits::default()
+    });
+    let root = tempfile::tempdir().unwrap();
+    load_v3(&mut host, root.path(), &["read-buffers"]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // One spinning task and one queued behind it.
+    for _ in 0..2 {
+        let actions = host
+            .run_command(
+                "testplugin3",
+                "background",
+                vec!["spin".into(), String::new()],
+                snapshot("main text", 0, 0),
+            )
+            .unwrap();
+        let [Action::RunBackground {
+            id, task, input, ..
+        }] = &actions[..]
+        else {
+            panic!("expected a background task, got {actions:?}");
+        };
+        let sender = sender.clone();
+        host.run_background(
+            "testplugin3",
+            *id,
+            task.clone(),
+            input.clone(),
+            Box::new(move |result| {
+                let _ = sender.send(result);
+            }),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    drop(host);
+    let first = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(first.unwrap_err().contains("took longer"));
+    let second = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(second, Err("the plugins were reloaded".into()));
 }
 
 /// What one Markdown re-render costs (see `examples/markdown`). Run with
@@ -3623,6 +3866,37 @@ fn lint_example_reports_diagnostics() {
         .map(|d| (d.code.as_deref().unwrap(), d.range.clone()))
         .collect();
     assert_eq!(found, [("trailing-space", 2..3), ("line-length", 9..15)]);
+}
+
+#[test]
+fn snippets_example_offers_snippets_for_the_language() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    load_example(
+        &mut host,
+        root.path(),
+        "snippets",
+        r#"{"snippets": {"rust": {"dbg": "dbg!(${1:value});"}}}"#,
+    );
+    // `snapshot` is a Rust document.
+    let (_, actions) = host
+        .request_completion("snippets", 1, 7, &snapshot("let x d", 7, 7))
+        .unwrap();
+    match &actions.unwrap()[..] {
+        [Action::Completions { items, .. }] => {
+            assert_eq!(items.len(), 1, "{items:?}");
+            assert_eq!(items[0].label, "dbg");
+            assert!(items[0].snippet);
+            assert_eq!(items[0].insert.as_deref(), Some("dbg!(${1:value});"));
+        }
+        other => panic!("{other:?}"),
+    }
+    let (_, actions) = host
+        .request_completion("snippets", 1, 2, &snapshot("fn", 2, 2))
+        .unwrap();
+    assert!(
+        matches!(&actions.unwrap()[..], [Action::Completions { items, .. }] if items[0].label == "fn")
+    );
 }
 
 #[test]
@@ -3865,6 +4139,37 @@ fn api_04_file_operations_are_checked_and_answered() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("outside"), "{err}");
+
+    // Checked again when they run: a path that left the grant is refused.
+    assert_eq!(host.check_writable("testplugin3", &a), Ok(()));
+    assert!(host
+        .check_writable("testplugin3", "/etc/passwd")
+        .unwrap_err()
+        .contains("outside"));
+    assert!(host
+        .check_writable("other", &a)
+        .unwrap_err()
+        .contains("unloaded"));
+
+    // Only so many batches at once.
+    for _ in 0..MAX_FILE_BATCHES {
+        host.run_command(
+            "testplugin3",
+            "files",
+            vec![format!("create:{a}")],
+            Snapshot::default(),
+        )
+        .unwrap();
+    }
+    let err = host
+        .run_command(
+            "testplugin3",
+            "files",
+            vec![format!("create:{a}")],
+            Snapshot::default(),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("batches"), "{err}");
 }
 
 #[test]
@@ -3880,6 +4185,7 @@ fn conceals_are_checked_against_the_text() {
             selection: None,
             modified: false,
             owner: None,
+            revision: 0,
         },
     );
     state

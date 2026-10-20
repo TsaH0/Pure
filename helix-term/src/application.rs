@@ -370,7 +370,10 @@ impl Application {
                     }
                     self.render().await;
                 }
-                _ = self.auto_reload_timer.tick() => {
+                // Only polled (so only waking the editor) while there are
+                // files to check.
+                _ = self.auto_reload_timer.tick(), if self.editor.config().auto_reload
+                    && self.editor.documents.values().any(|doc| doc.path().is_some()) => {
                     if self.editor.reload_changed_documents() {
                         self.render().await;
                     }
@@ -389,6 +392,30 @@ impl Application {
                         }
                     }
                 }
+            }
+
+            // UI a plugin's command asked for (a picker, a prompt, a key
+            // to wait for).
+            let deferred = crate::compositor::take_deferred_ui();
+            if !deferred.is_empty() {
+                let mut cx = crate::compositor::Context {
+                    editor: &mut self.editor,
+                    jobs: &mut self.jobs,
+                    scroll: None,
+                };
+                for ui in deferred {
+                    match ui {
+                        crate::compositor::DeferredUi::Callback(callback) => {
+                            callback(&mut self.compositor, &mut cx)
+                        }
+                        crate::compositor::DeferredUi::NextKey(callback, kind) => {
+                            if let Some(view) = self.compositor.find::<ui::EditorView>() {
+                                view.set_on_next_key(callback, kind);
+                            }
+                        }
+                    }
+                }
+                self.render().await;
             }
 
             // for integration tests only, reset the idle timer after every

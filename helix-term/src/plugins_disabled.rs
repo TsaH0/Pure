@@ -93,6 +93,7 @@ pub struct PluginCompletion {
     pub kind: Option<String>,
     pub documentation: Option<String>,
     pub replace_from: Option<usize>,
+    pub snippet: bool,
 }
 
 /// Without plugins there is no directory handler: the file picker opens.

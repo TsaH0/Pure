@@ -528,6 +528,9 @@ pub struct Outcome {
     /// First line (0-based) with a match, and the last one.
     pub first_line: Option<usize>,
     pub last_line: Option<usize>,
+    /// How many of `changes` have their replacement computed: all, unless
+    /// [`Substitution::apply_limited`] ran out of budget.
+    pub expanded: usize,
 }
 
 impl Substitution {
@@ -574,7 +577,16 @@ impl Substitution {
     /// of `text` and compute the replacements. Without the `g` flag only the
     /// first match on each line is replaced.
     pub fn apply(&self, text: &Rope, scopes: &[(usize, usize)]) -> Outcome {
+        self.apply_limited(text, scopes, usize::MAX)
+    }
+
+    /// Like [`Substitution::apply`], but once the replacements reach
+    /// `budget` bytes the rest are only counted and located (their
+    /// replacement is `None` and they are past `Outcome::expanded`), for a
+    /// preview that shows the first few.
+    pub fn apply_limited(&self, text: &Rope, scopes: &[(usize, usize)], budget: usize) -> Outcome {
         let mut outcome = Outcome::default();
+        let mut spent = 0usize;
         let mut last_line = None;
         // After a final newline there is no line in Vim's sense; `^` or `$`
         // must not match there.
@@ -603,7 +615,13 @@ impl Substitution {
                 }
                 last_line = Some(line);
                 outcome.matches += 1;
+                if spent >= budget {
+                    outcome.changes.push((start, end, None));
+                    continue;
+                }
                 let replacement = self.expand(&captures);
+                spent = spent.saturating_add(replacement.len().max(1));
+                outcome.expanded += 1;
                 outcome.changes.push((
                     start,
                     end,
@@ -789,6 +807,32 @@ mod test {
 
     fn s(text: &str, command: &str) -> String {
         sub(text, command).unwrap().0
+    }
+
+    #[test]
+    fn limited_application_stops_expanding_at_its_budget() {
+        let text = Rope::from("x".repeat(100_000));
+        let replacement = "y".repeat(256);
+        let command = parse(&format!("s/x/{replacement}/g")).unwrap();
+        let substitution = Substitution::new(&command, None).unwrap();
+        let full = substitution.apply(&text, &[(0, text.len_chars())]);
+        assert_eq!(full.expanded, 100_000);
+        let limited = substitution.apply_limited(&text, &[(0, text.len_chars())], 1 << 20);
+        // Every match is still found and counted...
+        assert_eq!(limited.matches, 100_000);
+        assert_eq!(limited.changes.len(), 100_000);
+        // ...but only about 1 MiB of replacements is built.
+        assert_eq!(limited.expanded, (1 << 20) / 256);
+        let built: usize = limited
+            .changes
+            .iter()
+            .filter_map(|(_, _, r)| r.as_ref().map(|r| r.len()))
+            .sum();
+        assert_eq!(built, 1 << 20);
+        assert_eq!(
+            &limited.changes[..limited.expanded],
+            &full.changes[..limited.expanded]
+        );
     }
 
     #[test]

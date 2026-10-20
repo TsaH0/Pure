@@ -54,7 +54,12 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -101,6 +106,32 @@ fn read_manifest(dir: &Path) -> anyhow::Result<Manifest> {
     Manifest::parse(&source).with_context(|| format!("invalid {}", path.display()))
 }
 
+/// Run git without asking for credentials on the terminal (the editor owns
+/// it), stopping it after `GIT_TIMEOUT`.
+fn git(command: &mut Command) -> anyhow::Result<std::process::Output> {
+    const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+    let mut child = command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("failed to run git")?;
+    let deadline = std::time::Instant::now() + GIT_TIMEOUT;
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("git took longer than {}s", GIT_TIMEOUT.as_secs());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 fn is_git(source: &str) -> bool {
     source.contains("://") || source.starts_with("git@") || source.ends_with(".git")
 }
@@ -141,23 +172,19 @@ pub fn stage(plugins: &Path, source: &str) -> anyhow::Result<Staged> {
     };
     std::fs::create_dir_all(&staged.dir)?;
     if is_git(source) {
-        let output = Command::new("git")
+        let output = git(Command::new("git")
             .args(["clone", "--depth", "1", "--quiet", "--", source])
-            .arg(&fetched)
-            .output()
-            .context("failed to run git")?;
+            .arg(&fetched))?;
         if !output.status.success() {
             bail!(
                 "git clone failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
-        let output = Command::new("git")
+        let output = git(Command::new("git")
             .arg("-C")
             .arg(&fetched)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .context("failed to run git")?;
+            .args(["rev-parse", "HEAD"]))?;
         staged.commit = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
     } else {
         let path = helix_stdx::path::expand_tilde(Path::new(source));
@@ -202,12 +229,24 @@ pub fn commit(plugins: &Path, lock_path: &Path, staged: Staged) -> anyhow::Resul
     for file in [PathBuf::from("plugin.toml"), wasm] {
         std::fs::copy(fetched.join(&file), fresh.join(&file))?;
     }
-    if target.exists() {
-        std::fs::remove_dir_all(&target)
+    // Keep the old copy until the new one and the lock are both in place:
+    // on any failure it is put back (the staging directory is removed with
+    // `staged` either way).
+    let mut lock = Lock::read(lock_path)?;
+    let old = staged.dir.join("old");
+    let replacing = target.exists();
+    if replacing {
+        std::fs::rename(&target, &old)
             .with_context(|| format!("failed to replace {}", target.display()))?;
     }
-    std::fs::rename(&fresh, &target)?;
-    let mut lock = Lock::read(lock_path)?;
+    let restore = |err: anyhow::Error| {
+        if replacing {
+            let _ = std::fs::remove_dir_all(&target);
+            let _ = std::fs::rename(&old, &target);
+        }
+        err
+    };
+    std::fs::rename(&fresh, &target).map_err(|err| restore(err.into()))?;
     lock.0.insert(
         name.clone(),
         LockEntry {
@@ -216,7 +255,7 @@ pub fn commit(plugins: &Path, lock_path: &Path, staged: Staged) -> anyhow::Resul
             sha256,
         },
     );
-    lock.write(lock_path)?;
+    lock.write(lock_path).map_err(restore)?;
     Ok(name)
 }
 
@@ -355,19 +394,8 @@ pub fn install_command(editor: &mut Editor, source: String) {
                     ""
                 }
             );
-            confirm(compositor, question, move |editor| {
-                let (plugins, lock) = paths();
-                match commit(&plugins, &lock, staged) {
-                    Ok(name) => {
-                        super::load(editor);
-                        if editor.get_status().is_none_or(|(_, severity)| {
-                            *severity != helix_view::editor::Severity::Error
-                        }) {
-                            editor.set_status(format!("Installed {name}"));
-                        }
-                    }
-                    Err(err) => editor.set_error(format!("{err:#}")),
-                }
+            confirm(compositor, question, move |_| {
+                commit_and_reload(staged, "Installed")
             });
         })
         .await;
@@ -391,59 +419,73 @@ pub fn update_command(editor: &mut Editor, names: Vec<String>) {
     }
     editor.set_status(format!("Updating {}...", names.join(", ")));
     tokio::spawn(async move {
+        // Fetch, and install those that ask for nothing new, off the
+        // editor's thread.
         let fetched = tokio::task::spawn_blocking(move || {
-            let (plugins, lock) = paths();
-            names
-                .into_iter()
-                .map(|name| {
-                    let staged = stage_update(&plugins, &lock, &name);
-                    (name, staged)
-                })
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
-        job::dispatch(move |editor, compositor| {
             let (plugins, lock) = paths();
             let mut updated = Vec::new();
             let mut asks = Vec::new();
-            for (name, staged) in fetched {
-                match staged {
+            let mut errors = Vec::new();
+            for name in names {
+                match stage_update(&plugins, &lock, &name) {
                     Ok((staged, current)) => {
                         let added = new_permissions(&current, &staged.manifest);
                         if added.is_empty() {
                             match commit(&plugins, &lock, staged) {
                                 Ok(name) => updated.push(name),
-                                Err(err) => editor.set_error(format!("{name}: {err:#}")),
+                                Err(err) => errors.push(format!("{name}: {err:#}")),
                             }
                         } else {
                             asks.push((name, added.join(", "), staged));
                         }
                     }
-                    Err(err) => editor.set_error(format!("{name}: {err:#}")),
+                    Err(err) => errors.push(format!("{name}: {err:#}")),
                 }
             }
+            (updated, asks, errors)
+        })
+        .await;
+        job::dispatch(move |editor, compositor| {
+            let (updated, asks, errors) = match fetched {
+                Ok(fetched) => fetched,
+                Err(err) => return editor.set_error(err.to_string()),
+            };
             if !updated.is_empty() {
-                super::load(editor);
                 editor.set_status(format!("Updated {}", updated.join(", ")));
+                super::load_in_background();
+            }
+            if !errors.is_empty() {
+                editor.set_error(errors.join("; "));
             }
             // New permissions need consent, one plugin at a time.
             for (name, added, staged) in asks {
                 confirm(
                     compositor,
                     format!("The new {name} also asks for: {added}. Update?"),
-                    move |editor| {
-                        let (plugins, lock) = paths();
-                        match commit(&plugins, &lock, staged) {
-                            Ok(name) => {
-                                super::load(editor);
-                                editor.set_status(format!("Updated {name}"));
-                            }
-                            Err(err) => editor.set_error(format!("{err:#}")),
-                        }
-                    },
+                    move |_| commit_and_reload(staged, "Updated"),
                 );
             }
+        })
+        .await;
+    });
+}
+
+/// Install `staged` and reload the plugins, both off the editor's thread;
+/// `done` ("Installed") starts the status message.
+fn commit_and_reload(staged: Staged, done: &'static str) {
+    tokio::spawn(async move {
+        let committed = tokio::task::spawn_blocking(move || {
+            let (plugins, lock) = paths();
+            commit(&plugins, &lock, staged)
+        })
+        .await;
+        job::dispatch(move |editor, _| match committed {
+            Ok(Ok(name)) => {
+                editor.set_status(format!("{done} {name}"));
+                super::load_in_background();
+            }
+            Ok(Err(err)) => editor.set_error(format!("{err:#}")),
+            Err(err) => editor.set_error(err.to_string()),
         })
         .await;
     });
@@ -564,5 +606,56 @@ mod test {
             .unwrap()
             .collect();
         assert!(left.is_empty());
+    }
+
+    #[test]
+    fn components_outside_the_plugin_are_refused_before_copying() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("a/b/source");
+        std::fs::create_dir_all(&source).unwrap();
+        let victim = root.path().join("a/victim.wasm");
+        std::fs::write(&victim, b"keep").unwrap();
+        std::fs::write(
+            source.join("plugin.toml"),
+            "name = \"evil\"\nversion = \"1\"\napi = \"0.1\"\nwasm = \"../../victim.wasm\"",
+        )
+        .unwrap();
+        let plugins = root.path().join("a/b/plugins");
+        let err = stage(&plugins, source.to_str().unwrap()).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("wasm must be a file next to"),
+            "{err:#}"
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn a_failed_update_keeps_the_old_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let plugins = root.path().join("plugins");
+        let lock = root.path().join("plugins.lock");
+        let staged = stage(&plugins, todos().to_str().unwrap()).unwrap();
+        commit(&plugins, &lock, staged).unwrap();
+        let before = std::fs::read(plugins.join("todos/plugin.wasm")).unwrap();
+
+        // The lock can't be written (its temporary files are directories, as
+        // root can write anywhere): the update is undone.
+        let staged = stage(&plugins, todos().to_str().unwrap()).unwrap();
+        for n in 0..1000 {
+            let tmp = format!("plugins.tmp{}-{n}", std::process::id());
+            std::fs::create_dir_all(root.path().join(tmp)).unwrap();
+        }
+        let err = commit(&plugins, &lock, staged).unwrap_err();
+        assert!(format!("{err:#}").contains("directory"), "{err:#}");
+        assert_eq!(
+            std::fs::read(plugins.join("todos/plugin.wasm")).unwrap(),
+            before
+        );
+        assert!(plugins.join("todos/plugin.toml").is_file());
+        let left: Vec<_> = std::fs::read_dir(&plugins)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["todos"]);
     }
 }

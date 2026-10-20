@@ -87,6 +87,7 @@ pub(super) fn completion(
                     kind: Cow::Borrowed(COMPLETION_KIND),
                     documentation: None,
                     provider: CompletionProvider::Word,
+                    snippet: None,
                 })
             })
             .collect();
