@@ -120,7 +120,7 @@
 | `last_picker` | Open last picker | normal: `` <space>' ``, select: `` <space>' `` |
 | `compile` | Prompt for a shell command and run it like Emacs' M-x compile | normal: `` <space>x ``, select: `` <space>x `` |
 | `normal_mode_or_close_compilation` | Close the *compilation* buffer if it is open, otherwise enter normal mode | normal: `` <esc> `` |
-| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` <space>z ``, select: `` <space>z `` |
+| `run_and_wait` | Prompt for a shell command and run it like Vim's :!, then press any key to return | normal: `` ! ``, select: `` ! `` |
 | `quickfix_next` | Go to the next quickfix entry | normal: `` ]q ``, select: `` ]q `` |
 | `quickfix_prev` | Go to the previous quickfix entry | normal: `` [q ``, select: `` [q `` |
 | `quickfix_first` | Go to the first quickfix entry | normal: `` [Q ``, select: `` [Q `` |
@@ -309,7 +309,7 @@
 | `dap_disable_exceptions` | Disable exception breakpoints | normal: `` <space>GE ``, select: `` <space>GE `` |
 | `shell_pipe` | Pipe selections through shell command | normal: `` \| ``, select: `` \| `` |
 | `shell_pipe_to` | Pipe selections into shell command ignoring output | normal: `` <A-\|> ``, select: `` <A-\|> `` |
-| `shell_insert_output` | Insert shell command output before selections | normal: `` ! ``, select: `` ! `` |
+| `shell_insert_output` | Insert shell command output before selections | normal: `` <space>z ``, select: `` <space>z `` |
 | `shell_append_output` | Append shell command output after selections | normal: `` <A-!> ``, select: `` <A-!> `` |
 | `shell_keep_pipe` | Filter selections with shell predicate | normal: `` $ ``, select: `` $ `` |
 | `suspend` | Suspend and return to shell | normal: `` <C-z> ``, select: `` <C-z> `` |

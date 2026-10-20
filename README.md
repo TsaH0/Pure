@@ -21,7 +21,7 @@ inspired editor, written in Rust) that keeps up with Helix and adds:
 - **Quickfix list**: filled from compiler output, `:grep`, diagnostics or a
   buffer; `]q` / `[q` / `]Q` / `[Q`, `space q`, `:cnext` and friends.
 - **Running commands**: `space x` streams a command's output into an
-  Emacs-style `*compilation*` buffer, `space z` runs it like Vim's `:!`,
+  Emacs-style `*compilation*` buffer, `!` runs it like Vim's `:!` (`space z` inserts a command's output),
   and `:run-interactive` hands the terminal to full-screen programs (yazi,
   lazygit, ...).
 - **Smarter text objects**: `mi(`/`ma"` find the nearest pair on the line,

@@ -244,7 +244,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "'" => last_picker,
             "x" => compile,
             "X" => toggle_compilation,
-            "z" => run_and_wait,
+            "z" => shell_insert_output,
             "q" => quickfix_picker,
             "v" => substitute_very_magic,
             "G" => { "Debug (experimental)" sticky=true
@@ -342,7 +342,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         "\"" => select_register,
         "|" => shell_pipe,
         "A-|" => shell_pipe_to,
-        "!" => shell_insert_output,
+        "!" => run_and_wait,
         "A-!" => shell_append_output,
         "$" => shell_keep_pipe,
         "C-z" => suspend,

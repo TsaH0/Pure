@@ -42,7 +42,7 @@ finishes the task. Progress notes are in [`plugin-progress.md`](plugin-progress.
 | `helix-plugin/build-plugins.sh` | Rebuilds the test plugin and example wasm files |
 | `helix-term/src/plugins.rs` | Editor integration: loading, `snapshot`, `apply` (turns `Action`s into edits), hooks, debouncing, `:plugin-*` helpers |
 | `helix-term/src/commands/typed.rs` | `:plugin-run`, `:plugin-list`, `:plugin-reload` |
-| `helix-term/src/interactive.rs` | Handing the terminal to a program (`:run-interactive`, `space z`, plugins' `run-interactive`) |
+| `helix-term/src/interactive.rs` | Handing the terminal to a program (`:run-interactive`, `!`, plugins' `run-interactive`) |
 | `helix-term/src/plugins/process.rs`, `plugins/picker.rs` | Programs and pickers started by plugins |
 | `helix-term/src/ui/picker.rs` | The picker (`Picker::new`, `with_preview`, `injector`, `with_dynamic_query`) |
 | `helix-term/tests/test/plugins.rs` | In-editor plugin tests |
@@ -75,7 +75,8 @@ design doc).
   (processes, files, network) needs a permission in `plugin.toml` **and** a
   grant by the user in `plugins.toml`.
 - **Don't change the user's key bindings** or existing commands without asking
-  (the owner's config uses `:sh`, `space x` and `space z`).
+  (the owner's config uses `:sh`, `space x`, `!` (run like Vim's `:!`) and
+  `space z` (insert output); they swapped on 2026-10-20 at the owner's request).
 - Rust is pinned to **1.90** (`rust-toolchain.toml`), which is why Wasmtime is
   at **41.0.4**. Don't bump either without checking that everything builds.
 

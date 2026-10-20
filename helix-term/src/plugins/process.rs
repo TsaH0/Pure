@@ -332,7 +332,7 @@ pub fn interactive(
             .unwrap_or(false)
     }));
     if wait_for_key {
-        // Like `space z`: the output stays on a cleared screen until a key.
+        // Like `!`: the output stays on a cleared screen until a key.
         interactive.clear_screen = true;
         interactive.wait_for_key = true;
     }

@@ -273,7 +273,7 @@ it should also be granted only to trusted plugins.
   `{chooser}` gets the path of a fresh private temporary file, and the
   callback's `stdout` is what the program wrote there. With `wait_for_key`,
   the program runs on a cleared screen and waits for a key afterwards (like
-  `space z`). Chooser files must be regular files; reads are capped at 16 MiB
+  `!`). Chooser files must be regular files; reads are capped at 16 MiB
   with a truncation notice in stderr. Pure refuses replacement FIFOs on Unix
   without waiting for a writer. Only from commands and callbacks.
 
