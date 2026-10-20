@@ -396,20 +396,7 @@ pub fn install_command(editor: &mut Editor, source: String) {
                     ""
                 }
             );
-            confirm(compositor, question, move |editor| {
-                let (plugins, lock) = paths();
-                match commit(&plugins, &lock, staged) {
-                    Ok(name) => {
-                        super::load(editor);
-                        if editor.get_status().is_none_or(|(_, severity)| {
-                            *severity != helix_view::editor::Severity::Error
-                        }) {
-                            editor.set_status(format!("Installed {name}"));
-                        }
-                    }
-                    Err(err) => editor.set_error(format!("{err:#}")),
-                }
-            });
+            confirm(compositor, question, move |_| commit_and_reload(staged, "Installed"));
         })
         .await;
     });
@@ -432,59 +419,73 @@ pub fn update_command(editor: &mut Editor, names: Vec<String>) {
     }
     editor.set_status(format!("Updating {}...", names.join(", ")));
     tokio::spawn(async move {
+        // Fetch, and install those that ask for nothing new, off the
+        // editor's thread.
         let fetched = tokio::task::spawn_blocking(move || {
-            let (plugins, lock) = paths();
-            names
-                .into_iter()
-                .map(|name| {
-                    let staged = stage_update(&plugins, &lock, &name);
-                    (name, staged)
-                })
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
-        job::dispatch(move |editor, compositor| {
             let (plugins, lock) = paths();
             let mut updated = Vec::new();
             let mut asks = Vec::new();
-            for (name, staged) in fetched {
-                match staged {
+            let mut errors = Vec::new();
+            for name in names {
+                match stage_update(&plugins, &lock, &name) {
                     Ok((staged, current)) => {
                         let added = new_permissions(&current, &staged.manifest);
                         if added.is_empty() {
                             match commit(&plugins, &lock, staged) {
                                 Ok(name) => updated.push(name),
-                                Err(err) => editor.set_error(format!("{name}: {err:#}")),
+                                Err(err) => errors.push(format!("{name}: {err:#}")),
                             }
                         } else {
                             asks.push((name, added.join(", "), staged));
                         }
                     }
-                    Err(err) => editor.set_error(format!("{name}: {err:#}")),
+                    Err(err) => errors.push(format!("{name}: {err:#}")),
                 }
             }
+            (updated, asks, errors)
+        })
+        .await;
+        job::dispatch(move |editor, compositor| {
+            let (updated, asks, errors) = match fetched {
+                Ok(fetched) => fetched,
+                Err(err) => return editor.set_error(err.to_string()),
+            };
             if !updated.is_empty() {
-                super::load(editor);
                 editor.set_status(format!("Updated {}", updated.join(", ")));
+                super::load_in_background();
+            }
+            if !errors.is_empty() {
+                editor.set_error(errors.join("; "));
             }
             // New permissions need consent, one plugin at a time.
             for (name, added, staged) in asks {
                 confirm(
                     compositor,
                     format!("The new {name} also asks for: {added}. Update?"),
-                    move |editor| {
-                        let (plugins, lock) = paths();
-                        match commit(&plugins, &lock, staged) {
-                            Ok(name) => {
-                                super::load(editor);
-                                editor.set_status(format!("Updated {name}"));
-                            }
-                            Err(err) => editor.set_error(format!("{err:#}")),
-                        }
-                    },
+                    move |_| commit_and_reload(staged, "Updated"),
                 );
             }
+        })
+        .await;
+    });
+}
+
+/// Install `staged` and reload the plugins, both off the editor's thread;
+/// `done` ("Installed") starts the status message.
+fn commit_and_reload(staged: Staged, done: &'static str) {
+    tokio::spawn(async move {
+        let committed = tokio::task::spawn_blocking(move || {
+            let (plugins, lock) = paths();
+            commit(&plugins, &lock, staged)
+        })
+        .await;
+        job::dispatch(move |editor, _| match committed {
+            Ok(Ok(name)) => {
+                editor.set_status(format!("{done} {name}"));
+                super::load_in_background();
+            }
+            Ok(Err(err)) => editor.set_error(format!("{err:#}")),
+            Err(err) => editor.set_error(err.to_string()),
         })
         .await;
     });
