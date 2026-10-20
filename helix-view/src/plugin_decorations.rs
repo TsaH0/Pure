@@ -39,6 +39,25 @@ pub struct PluginDecorations {
     overlays: BTreeMap<String, Vec<(String, Vec<Overlay>)>>,
     /// Sorted by position per layer.
     signs: BTreeMap<String, Vec<Sign>>,
+    /// Layers not drawn on the line with the view's cursor, so it shows the
+    /// raw text (e.g. rendered Markdown).
+    raw_on_cursor_line: std::collections::BTreeSet<String>,
+}
+
+/// The part of `items` (sorted by `pos`) outside `skip`: before and after.
+fn outside<'a, T>(
+    items: &'a [T],
+    skip: &Option<Range<usize>>,
+    pos: impl Fn(&T) -> usize,
+) -> [&'a [T]; 2] {
+    match skip {
+        Some(skip) => {
+            let from = items.partition_point(|item| pos(item) < skip.start);
+            let to = items.partition_point(|item| pos(item) < skip.end);
+            [&items[..from], &items[to..]]
+        }
+        None => [items, &[]],
+    }
 }
 
 impl PluginDecorations {
@@ -148,6 +167,15 @@ impl PluginDecorations {
         }
     }
 
+    /// Whether `layer` is hidden on the cursor's line.
+    pub fn set_raw_on_cursor_line(&mut self, layer: String, raw: bool) {
+        if raw {
+            self.raw_on_cursor_line.insert(layer);
+        } else {
+            self.raw_on_cursor_line.remove(&layer);
+        }
+    }
+
     /// Remove every layer of `plugin` (it was unloaded or reloaded).
     pub fn clear_plugin(&mut self, plugin: &str) {
         let prefix = format!("{plugin}/");
@@ -157,6 +185,8 @@ impl PluginDecorations {
             .retain(|layer, _| !layer.starts_with(&prefix));
         self.overlays.retain(|layer, _| !layer.starts_with(&prefix));
         self.signs.retain(|layer, _| !layer.starts_with(&prefix));
+        self.raw_on_cursor_line
+            .retain(|layer| !layer.starts_with(&prefix));
     }
 
     /// Follow an edit: `len` is the new text's length.
@@ -201,19 +231,28 @@ impl PluginDecorations {
         }
     }
 
-    /// Overlays for the highlights intersecting `visible` (char range).
+    /// Overlays for the highlights intersecting `visible` (char range);
+    /// raw-on-cursor-line layers skip `cursor_line`.
     pub fn overlays_into(
         &self,
         theme: &Theme,
         visible: Range<usize>,
+        cursor_line: Option<Range<usize>>,
         overlays: &mut Vec<OverlayHighlights>,
     ) {
-        for highlights in self.highlights.values() {
+        for (layer, highlights) in &self.highlights {
+            let skip = cursor_line
+                .clone()
+                .filter(|_| self.raw_on_cursor_line.contains(layer));
             // Sorted and non-overlapping: ends are sorted too.
             let first = highlights.partition_point(|(range, _)| range.end <= visible.start);
             let shown: Vec<_> = highlights[first..]
                 .iter()
                 .take_while(|(range, _)| range.start < visible.end)
+                .filter(|(range, _)| {
+                    skip.as_ref()
+                        .is_none_or(|skip| range.end <= skip.start || range.start >= skip.end)
+                })
                 .filter_map(|(range, scope)| Some((theme.find_highlight(scope)?, range.clone())))
                 .collect();
             if !shown.is_empty() {
@@ -222,24 +261,45 @@ impl PluginDecorations {
         }
     }
 
-    /// Add the virtual text and overlays to `text_annotations`.
+    /// Add the virtual text and overlays to `text_annotations`;
+    /// raw-on-cursor-line layers skip `cursor_line`.
     pub fn annotate<'a>(
         &'a self,
         theme: Option<&Theme>,
+        cursor_line: Option<Range<usize>>,
         text_annotations: &mut TextAnnotations<'a>,
     ) {
-        for groups in self.overlays.values() {
+        let skip = |layer: &String| {
+            cursor_line
+                .clone()
+                .filter(|_| self.raw_on_cursor_line.contains(layer))
+        };
+        for (layer, groups) in &self.overlays {
+            let skip = skip(layer);
             for (scope, overlays) in groups {
                 let style = theme.and_then(|theme| theme.find_highlight(scope));
-                text_annotations.add_overlay(overlays, style);
+                for part in outside(overlays, &skip, |overlay| overlay.char_idx) {
+                    text_annotations.add_overlay(part, style);
+                }
             }
         }
-        for layer in self.annotations.values() {
-            for (scope, annotations) in &layer.groups {
+        for (layer, annotations) in &self.annotations {
+            let skip = skip(layer);
+            for (scope, annotations) in &annotations.groups {
                 let style = theme.and_then(|theme| theme.find_highlight(scope));
-                text_annotations.add_inline_annotations(annotations, style);
+                // End-of-line text sits at the line break: part of the line.
+                let skip = skip.clone().map(|range| range.start..range.end + 1);
+                for part in outside(annotations, &skip, |annotation| annotation.char_idx) {
+                    text_annotations.add_inline_annotations(part, style);
+                }
             }
         }
+    }
+
+    /// Whether any layer is raw on the cursor line (then the caller needs to
+    /// know that line).
+    pub fn wants_cursor_line(&self) -> bool {
+        !self.raw_on_cursor_line.is_empty()
     }
 
     /// The signs by line, for the `plugins` gutter: the first layer's sign on
@@ -354,5 +414,20 @@ mod test {
         assert_eq!(groups[0].1[0].char_idx, 1);
         decorations.set_annotations("p/a".into(), vec![], 6);
         assert!(!decorations.annotations.contains_key("p/a"));
+    }
+
+    #[test]
+    fn raw_layers_skip_the_cursor_line() {
+        let items = [0, 3, 4, 7, 9];
+        let parts = outside(&items, &Some(3..8), |i| *i);
+        assert_eq!(parts, [&[0][..], &[9][..]]);
+        assert_eq!(outside(&items, &None, |i| *i), [&items[..], &[][..]]);
+
+        let mut decorations = PluginDecorations::default();
+        assert!(!decorations.wants_cursor_line());
+        decorations.set_raw_on_cursor_line("md/marks".into(), true);
+        assert!(decorations.wants_cursor_line());
+        decorations.clear_plugin("md");
+        assert!(!decorations.wants_cursor_line());
     }
 }

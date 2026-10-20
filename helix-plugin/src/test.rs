@@ -1824,7 +1824,7 @@ fn benchmarks() {
     let rounds = 200;
     let started = Instant::now();
     for _ in 0..rounds {
-        host.dispatch(Event::SelectionChange(1), &snapshot);
+        host.dispatch(Event::DocumentChange(1), &snapshot);
     }
     eprintln!(
         "dispatch one event to one plugin: {:>7.3} ms",
@@ -3349,4 +3349,47 @@ fn runaway_background_tasks_time_out_without_disabling_the_plugin() {
     // The plugin keeps working, and the next task gets a fresh instance.
     assert!(host.plugins[0].disabled().is_none());
     assert_eq!(background(&mut host, "square", "3"), Ok("9".into()));
+}
+
+/// What one Markdown re-render costs (see `examples/markdown`). Run with
+/// `cargo test -p helix-plugin --release -- --ignored --nocapture markdown_cost`.
+#[test]
+#[ignore]
+fn markdown_cost() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("markdown");
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            fixture(&format!("examples/markdown/{file}")),
+            dir.join(file),
+        )
+        .unwrap();
+    }
+    host.load(&dir, "{}").unwrap();
+    let book: String = std::fs::read_dir(fixture("../book/src"))
+        .unwrap()
+        .filter_map(|entry| std::fs::read_to_string(entry.unwrap().path()).ok())
+        .collect();
+    let mut snapshot = snapshot(&book.repeat(2), 0, 0);
+    snapshot.documents.get_mut(&1).unwrap().path = Some("/tmp/notes.md".into());
+    let lines = book.repeat(2).lines().count();
+    let rounds = 20;
+    let started = Instant::now();
+    let mut actions = 0;
+    for _ in 0..rounds {
+        let results = host.dispatch(Event::DocumentChange(1), &snapshot);
+        actions = match &results[0].1.as_ref().unwrap()[1] {
+            Action::Decorate {
+                decorations: Decorations::Overlays(o),
+                ..
+            } => o.len(),
+            _ => 0,
+        };
+    }
+    eprintln!(
+        "markdown re-render of {lines} lines ({actions} overlays): {:.2} ms per event",
+        started.elapsed().as_secs_f64() * 1000.0 / rounds as f64
+    );
 }

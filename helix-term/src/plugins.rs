@@ -848,6 +848,9 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                             .collect(),
                         len,
                     ),
+                    helix_plugin::Decorations::RawOnCursorLine(raw) => {
+                        store.set_raw_on_cursor_line(layer, raw)
+                    }
                 }
                 helix_event::request_redraw();
             }

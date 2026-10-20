@@ -310,6 +310,12 @@ interface decorations {
   }
   set-signs: func(doc: document-id, layer: string, signs: list<sign>) -> result<_, string>;
 
+  /// Hide `layer` on the line holding the primary cursor, so the line shows
+  /// its plain text while being edited (the way render-markdown.nvim does).
+  /// The editor follows the cursor itself: the plugin needs no
+  /// selection-change events for this. Off by default.
+  set-raw-on-cursor-line: func(doc: document-id, layer: string, raw: bool) -> result<_, string>;
+
   /// Text for the `plugins` statusline element; empty removes the segment.
   set-statusline: func(segment: string, text: string) -> result<_, string>;
 }

@@ -1457,6 +1457,33 @@ async fn plugins_decorate_documents() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn markdown_example_leaves_the_cursor_line_to_the_editor() -> anyhow::Result<()> {
+    let file = tempfile::Builder::new().suffix(".md").tempfile()?;
+    std::fs::write(file.path(), "# Title\n- item\n")?;
+    let mut app = AppBuilder::new()
+        .with_file(file.path(), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("markdown");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/markdown").join(file),
+            plugin.join(file),
+        )?;
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, "ia<esc>u").await;
+    deliver_events(&mut app).await;
+    let decorations = &helix_view::doc!(app.editor).plugin_decorations;
+    assert!(!decorations.is_empty());
+    // The editor hides the rendering on the cursor's line: no cursor events.
+    assert!(decorations.wants_cursor_line());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_keys_only_fill_free_keys() -> anyhow::Result<()> {
     let mut app = AppBuilder::new()
         .with_input_text("#[a|]#\n")

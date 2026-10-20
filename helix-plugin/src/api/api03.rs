@@ -238,6 +238,14 @@ impl decorations::Host for State {
             .collect();
         State::set_signs(self, doc, layer, signs)
     }
+    fn set_raw_on_cursor_line(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        raw: bool,
+    ) -> std::result::Result<(), String> {
+        State::set_raw_on_cursor_line(self, doc, layer, raw)
+    }
     fn set_statusline(&mut self, segment: String, text: String) -> std::result::Result<(), String> {
         State::set_statusline(self, segment, text)
     }

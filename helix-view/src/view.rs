@@ -184,6 +184,17 @@ impl fmt::Debug for View {
     }
 }
 
+/// The char offset of `line`'s line break (or the end of the text).
+fn line_end_char(text: helix_core::RopeSlice, line: usize) -> usize {
+    let end = text.line_to_char((line + 1).min(text.len_lines()));
+    let has_break = end > text.line_to_char(line) && text.char(end - 1) == '\n';
+    if has_break {
+        end - 1
+    } else {
+        end
+    }
+}
+
 impl View {
     pub fn new(doc: DocumentId, gutters: GutterConfig) -> Self {
         Self {
@@ -492,8 +503,13 @@ impl View {
                 .add_inline_annotations(padding_after_inlay_hints, None);
         };
         if !doc.plugin_decorations.is_empty() {
+            let cursor_line = doc.plugin_decorations.wants_cursor_line().then(|| {
+                let text = doc.text().slice(..);
+                let line = text.char_to_line(doc.selection(self.id).primary().cursor(text));
+                text.line_to_char(line)..line_end_char(text, line)
+            });
             doc.plugin_decorations
-                .annotate(theme, &mut text_annotations);
+                .annotate(theme, cursor_line, &mut text_annotations);
         }
 
         let config = doc.config.load();

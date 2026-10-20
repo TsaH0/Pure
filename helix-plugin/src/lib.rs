@@ -167,6 +167,8 @@ pub enum Decorations {
     Overlays(Vec<(usize, String, String)>),
     /// `(char position of the line start, one-char text, theme scope)`.
     Signs(Vec<(usize, String, String)>),
+    /// Not a replacement: whether the layer is hidden on the cursor's line.
+    RawOnCursorLine(bool),
 }
 
 /// Most background tasks a plugin may have at once, and their default time
@@ -1137,6 +1139,17 @@ impl State {
             input,
         });
         Ok(id)
+    }
+
+    fn set_raw_on_cursor_line(
+        &mut self,
+        doc: DocumentId,
+        layer: String,
+        raw: bool,
+    ) -> Result<(), String> {
+        self.need_layer(doc, &layer, 0)?;
+        self.decorate(doc, layer, Decorations::RawOnCursorLine(raw));
+        Ok(())
     }
 
     fn set_statusline(&mut self, segment: String, text: String) -> Result<(), String> {
