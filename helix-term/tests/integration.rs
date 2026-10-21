@@ -19,6 +19,7 @@ mod test {
     mod auto_reload;
     mod command_line;
     mod commands;
+    mod long_lines;
     mod movement;
     #[cfg(feature = "plugins")]
     mod plugins;

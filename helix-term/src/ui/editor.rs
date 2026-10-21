@@ -6,7 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
-        document::{render_document, LinePos, TextRenderer},
+        document::{render_document, DocumentHighlighter, LinePos, TextRenderer},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         Completion, ProgressSpinners,
@@ -335,15 +335,14 @@ impl EditorView {
         anchor: usize,
         height: u16,
         loader: &'editor syntax::Loader,
-    ) -> Option<syntax::Highlighter<'editor>> {
+    ) -> Option<DocumentHighlighter<'editor>> {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
         let range = Self::viewport_byte_range(text, row, height);
         let range = range.start as u32..range.end as u32;
 
-        let highlighter = syntax.highlighter(text, loader, range);
-        Some(highlighter)
+        Some(DocumentHighlighter::new(syntax, text, loader, range))
     }
 
     pub fn overlay_syntax_highlights(
