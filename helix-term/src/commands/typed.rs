@@ -3141,6 +3141,43 @@ fn plugin_log(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
     Ok(())
 }
 
+/// The panel at the dock named by `args[0]` (the focused one, or the only
+/// one, if none is named).
+fn panel_dock(editor: &Editor, args: &Args) -> anyhow::Result<helix_view::sidebar::Dock> {
+    match args.first() {
+        Some(name) => ui::sidebar::parse_dock(name)
+            .ok_or_else(|| anyhow!("'{name}' is not left, right or bottom")),
+        None => editor
+            .panels
+            .iter()
+            .find(|panel| panel.focused)
+            .or_else(|| editor.panels.first().filter(|_| editor.panels.len() == 1))
+            .map(|panel| panel.dock)
+            .ok_or_else(|| anyhow!("say which panel: left, right or bottom")),
+    }
+}
+
+fn panel_focus(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let dock = panel_dock(cx.editor, &args)?;
+    if cx.editor.panel(dock).is_none() {
+        bail!("no panel there");
+    }
+    cx.editor.focus_panel(dock, true);
+    Ok(())
+}
+
+fn panel_close(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let dock = panel_dock(cx.editor, &args)?;
+    cx.editor.close_panel(dock);
+    Ok(())
+}
+
 fn plugin_reload(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4664,6 +4701,28 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::positional(&[completers::plugin_name]),
         signature: Signature {
             positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "panel-focus",
+        aliases: &[],
+        doc: "Give a plugin's panel the keys: left, right or bottom (esc gives them back).",
+        fun: panel_focus,
+        completer: CommandCompleter::positional(&[completers::panel_dock]),
+        signature: Signature {
+            positionals: (0, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "panel-close",
+        aliases: &[],
+        doc: "Close a plugin's panel: left, right or bottom (default: the focused one).",
+        fun: panel_close,
+        completer: CommandCompleter::positional(&[completers::panel_dock]),
+        signature: Signature {
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

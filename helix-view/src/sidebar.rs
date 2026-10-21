@@ -1,6 +1,15 @@
-//! A plugin's sidebar (Pure): a list on the left of the editor, e.g. a file
-//! tree or an outline. The plugin sets its items; enter on an item runs the
-//! plugin command the item names.
+//! Plugin panels (Pure): lists docked left, right or below the views, e.g.
+//! a file tree, an outline, test results. One panel per dock; the plugin
+//! sets its items, and enter on an item runs the plugin command it names.
+//! The sidebar of API 0.4 is the left panel.
+
+/// Where a panel is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Dock {
+    Left,
+    Right,
+    Bottom,
+}
 
 /// One row of a sidebar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,11 +25,12 @@ pub struct SidebarItem {
 
 #[derive(Debug, Clone)]
 pub struct Sidebar {
+    pub dock: Dock,
     /// The plugin showing it.
     pub owner: String,
     pub title: String,
     pub items: Vec<SidebarItem>,
-    /// In columns, including the border.
+    /// Columns (left, right) or rows (bottom), including the border.
     pub width: u16,
     pub selected: usize,
     /// The first item shown.
@@ -29,9 +39,12 @@ pub struct Sidebar {
     pub focused: bool,
 }
 
-/// Narrowest and widest sidebar.
+/// Narrowest and widest side panel.
 pub const MIN_WIDTH: u16 = 12;
 pub const MAX_WIDTH: u16 = 80;
+/// Lowest and highest bottom panel, in rows.
+pub const MIN_HEIGHT: u16 = 3;
+pub const MAX_HEIGHT: u16 = 40;
 
 impl Sidebar {
     /// Move the selection by `delta` items, clamped.
@@ -65,6 +78,7 @@ mod test {
 
     fn sidebar(items: usize) -> Sidebar {
         Sidebar {
+            dock: Dock::Left,
             owner: "p".into(),
             title: "t".into(),
             items: (0..items)

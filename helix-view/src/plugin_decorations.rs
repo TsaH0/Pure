@@ -537,6 +537,28 @@ impl PluginDecorations {
 
     /// Whether any layer is raw on the cursor line (then the caller needs to
     /// know that line).
+    /// The char ranges of highlight layer `layer` (for tests and tools).
+    pub fn highlight_ranges(&self, layer: &str) -> Vec<Range<usize>> {
+        self.highlights
+            .get(layer)
+            .map(|h| h.iter().map(|(range, _)| range.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The texts of annotation layer `layer`, in order (for tests and tools).
+    pub fn annotation_texts(&self, layer: &str) -> Vec<String> {
+        self.annotations
+            .get(layer)
+            .map(|layer| {
+                layer
+                    .groups
+                    .iter()
+                    .flat_map(|(_, annotations)| annotations.iter().map(|a| a.text.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn wants_cursor_line(&self) -> bool {
         !self.raw_on_cursor_line.is_empty()
     }

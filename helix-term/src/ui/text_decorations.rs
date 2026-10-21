@@ -107,6 +107,15 @@ impl<'a> DecorationManager<'a> {
         }
     }
 
+    /// Returns the smallest char index at which a decoration needs to process a grapheme.
+    pub fn next_hook_char_idx(&self) -> usize {
+        self.decorations
+            .iter()
+            .map(|(_, hook_char_idx)| *hook_char_idx)
+            .min()
+            .unwrap_or(usize::MAX)
+    }
+
     pub fn decorate_grapheme(&mut self, renderer: &mut TextRenderer, grapheme: &FormattedGrapheme) {
         for (decoration, hook_char_idx) in &mut self.decorations {
             loop {

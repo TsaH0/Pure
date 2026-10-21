@@ -649,6 +649,22 @@ impl<'a> RopeGraphemes<'a> {
 
     fn next_impl(&mut self) -> Option<RopeSlice<'a>> {
         let a = self.cursor.cur_cursor();
+
+        // Fast path for ASCII text: there is always a grapheme boundary between two ASCII
+        // characters, except between `\r` and `\n`. The following character must be ASCII as
+        // well, non-ASCII characters (like combining marks) can extend the grapheme.
+        if let Some(i) = a.checked_sub(self.chunk_byte_idx) {
+            let bytes = self.current_chunk.as_bytes();
+            if i + 1 < bytes.len()
+                && bytes[i] != b'\r'
+                && bytes[i].is_ascii()
+                && bytes[i + 1].is_ascii()
+            {
+                self.cursor.set_cursor(a + 1);
+                return Some((&self.current_chunk[i..i + 1]).into());
+            }
+        }
+
         let b;
         loop {
             match self
@@ -833,6 +849,134 @@ mod tests {
                     byte_to_next_char(RopeSlice::from("😆😆😆😆😆😆😆😆😆😆"), char_idx * len + i),
                     char_idx + 1
                 );
+            }
+        }
+    }
+
+    /// Compares `RopeGraphemes` (including its ASCII fast path) against `unicode-segmentation`
+    /// on random text split across many rope chunks, iterating forwards and backwards.
+    #[test]
+    fn graphemes_match_unicode_segmentation() {
+        use ropey::Rope;
+        use unicode_segmentation::UnicodeSegmentation;
+
+        // Regional indicators (flags) are left out: `RopeGraphemes` splits a flag which spans
+        // two chunks.
+        const PIECES: &[&str] = &[
+            "a",
+            "b",
+            "z",
+            " ",
+            "\t",
+            "\n",
+            "\r",
+            "\r\n",
+            "0",
+            "~",
+            "\u{7f}",
+            "\u{1}",
+            "e\u{301}",
+            "\u{301}",
+            "\u{200d}",
+            "\u{fe0f}",
+            "😶\u{200d}🌫\u{fe0f}",
+            "🏴\u{200d}☠\u{fe0f}",
+            "ü",
+            "한",
+            "\u{1100}\u{1161}\u{11a8}",
+            "क\u{94d}ष",
+            "\u{94d}",
+            "日本",
+        ];
+
+        // xorshift: deterministic and good enough for generating text
+        let mut state = 0x2545f4914f6cdd1du64;
+        let mut rand = move |n: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % n as u64) as usize
+        };
+
+        for _ in 0..300 {
+            // Mostly ASCII text with some interesting graphemes mixed in, long enough to span
+            // several chunks.
+            let len = 1 + if rand(3) == 0 { rand(400) } else { rand(3000) };
+            let mut text = String::new();
+            while text.len() < len {
+                if rand(4) == 0 {
+                    text.push_str(PIECES[rand(PIECES.len())]);
+                } else {
+                    text.push((b' ' + rand(95) as u8) as char);
+                }
+            }
+            // Build the rope with many small insertions so that the chunk boundaries are
+            // scattered.
+            let mut rope = Rope::new();
+            let mut inserted = 0;
+            if text.len() <= 400 {
+                rope = Rope::from_str(&text);
+                inserted = text.len();
+            }
+            while inserted < text.len() {
+                let mut end = (inserted + 1 + rand(40)).min(text.len());
+                while !text.is_char_boundary(end) {
+                    end += 1;
+                }
+                rope.insert(rope.len_chars(), &text[inserted..end]);
+                inserted = end;
+            }
+
+            let mut text_boundaries: Vec<usize> =
+                text.grapheme_indices(true).map(|(i, _)| i).collect();
+            text_boundaries.push(text.len());
+            for _ in 0..10 {
+                // a slice between two grapheme boundaries of the text
+                let start = text_boundaries[rand(text_boundaries.len())];
+                let end = text_boundaries[rand(text_boundaries.len())].max(start);
+                let sub = &text[start..end];
+                let slice = rope.byte_slice(start..end);
+                let mut boundaries: Vec<usize> =
+                    sub.grapheme_indices(true).map(|(i, _)| i).collect();
+                boundaries.push(sub.len());
+
+                // Iterating backwards from the middle of a rope or changing the direction of a
+                // `RopeGraphemes` iterator only works within a single chunk (the chunks iterator
+                // returns the current chunk again when changing direction), so only iterate
+                // forwards across chunks.
+                let direction = if rope.chunks().count() == 1 {
+                    rand(3)
+                } else {
+                    0
+                };
+                let mut i = rand(boundaries.len());
+                let mut graphemes = slice.graphemes_at(boundaries[i]);
+                for _ in 0..200 {
+                    let backwards = match direction {
+                        0 => false,
+                        1 => true,
+                        _ => rand(4) == 0,
+                    };
+                    if backwards {
+                        let grapheme = graphemes.prev();
+                        if i == 0 {
+                            assert_eq!(grapheme, None);
+                        } else {
+                            let expected = &sub[boundaries[i - 1]..boundaries[i]];
+                            assert_eq!(grapheme, Some(expected.into()));
+                            i -= 1;
+                        }
+                    } else {
+                        let grapheme = graphemes.next();
+                        if i + 1 == boundaries.len() {
+                            assert_eq!(grapheme, None);
+                        } else {
+                            let expected = &sub[boundaries[i]..boundaries[i + 1]];
+                            assert_eq!(grapheme, Some(expected.into()));
+                            i += 1;
+                        }
+                    }
+                }
             }
         }
     }

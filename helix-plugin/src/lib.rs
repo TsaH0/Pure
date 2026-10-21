@@ -220,6 +220,14 @@ pub struct PluginDiagnostic {
     pub source: Option<String>,
 }
 
+/// Where a panel is (the sidebar is the left one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Dock {
+    Left,
+    Right,
+    Bottom,
+}
+
 /// One row of a plugin's sidebar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarItem {
@@ -235,6 +243,7 @@ pub const MAX_SIDEBAR_ITEMS: usize = 100_000;
 /// The sidebar as a plugin call sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidebarSnapshot {
+    pub dock: Dock,
     pub owner: String,
     pub selected: u32,
     pub focused: bool,
@@ -271,7 +280,12 @@ pub struct PluginCompletion {
 }
 
 /// Optional features, for `requests.capabilities`.
-pub const CAPABILITIES: &[&str] = &["cancel-request", "revisions", "snippet-completions"];
+pub const CAPABILITIES: &[&str] = &[
+    "cancel-request",
+    "revisions",
+    "snippet-completions",
+    "panels",
+];
 
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
@@ -387,8 +401,8 @@ pub struct Snapshot {
     /// Register contents, only filled in when a plugin has the `registers`
     /// permission ([`PluginHost::wants_registers`]); no clipboard.
     pub registers: BTreeMap<char, Vec<String>>,
-    /// The sidebar, if one is shown.
-    pub sidebar: Option<SidebarSnapshot>,
+    /// The panels shown (the sidebar is the left one).
+    pub panels: Vec<SidebarSnapshot>,
 }
 
 impl Default for Snapshot {
@@ -401,7 +415,7 @@ impl Default for Snapshot {
             cwd: PathBuf::new(),
             config_dir: PathBuf::new(),
             registers: BTreeMap::new(),
-            sidebar: None,
+            panels: Vec::new(),
         }
     }
 }
@@ -513,9 +527,10 @@ pub enum Action {
     },
     /// Mark a plugin's buffer as saved.
     MarkSaved(DocumentId),
-    /// Show or update `plugin`'s sidebar; `selected: None` keeps it.
+    /// Show or update `plugin`'s panel at `dock`; `selected: None` keeps it.
     ShowSidebar {
         plugin: String,
+        dock: Dock,
         title: String,
         items: Vec<SidebarItem>,
         width: u16,
@@ -523,9 +538,11 @@ pub enum Action {
     },
     CloseSidebar {
         plugin: String,
+        dock: Dock,
     },
     FocusSidebar {
         plugin: String,
+        dock: Dock,
         focused: bool,
     },
     /// File operations through the editor (language servers and buffers
@@ -1583,13 +1600,14 @@ impl State {
 
     fn show_sidebar(
         &mut self,
+        dock: Dock,
         title: String,
         items: Vec<SidebarItem>,
         width: u32,
         selected: Option<u32>,
     ) -> Result<(), String> {
         if self.context == CallContext::Init {
-            return Err("the sidebar can't be shown from init".into());
+            return Err("a panel can't be shown from init".into());
         }
         if items.len() > MAX_SIDEBAR_ITEMS {
             return Err(format!(
@@ -1608,14 +1626,21 @@ impl State {
                 ..item
             })
             .collect();
-        let width = width.clamp(12, 80) as u16;
-        self.snapshot.sidebar = Some(SidebarSnapshot {
+        // Columns beside the views, rows below them.
+        let width = match dock {
+            Dock::Bottom => width.clamp(3, 40),
+            Dock::Left | Dock::Right => width.clamp(12, 80),
+        } as u16;
+        self.snapshot.panels.retain(|panel| panel.dock != dock);
+        self.snapshot.panels.push(SidebarSnapshot {
+            dock,
             owner: self.plugin.clone(),
             selected: selected.unwrap_or(0),
             focused: false,
         });
         self.actions.push(Action::ShowSidebar {
             plugin: self.plugin.clone(),
+            dock,
             title: one_line(title),
             items,
             width,
@@ -1624,22 +1649,28 @@ impl State {
         Ok(())
     }
 
-    fn close_sidebar(&mut self) {
+    fn close_sidebar(&mut self, dock: Dock) {
         self.actions.push(Action::CloseSidebar {
             plugin: self.plugin.clone(),
+            dock,
         });
     }
 
-    fn focus_sidebar(&mut self, focused: bool) {
+    fn focus_sidebar(&mut self, dock: Dock, focused: bool) {
         self.actions.push(Action::FocusSidebar {
             plugin: self.plugin.clone(),
+            dock,
             focused,
         });
     }
 
-    fn sidebar_selected(&self) -> Option<u32> {
-        let sidebar = self.snapshot.sidebar.as_ref()?;
-        (sidebar.owner == self.plugin).then_some(sidebar.selected)
+    fn sidebar_selected(&self, dock: Dock) -> Option<u32> {
+        let panel = self
+            .snapshot
+            .panels
+            .iter()
+            .find(|panel| panel.dock == dock)?;
+        (panel.owner == self.plugin).then_some(panel.selected)
     }
 
     fn buffer_name(&self, doc: DocumentId) -> Option<String> {

@@ -522,6 +522,35 @@ interface sidebar {
   selected: func() -> option<u32>;
 }
 
+/// Panels docked left, right or below the views (added to 0.4 later; the
+/// sidebar is the left panel): a file tree, an outline, test results, a
+/// log. One per dock; the plugin that showed one last owns it. Keys work as
+/// in the sidebar while a panel has them; only one panel has them at once.
+interface panels {
+  use sidebar.{sidebar-item};
+
+  enum dock { left, right, bottom }
+
+  record panel {
+    dock: dock,
+    title: string,
+    items: list<sidebar-item>,
+    /// Columns for left and right panels (12 to 80), rows for the bottom
+    /// one (3 to 40), borders included.
+    size: u32,
+    /// The selected item; none keeps the current one.
+    selected: option<u32>,
+  }
+
+  show: func(panel: panel) -> result<_, string>;
+  /// Close the panel at `dock`, if this plugin's.
+  close: func(dock: dock);
+  /// Give the panel at `dock` the keys (or take them back).
+  focus: func(dock: dock, focused: bool);
+  /// The selected item of this plugin's panel at `dock`.
+  selected: func(dock: dock) -> option<u32>;
+}
+
 /// Added to 0.4 later: check `capabilities` before relying on it in a
 /// plugin that should also run on older Pure (a component importing these
 /// doesn't load at all on a Pure without them).
@@ -529,7 +558,7 @@ interface requests {
   use types.{request-id};
 
   /// The optional features this Pure has: "cancel-request", "revisions",
-  /// "snippet-completions".
+  /// "snippet-completions", "panels".
   capabilities: func() -> list<string>;
   /// Stop request `id` of this plugin, whatever kind it is: a timer, a
   /// program (killed), a background task, a files.apply batch (operations
@@ -578,6 +607,7 @@ world helix-plugin {
   import requests;
   import revisions;
   import snippets;
+  import panels;
   export plugin;
   export callbacks;
   export events;

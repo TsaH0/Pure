@@ -393,7 +393,10 @@ impl Keymaps {
     }
 
     pub fn contains_key(&self, mode: Mode, key: KeyEvent) -> bool {
-        let keymaps = &*self.map();
+        // Plugin keys count too (a plugin may bind `space 1`).
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
         let keymap = &keymaps[&mode];
         keymap
             .search(self.pending())

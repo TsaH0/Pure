@@ -16,6 +16,41 @@ use tui::buffer::Buffer as Surface;
 
 use crate::ui::text_decorations::DecorationManager;
 
+/// The syntax highlighting of a range of a document.
+///
+/// Rendering can restart the highlighter further ahead in the document to skip over text
+/// which is not rendered (for example the part of a long line which is scrolled out of view)
+/// instead of processing all of its highlights.
+pub struct DocumentHighlighter<'a> {
+    syntax: &'a syntax::Syntax,
+    text: RopeSlice<'a>,
+    loader: &'a syntax::Loader,
+    range: std::ops::Range<u32>,
+}
+
+impl<'a> DocumentHighlighter<'a> {
+    pub fn new(
+        syntax: &'a syntax::Syntax,
+        text: RopeSlice<'a>,
+        loader: &'a syntax::Loader,
+        range: std::ops::Range<u32>,
+    ) -> Self {
+        Self {
+            syntax,
+            text,
+            loader,
+            range,
+        }
+    }
+
+    /// Creates a highlighter for the range starting at `start_byte`.
+    fn highlighter(&self, start_byte: u32) -> Highlighter<'a> {
+        let start = start_byte.clamp(self.range.start, self.range.end);
+        self.syntax
+            .highlighter(self.text, self.loader, start..self.range.end)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct LinePos {
     /// Indicates whether the given visual line
@@ -34,7 +69,7 @@ pub fn render_document(
     doc: &Document,
     offset: ViewPosition,
     doc_annotations: &TextAnnotations,
-    syntax_highlighter: Option<Highlighter<'_>>,
+    syntax_highlighter: Option<DocumentHighlighter<'_>>,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     decorations: DecorationManager,
@@ -66,7 +101,7 @@ pub fn render_text(
     anchor: usize,
     text_fmt: &TextFormat,
     text_annotations: &TextAnnotations,
-    syntax_highlighter: Option<Highlighter<'_>>,
+    syntax_highlighter: Option<DocumentHighlighter<'_>>,
     overlay_highlights: Vec<syntax::OverlayHighlights>,
     theme: &Theme,
     mut decorations: DecorationManager,
@@ -90,8 +125,39 @@ pub fn render_text(
     let mut is_in_indent_area = true;
     let mut last_line_indent_level = 0;
     let mut reached_view_top = false;
+    // whether graphemes were skipped since the syntax highlighter last advanced
+    let mut skipped_graphemes = false;
 
     loop {
+        // Graphemes which are left of the viewport (when scrolled horizontally) or right of it
+        // are not drawn. Once the current line has been started (and its indentation is known)
+        // there is no need to inspect them, unless they have decorations.
+        let next_pos = formatter.next_visual_pos();
+        if reached_view_top
+            && !is_in_indent_area
+            && next_pos.row >= row_off
+            && next_pos.row - row_off >= renderer.offset.row
+            && (next_pos.row - row_off) as u16 == last_line_pos.visual_line
+        {
+            let viewport_end = renderer.offset.col + renderer.viewport.width as usize;
+            let max_col = if next_pos.col < renderer.offset.col {
+                Some(renderer.offset.col)
+            } else if next_pos.col >= viewport_end {
+                Some(usize::MAX)
+            } else {
+                None
+            };
+            if let Some(max_col) = max_col {
+                let max_chars = decorations
+                    .next_hook_char_idx()
+                    .saturating_sub(formatter.next_char_pos());
+                if formatter.skip_plain_text(max_chars, max_col) != 0 {
+                    last_line_end = formatter.next_visual_pos().col;
+                    skipped_graphemes = true;
+                }
+            }
+        }
+
         let Some(mut grapheme) = formatter.next() else {
             break;
         };
@@ -132,6 +198,11 @@ pub fn render_text(
         }
 
         // acquire the correct grapheme style
+        if std::mem::take(&mut skipped_graphemes) {
+            // Restarting the highlighter is cheaper than processing all highlights of a large
+            // amount of skipped text.
+            syntax_highlighter.restart_if_far_behind(grapheme.char_idx);
+        }
         while grapheme.char_idx >= syntax_highlighter.pos {
             syntax_highlighter.advance();
         }
@@ -484,6 +555,7 @@ impl<'a> TextRenderer<'a> {
 }
 
 struct SyntaxHighlighter<'h, 'r, 't> {
+    source: Option<DocumentHighlighter<'h>>,
     inner: Option<Highlighter<'h>>,
     text: RopeSlice<'r>,
     /// The character index of the next highlight event, or `usize::MAX` if the highlighter is
@@ -496,12 +568,16 @@ struct SyntaxHighlighter<'h, 'r, 't> {
 
 impl<'h, 'r, 't> SyntaxHighlighter<'h, 'r, 't> {
     fn new(
-        inner: Option<Highlighter<'h>>,
+        source: Option<DocumentHighlighter<'h>>,
         text: RopeSlice<'r>,
         theme: &'t Theme,
         text_style: Style,
     ) -> Self {
+        let inner = source
+            .as_ref()
+            .map(|source| source.highlighter(source.range.start));
         let mut highlighter = Self {
+            source,
             inner,
             text,
             pos: 0,
@@ -511,6 +587,22 @@ impl<'h, 'r, 't> SyntaxHighlighter<'h, 'r, 't> {
         };
         highlighter.update_pos();
         highlighter
+    }
+
+    /// Restarts the highlighter at `char_idx` if the next highlight event is far before it.
+    fn restart_if_far_behind(&mut self, char_idx: usize) {
+        /// The number of chars at which restarting the highlighter is cheaper than processing
+        /// the highlights in between.
+        const RESTART_DISTANCE: usize = 2048;
+        if self.pos >= char_idx.saturating_sub(RESTART_DISTANCE) {
+            return;
+        }
+        let Some(source) = &self.source else {
+            return;
+        };
+        self.inner = Some(source.highlighter(self.text.char_to_byte(char_idx) as u32));
+        self.style = self.text_style;
+        self.update_pos();
     }
 
     fn update_pos(&mut self) {

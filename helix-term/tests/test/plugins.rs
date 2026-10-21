@@ -546,6 +546,19 @@ const WITH_PROCESS: &str =
 
 /// Wait until the status message satisfies `done` (results of programs and
 /// pickers arrive asynchronously).
+/// Run the editor until `found` finds something (or give up).
+async fn wait_for<T>(app: &mut Application, found: impl Fn(&Application) -> Option<T>) -> T {
+    for _ in 0..100 {
+        if let Some(value) = found(app) {
+            return value;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        app.editor.reset_idle_timer();
+        run_event_loop_until_idle(app).await;
+    }
+    panic!("timed out; status: {:?}", app.editor.get_status());
+}
+
 async fn wait_for_status(app: &mut Application, done: impl Fn(&str) -> bool) -> String {
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1309,6 +1322,249 @@ fn app_with_example(name: &str, settings: &str) -> (Application, tempfile::TempD
     }
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
     (app, dir)
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn competitest_example_judges_testcases_in_a_bottom_panel() -> anyhow::Result<()> {
+    if std::process::Command::new("g++")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return Ok(()); // no compiler here
+    }
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let source = work.join("sol.cpp");
+    std::fs::write(
+        &source,
+        "#include <iostream>\nint main(){long a,b;std::cin>>a>>b;if(a<0)for(;;);std::cout<<a+b<<\"\\n\";}\n",
+    )?;
+    for (n, input, output) in [(0, "1 2", "3"), (1, "2 2", "5"), (2, "-1 0", "0")] {
+        std::fs::write(work.join(format!("sol_input{n}.txt")), input)?;
+        std::fs::write(work.join(format!("sol_output{n}.txt")), output)?;
+    }
+    let mut app = AppBuilder::new().with_file(&source, None).build().unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("competitest");
+    std::fs::create_dir(&plugin)?;
+    for name in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/competitest").join(name),
+            plugin.join(name),
+        )?;
+    }
+    let settings = format!(
+        "[competitest]\nallow-process = true\nallow-files = \"write\"\nallow-dirs = [{:?}]\ntimeout = 700\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    keys(&mut app, ":plugin-run competitest/run<ret>").await;
+    let mut status = String::new();
+    for _ in 0..10 {
+        status = wait_for_status(&mut app, |s| s.contains("passed") || s.contains("failed")).await;
+        if status.contains("passed") || status.contains("failed") {
+            break;
+        }
+    }
+    assert_eq!(status, "CompetiTest: 1/3 passed");
+    let panel = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Bottom)
+        .expect("a bottom panel");
+    assert_eq!(panel.title, "CompetiTest: sol.cpp  1/3 passed");
+    let rows: Vec<&str> = panel.items.iter().map(|i| i.text.as_str()).collect();
+    assert!(
+        rows[0].starts_with("TC 0") && rows[0].contains("accepted"),
+        "{rows:?}"
+    );
+    assert!(rows[1].contains("wrong answer"), "{rows:?}");
+    assert!(rows[2].contains("time limit"), "{rows:?}");
+    // The panel takes the keys; enter on a testcase shows what it got.
+    keys(&mut app, ":panel-focus bottom<ret>j<ret>").await;
+    deliver_events(&mut app).await;
+    let shown = text(&app);
+    assert!(shown.starts_with("Testcase 1: ✘  wrong answer"), "{shown}");
+    assert!(
+        shown.contains("── Expected ──\n5\n── Got ──\n4\n"),
+        "{shown}"
+    );
+    Ok(())
+}
+
+/// An editor on `file` with example plugin `name` loaded with `settings`.
+fn app_with_example_on(
+    name: &str,
+    file: &Path,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let mut app = AppBuilder::new().with_file(file, None).build().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join(name);
+    std::fs::create_dir(&plugin).unwrap();
+    for part in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples").join(name).join(part),
+            plugin.join(part),
+        )
+        .unwrap();
+    }
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("lib.rs");
+    std::fs::write(
+        &file,
+        "struct A;\n\nimpl A {\n    fn go(&self) {}\n}\n\nfn main() {}\n",
+    )?;
+    let (mut app, _dir) = app_with_example_on("outline", &file, "");
+    keys(&mut app, ":outline/toggle<ret>").await;
+    deliver_events(&mut app).await;
+    let panel = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Right)
+        .expect("a right panel");
+    let rows: Vec<(&str, u16)> = panel
+        .items
+        .iter()
+        .map(|i| (i.text.as_str(), i.depth))
+        .collect();
+    assert_eq!(
+        rows,
+        [("struct A", 0), ("impl A", 0), ("fn go", 1), ("fn main", 0)]
+    );
+    assert_eq!(panel.title, "Outline: lib.rs");
+    // It follows the cursor...
+    keys(&mut app, "3j").await;
+    deliver_events(&mut app).await;
+    let panel = app.editor.panel(helix_view::sidebar::Dock::Right).unwrap();
+    assert_eq!(panel.selected, 2, "on fn go");
+    // ...and enter jumps.
+    keys(&mut app, ":outline/focus<ret>G<ret>").await;
+    deliver_events(&mut app).await;
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc.text().slice(..));
+    assert_eq!(doc.text().char_to_line(cursor), 6);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn harpoon_example_marks_and_jumps() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let (a, b) = (root.path().join("a.txt"), root.path().join("b.txt"));
+    std::fs::write(&a, "one\ntwo\nthree\n")?;
+    std::fs::write(&b, "bee\n")?;
+    let (mut app, _dir) = app_with_example_on("harpoon", &a, "");
+    // Marks are kept per project in the plugin's data directory.
+    keys(&mut app, ":harpoon/clear<ret>").await;
+    keys(&mut app, "jj:harpoon/add<ret>").await;
+    assert!(status(&app).0.ends_with("is mark 1"), "{:?}", status(&app));
+    keys(
+        &mut app,
+        &format!(":open {}<ret>:harpoon/add<ret>", b.display()),
+    )
+    .await;
+    assert!(status(&app).0.ends_with("is mark 2"), "{:?}", status(&app));
+    // space 1 goes back to a.txt at its line.
+    keys(&mut app, "<space>1").await;
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    assert_eq!(
+        doc.path(),
+        Some(helix_stdx::path::canonicalize(&a).as_path())
+    );
+    let cursor = doc
+        .selection(view.id)
+        .primary()
+        .cursor(doc.text().slice(..));
+    assert_eq!(doc.text().char_to_line(cursor), 2);
+    // The menu lists them; deleting a line and :w forgets that mark.
+    keys(&mut app, ":harpoon/menu<ret>").await;
+    deliver_events(&mut app).await;
+    let menu = text(&app);
+    assert!(
+        menu.ends_with("a.txt\n") || menu.contains("a.txt\n"),
+        "{menu}"
+    );
+    assert_eq!(menu.lines().count(), 2, "{menu}");
+    keys(&mut app, "xd:w<ret>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "harpoon: 1 marks");
+    keys(&mut app, ":buffer-close!<ret><space>2").await;
+    assert!(status(&app).0.contains("no mark 2"), "{:?}", status(&app));
+    keys(&mut app, ":harpoon/clear<ret>").await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn illuminate_example_highlights_uses() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("x.txt");
+    std::fs::write(&file, "count = count + 1\ncounter = count\n")?;
+    let (mut app, _dir) = app_with_example_on("illuminate", &file, "");
+    keys(&mut app, "l").await;
+    deliver_events(&mut app).await;
+    let doc = helix_view::doc!(app.editor);
+    let ranges = doc.plugin_decorations.highlight_ranges("illuminate/uses");
+    assert_eq!(ranges, [0..5, 8..13, 28..33]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_blame_example_annotates_the_cursor_line() -> anyhow::Result<()> {
+    let git = |dir: &Path, args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+    };
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    if git(&work, &["init", "-q"]).is_err() {
+        return Ok(()); // no git here
+    }
+    std::fs::write(work.join("f.txt"), "first\nsecond\n")?;
+    git(&work, &["add", "f.txt"])?;
+    git(
+        &work,
+        &[
+            "-c",
+            "user.name=Ana Lima",
+            "-c",
+            "user.email=a@x",
+            "commit",
+            "-qm",
+            "Add f",
+        ],
+    )?;
+    let (mut app, _dir) = app_with_example_on(
+        "git-blame",
+        &work.join("f.txt"),
+        "[git-blame]\nallow-process = [\"git\"]\n",
+    );
+    // A cursor move asks for the blame (the file opened before the plugin).
+    keys(&mut app, "j").await;
+    deliver_events(&mut app).await;
+    let label = wait_for(&mut app, |app| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .annotation_texts("git-blame/blame")
+            .first()
+            .cloned()
+    })
+    .await;
+    assert!(
+        label.trim_start().starts_with("Ana Lima, just now • Add f"),
+        "{label:?}"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2349,8 +2605,7 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
     keys(&mut app, ":tree/toggle<ret>").await;
     let sidebar = app
         .editor
-        .sidebar
-        .as_ref()
+        .panel(helix_view::sidebar::Dock::Left)
         .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
     assert_eq!(sidebar.owner, "tree");
     assert!(sidebar.focused);
@@ -2361,16 +2616,32 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
     assert!(view.area.x >= 12, "{:?}", view.area);
 
     // Keys move the selection while the sidebar has them; esc gives them back.
-    let before = app.editor.sidebar.as_ref().unwrap().selected;
+    let before = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap()
+        .selected;
     keys(&mut app, "k").await;
-    let after = app.editor.sidebar.as_ref().unwrap().selected;
+    let after = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap()
+        .selected;
     assert_eq!(after, before.saturating_sub(1));
     keys(&mut app, "<esc>").await;
-    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+    assert!(
+        !app.editor
+            .panel(helix_view::sidebar::Dock::Left)
+            .unwrap()
+            .focused
+    );
 
     // Enter on a file opens it and gives the keys to the editor.
     keys(&mut app, ":tree/focus<ret>").await;
-    let sidebar = app.editor.sidebar.as_mut().unwrap();
+    let sidebar = app
+        .editor
+        .panel_mut(helix_view::sidebar::Dock::Left)
+        .unwrap();
     let (index, path) = sidebar
         .items
         .iter()
@@ -2388,10 +2659,18 @@ async fn tree_example_shows_a_sidebar() -> anyhow::Result<()> {
             .map(|p| p.display().to_string()),
         Some(path)
     );
-    assert!(!app.editor.sidebar.as_ref().unwrap().focused);
+    assert!(
+        !app.editor
+            .panel(helix_view::sidebar::Dock::Left)
+            .unwrap()
+            .focused
+    );
 
     keys(&mut app, ":tree/toggle<ret>").await;
-    assert!(app.editor.sidebar.is_none(), "toggled off");
+    assert!(
+        app.editor.panel(helix_view::sidebar::Dock::Left).is_none(),
+        "toggled off"
+    );
     Ok(())
 }
 

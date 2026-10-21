@@ -789,3 +789,40 @@ were checked; implementation-specific tests and measurements remain explicit
 acceptance requirements, not completed validation.
 Workspace formatting and Clippy passed without warnings; runtime test suites
 were not repeated for this documentation-only follow-up.
+
+## Performance pass after panels and incremental highlighting (2026-10-21)
+
+Same harness (`docs/bench/vs-helix.py`), big.rs (257 KB, Rust), release
+builds of Helix 25.07.1, Pure before the merge of the incremental-highlighting
+work (`6734495`) and Pure after it (`02034a3`), all built with plain
+`cargo build --release`, alternating runs.
+
+| Median | Helix | Pure before | Pure after |
+| --- | --- | --- | --- |
+| Startup to first frame (15 runs) | 472.9 ms | 471.6 ms | 468.0 ms |
+| CPU, start then quit (15 runs) | 401.0 ms | 405.1 ms | 394.4 ms |
+| CPU, editing session (3 runs) | 25.2 s | 24.2 s | **14.3 s** |
+| Peak memory | 37.9 MiB | 42.8 MiB | 41.8 MiB |
+
+- **Editing is 43 % cheaper than Helix.** Profiling the editing session
+  showed ~47 % of typing time in the injection and locals queries, which
+  re-ran over the whole file after each keystroke. The vendored tree-house
+  (`vendor/README.md`) re-runs them only over the changed regions.
+- **Startup is unchanged.** An earlier measurement showed the merge ~26 ms
+  slower; that came from comparing a stripped build with line tables
+  against a plain one, not from the code. Timing `Syntax::new` on big.rs
+  against upstream and vendored tree-house gives the same result (70–74 ms,
+  plus ~350 ms to compile the queries once on first use). Callgrind can't
+  compare startups here: parse and query steps have time budgets, so
+  valgrind's slowdown changes how much work runs.
+- **Where startup goes:** about three quarters of the start-then-quit CPU is
+  compiling the Rust highlight/injection/locals queries
+  (`ts_query__perform_analysis`), the same in Helix. Tree-sitter can't
+  cache a compiled query, so this stays until upstream can.
+- **Idle:** with a file open, the `auto-reload` check wakes the main thread
+  once a second (one `stat` per open file; 0 ms CPU measured over 5 s).
+  With no file open, or with `auto-reload = false`, there are no wake-ups
+  (S02). Replacing the poll with file watches is F09.
+- **Panels and the new examples** cost nothing when unused: no panel means
+  `layout` returns the editor area unchanged, and plugin key tries only
+  cover the plugins that are loaded.

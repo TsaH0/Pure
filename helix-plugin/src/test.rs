@@ -82,7 +82,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         cwd: PathBuf::from("/work/src"),
         config_dir: PathBuf::from("/config"),
         registers: BTreeMap::new(),
-        sidebar: None,
+        panels: Vec::new(),
     }
 }
 
@@ -2457,7 +2457,7 @@ fn api_04_capabilities_revisions_cancel_and_snippets() {
     };
     assert_eq!(
         status(&mut host, "caps", vec![], Snapshot::default()),
-        ["caps:cancel-request,revisions,snippet-completions"]
+        ["caps:cancel-request,revisions,snippet-completions,panels"]
     );
 
     // A document's revision; its own edits count within the call.

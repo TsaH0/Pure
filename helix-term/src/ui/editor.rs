@@ -6,7 +6,7 @@ use crate::{
     key,
     keymap::{KeymapResult, Keymaps},
     ui::{
-        document::{render_document, LinePos, TextRenderer},
+        document::{render_document, DocumentHighlighter, LinePos, TextRenderer},
         statusline,
         text_decorations::{self, Decoration, DecorationManager, InlineDiagnostics},
         Completion, ProgressSpinners,
@@ -44,8 +44,8 @@ pub struct EditorView {
     spinners: ProgressSpinners,
     /// Tracks if the terminal window is focused by reaction to terminal focus events
     terminal_focused: bool,
-    /// Where a plugin's sidebar was drawn last, for mouse clicks.
-    sidebar_area: Option<Rect>,
+    /// Where plugin panels were drawn last, for keys and mouse clicks.
+    panel_areas: Vec<(helix_view::sidebar::Dock, Rect)>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +69,7 @@ impl EditorView {
             completion: None,
             spinners: ProgressSpinners::default(),
             terminal_focused: true,
-            sidebar_area: None,
+            panel_areas: Vec::new(),
         }
     }
 
@@ -335,15 +335,14 @@ impl EditorView {
         anchor: usize,
         height: u16,
         loader: &'editor syntax::Loader,
-    ) -> Option<syntax::Highlighter<'editor>> {
+    ) -> Option<DocumentHighlighter<'editor>> {
         let syntax = doc.syntax()?;
         let text = doc.text().slice(..);
         let row = text.char_to_line(anchor.min(text.len_chars()));
         let range = Self::viewport_byte_range(text, row, height);
         let range = range.start as u32..range.end as u32;
 
-        let highlighter = syntax.highlighter(text, loader, range);
-        Some(highlighter)
+        Some(DocumentHighlighter::new(syntax, text, loader, range))
     }
 
     pub fn overlay_syntax_highlights(
@@ -1643,11 +1642,14 @@ impl Component for EditorView {
                 cx.editor.reset_idle_timer();
                 canonicalize_key(&mut key);
 
-                // A focused sidebar takes its keys.
-                if cx.editor.sidebar.as_ref().is_some_and(|s| s.focused)
-                    && self.pseudo_pending.is_empty()
-                {
-                    let rows = self.sidebar_area.map_or(0, |a| a.height as usize);
+                // A focused panel takes its keys.
+                let focused = cx.editor.panels.iter().find(|p| p.focused).map(|p| p.dock);
+                if let Some(dock) = focused.filter(|_| self.pseudo_pending.is_empty()) {
+                    let rows = self
+                        .panel_areas
+                        .iter()
+                        .find(|(d, _)| *d == dock)
+                        .map_or(0, |(d, area)| crate::ui::sidebar::rows(*d, *area));
                     if crate::ui::sidebar::handle_key(cx.editor, cx.jobs, key, rows) {
                         return EventResult::Consumed(None);
                     }
@@ -1755,16 +1757,12 @@ impl Component for EditorView {
             }
 
             Event::Mouse(event) => {
-                if let Some(area) = self.sidebar_area {
-                    if crate::ui::sidebar::handle_mouse(cx.editor, cx.jobs, event, area) {
-                        return EventResult::Consumed(None);
-                    }
+                if crate::ui::sidebar::handle_mouse(cx.editor, cx.jobs, event, &self.panel_areas) {
+                    return EventResult::Consumed(None);
                 }
                 // A click elsewhere gives the editor its keys back.
                 if matches!(event.kind, MouseEventKind::Down(_)) {
-                    if let Some(sidebar) = cx.editor.sidebar.as_mut() {
-                        sidebar.focused = false;
-                    }
+                    cx.editor.panels.iter_mut().for_each(|p| p.focused = false);
                 }
                 self.handle_mouse_event(event, &mut cx)
             }
@@ -1810,12 +1808,14 @@ impl Component for EditorView {
             editor_area = editor_area.clip_top(1);
         }
 
-        // A plugin's sidebar takes columns on the left.
-        let sidebar_area = crate::ui::sidebar::area(cx.editor, editor_area);
-        if let Some(sidebar) = sidebar_area {
-            editor_area = editor_area.clip_left(sidebar.width);
-        }
-        self.sidebar_area = sidebar_area;
+        // Plugin panels take columns beside the views and rows below them.
+        let (views_area, panel_areas) = if cx.editor.panels.is_empty() {
+            (editor_area, Vec::new())
+        } else {
+            crate::ui::sidebar::layout(cx.editor, editor_area)
+        };
+        editor_area = views_area;
+        self.panel_areas = panel_areas;
 
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
@@ -1829,8 +1829,8 @@ impl Component for EditorView {
             self.render_view(cx.editor, doc, view, area, surface, is_focused);
         }
 
-        if let Some(area) = sidebar_area {
-            crate::ui::sidebar::render(cx.editor, area, surface);
+        for &(dock, area) in &self.panel_areas {
+            crate::ui::sidebar::render(cx.editor, dock, area, surface);
         }
 
         if let Some(area) = Self::splash_area(cx.editor) {
