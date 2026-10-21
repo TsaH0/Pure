@@ -261,6 +261,9 @@ pub struct TextRenderer<'a> {
     pub draw_indent_guides: bool,
     pub viewport: Rect,
     pub offset: Position,
+    /// Patched onto the next grapheme drawn only (see
+    /// [`Self::patch_next_grapheme`]).
+    next_grapheme_patch: Option<Style>,
 }
 
 pub struct GraphemeStyle {
@@ -340,8 +343,16 @@ impl<'a> TextRenderer<'a> {
             draw_indent_guides: editor_config.indent_guides.render,
             viewport,
             offset,
+            next_grapheme_patch: None,
         }
     }
+
+    /// Patch `style` onto the next grapheme [`Self::draw_grapheme`] draws,
+    /// for a decoration styling the grapheme it is called for.
+    pub fn patch_next_grapheme(&mut self, style: Style) {
+        self.next_grapheme_patch = Some(style);
+    }
+
     /// Draws a single `grapheme` at the current render position with a specified `style`.
     pub fn draw_decoration_grapheme(
         &mut self,
@@ -391,6 +402,7 @@ impl<'a> TextRenderer<'a> {
         is_in_indent_area: &mut bool,
         mut position: Position,
     ) -> usize {
+        let patch = self.next_grapheme_patch.take();
         if position.row < self.offset.row {
             return 0;
         }
@@ -408,6 +420,9 @@ impl<'a> TextRenderer<'a> {
             style = style.patch(self.whitespace_style);
         }
         style = style.patch(grapheme_style.overlay_style);
+        if let Some(patch) = patch {
+            style = style.patch(patch);
+        }
 
         let width = grapheme.width();
         let mut is_tab = false;

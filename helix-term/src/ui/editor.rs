@@ -97,8 +97,26 @@ impl EditorView {
         if !doc.plugin_decorations.is_empty() {
             doc.plugin_decorations.set_render_mode(editor.mode());
         }
-        let text_annotations = view.text_annotations(doc, Some(theme));
+        // `:s` being typed: the substitution shown in place.
+        let substitute = is_focused
+            .then(|| {
+                let text = doc.text();
+                let first = text.char_to_line(view_offset.anchor.min(text.len_chars()));
+                let last = (first + inner.height as usize + 1).min(text.len_lines());
+                let visible = text.line_to_char(first)..text.line_to_char(last);
+                crate::commands::substitute_preview::inline(doc.id(), visible)
+            })
+            .flatten();
+        let mut text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
+        if let Some((replacements, struck)) = &substitute {
+            use crate::commands::substitute_preview as preview;
+            text_annotations.add_inline_annotations(replacements, preview::added_highlight(theme));
+            decorations.add_decoration(preview::StruckOut {
+                ranges: struck.clone(),
+                style: preview::struck_style(theme),
+            });
+        }
 
         // Plugins' line backgrounds, under the cursor line and the text.
         if let Some(backgrounds) = Self::plugin_line_backgrounds(doc, view, theme, inner) {

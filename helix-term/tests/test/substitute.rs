@@ -325,3 +325,48 @@ async fn preview_counts_generated_rows() -> anyhow::Result<()> {
     helpers::send_keys(&mut app, "<esc>").await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_preview_shows_changes_in_place() -> anyhow::Result<()> {
+    use helix_view::graphics::Modifier;
+    use std::cell::RefCell;
+
+    let mut app = helpers::AppBuilder::new()
+        .with_input_text("#[[|]#workspace]\nresolver = \"2\"\n")
+        .build()?;
+    let screen = RefCell::new(None);
+    test_key_sequence(
+        &mut app,
+        Some(":%s/workspace/what"),
+        Some(&|app: &Application| {
+            *screen.borrow_mut() = Some(app.terminal_buffer().clone());
+        }),
+        false,
+    )
+    .await?;
+    let screen = screen.into_inner().expect("a rendered screen");
+    let area = screen.area;
+    let row = |y: u16| -> String {
+        (area.x..area.right())
+            .map(|x| screen[(x, y)].symbol.to_string())
+            .collect()
+    };
+    // The buffer's line: the match struck out, the replacement after it.
+    let (y, x) = (area.y..area.bottom())
+        .find_map(|y| {
+            let row = row(y);
+            row.find("[workspacewhat]").map(|x| (y, x as u16))
+        })
+        .expect("the line with its change shown in place");
+    let struck = &screen[(x + 1, y)];
+    assert_eq!(struck.symbol.to_string(), "w");
+    assert!(struck.modifier.contains(Modifier::CROSSED_OUT));
+    let added = &screen[(x + 10, y)];
+    assert_eq!(added.symbol.to_string(), "w");
+    assert!(!added.modifier.contains(Modifier::CROSSED_OUT));
+    assert_ne!(added.fg, struck.fg);
+    // Unchanged text keeps its style.
+    assert!(!screen[(x, y)].modifier.contains(Modifier::CROSSED_OUT));
+    assert!(!screen[(x + 14, y)].modifier.contains(Modifier::CROSSED_OUT));
+    Ok(())
+}
