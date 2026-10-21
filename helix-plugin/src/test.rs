@@ -1079,7 +1079,8 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Background
         | PendingKind::Timer
         | PendingKind::Completion
-        | PendingKind::Files => unreachable!(),
+        | PendingKind::Files
+        | PendingKind::Listen => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -2457,7 +2458,7 @@ fn api_04_capabilities_revisions_cancel_and_snippets() {
     };
     assert_eq!(
         status(&mut host, "caps", vec![], Snapshot::default()),
-        ["caps:cancel-request,revisions,snippet-completions,panels"]
+        ["caps:cancel-request,revisions,snippet-completions,panels,listen"]
     );
 
     // A document's revision; its own edits count within the call.
@@ -4227,4 +4228,116 @@ fn conceals_are_checked_against_the_text() {
             ..
         }) if modes == [Mode::Normal]
     ));
+}
+
+#[test]
+fn listeners_need_the_permission_and_the_port() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("competitest");
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            fixture(&format!("examples/competitest/{file}")),
+            dir.join(file),
+        )
+        .unwrap();
+    }
+    let always = r#"{"always-listen": true}"#;
+    // Not granted: init fails and says what to add.
+    let err = host
+        .load_with(&dir, PluginSettings::new(always))
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("port 27121 is not in allow-listen for [competitest]"),
+        "{err:#}"
+    );
+    // Granted: listening may start from init.
+    let settings = PluginSettings {
+        listen: vec![27121],
+        ..PluginSettings::new(always)
+    };
+    let actions = host.load_with(&dir, settings).unwrap();
+    let [Action::Listen {
+        id, port: 27121, ..
+    }] = actions[..]
+    else {
+        panic!("{actions:?}");
+    };
+    assert!(CAPABILITIES.contains(&"listen"));
+    // A request reaches the plugin and keeps the listener open.
+    let snapshot = snapshot("", 0, 0);
+    let body = Callback::ListenRequest {
+        id,
+        body: "not json".into(),
+    };
+    host.callback("competitest", body.clone(), &snapshot)
+        .unwrap();
+    let log = host.log_lines("competitest").unwrap();
+    assert!(
+        log.last()
+            .unwrap()
+            .contains("not a Competitive Companion problem"),
+        "{log:?}"
+    );
+    host.callback("competitest", body, &snapshot).unwrap();
+    assert_eq!(host.log_lines("competitest").unwrap().len(), 2);
+    // `receive stop` cancels it; later requests are dropped.
+    let actions = host
+        .run_command(
+            "competitest",
+            "receive",
+            vec!["stop".into()],
+            snapshot.clone(),
+        )
+        .unwrap();
+    assert!(
+        actions.iter().any(
+            |action| matches!(action, Action::StopListen { id: stopped, .. } if *stopped == id)
+        ),
+        "{actions:?}"
+    );
+    let late = Callback::ListenRequest {
+        id,
+        body: "late".into(),
+    };
+    assert!(host
+        .callback("competitest", late, &snapshot)
+        .unwrap()
+        .is_empty());
+    assert_eq!(host.log_lines("competitest").unwrap().len(), 2);
+}
+
+#[test]
+fn a_failed_listener_reports_its_error() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("competitest");
+    std::fs::create_dir_all(&dir).unwrap();
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            fixture(&format!("examples/competitest/{file}")),
+            dir.join(file),
+        )
+        .unwrap();
+    }
+    let settings = PluginSettings {
+        listen: vec![27121],
+        ..PluginSettings::new(r#"{"always-listen": true}"#)
+    };
+    let actions = host.load_with(&dir, settings).unwrap();
+    let [Action::Listen { id, .. }] = actions[..] else {
+        panic!("{actions:?}");
+    };
+    let failed = Callback::ListenFailed {
+        id,
+        error: "can't listen on 127.0.0.1:27121: Address in use".into(),
+    };
+    let actions = host
+        .callback("competitest", failed, &snapshot("", 0, 0))
+        .unwrap();
+    assert!(
+        matches!(&actions[..], [Action::Error(message)] if message == "CompetiTest: can't listen on 127.0.0.1:27121: Address in use"),
+        "{actions:?}"
+    );
 }

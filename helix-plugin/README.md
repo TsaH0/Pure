@@ -35,7 +35,7 @@ u = ":plugin-run text-tools/upper"
 why a plugin was disabled.
 
 Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
-except `enabled`, `allow-process`, `allow-files`, `allow-dirs` and `keys` is passed to the plugin's `init` as JSON:
+except `enabled`, `allow-process`, `allow-files`, `allow-dirs`, `allow-listen` and `keys` is passed to the plugin's `init` as JSON:
 
 ```toml
 [text-tools]
@@ -45,6 +45,7 @@ enabled = false
 width = 80
 allow-process = ["rg", "git"]   # see "Running programs"
 allow-files = "read"            # see "Files"
+allow-listen = [27121]          # see "Listening for requests"
 ```
 
 ### Example plugins
@@ -59,7 +60,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`oil`](examples/oil) | `open` (`-`): edit directories as buffers like oil.nvim; rename, move, copy, create and delete with `:w` | `[oil]` `allow-files = "write"`, `allow-dirs = ["~"]` |
 | [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
-| [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase | `[competitest]` `allow-process = true`, `allow-files = "write"` |
+| [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase; `space u t` receives testcases from the Competitive Companion browser extension (`receive problem` / `receive contest` make new files from a template) | `[competitest]` `allow-process = true`, `allow-files = "write"`, `allow-listen = [27121]` |
 | [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps | – |
 | [`harpoon`](examples/harpoon) | like harpoon: `space +` marks a file, `space 1`–`4` jump, `space =` edits the marks | – |
 | [`git-blame`](examples/git-blame) | like git-blame.nvim: the cursor line's author, age and commit at its end | `[git-blame]` `allow-process = ["git"]` |
@@ -101,7 +102,11 @@ f = ":plugin-run finder/files"
     also needs the user's `allow-files` grant.
   - `registers`: read and write registers (API 0.3; the clipboard can only
     be written).
-- No network, environment variables or standard streams; no files except
+  - `listen`: receive HTTP requests on 127.0.0.1, see
+    [Listening for requests](#listening-for-requests). This one also needs
+    the user's `allow-listen` grant.
+- No network (except receiving on granted local ports), environment
+  variables or standard streams; no files except
   the plugin's own directory and, if granted, the workspace and the
   `allow-dirs` directories.
 - Each call has a **time limit** (2 s for commands, 250 ms for event handlers,
@@ -666,6 +671,45 @@ reach panels with `:panel-focus left|right|bottom` and close them with
 `:panel-close`. `panels::selected(dock)` and `panels::close(dock)` work
 on the plugin's own panel. See `examples/competitest` (bottom) and
 `examples/outline` (right).
+
+## Listening for requests (added to API 0.4)
+
+Browser extensions such as [Competitive Companion](https://github.com/jmerle/competitive-companion)
+send data to a local web server. With the `listen` permission and the
+user's grant for the port,
+
+```toml
+# plugins.toml
+[competitest]
+allow-listen = [27121]
+```
+
+`listener::listen(port, on_request, on_stop)` listens on `127.0.0.1:port`
+(never other addresses) until `editor::cancel(id)`:
+
+```rust,ignore
+use helix_plugin_api::{editor, listener};
+
+let id = listener::listen(27121, |body| {
+    editor::set_status(&format!("got {} bytes", body.len()));
+    Ok(())
+}, |error| {
+    editor::set_error(&error); // e.g. the port is taken
+    Ok(())
+})?;
+```
+
+- Only `POST` requests with `Content-Type: application/json` and a `Host`
+  of `localhost` or `127.0.0.1` reach the plugin (the sender gets an empty
+  `200`); everything else is refused. A web page can't send such a request
+  without a CORS preflight, which is refused, so pages you visit can't
+  talk to your plugin.
+- Bodies are at most 4 MiB of UTF-8; a connection has 10 s to send one.
+- `on_request` runs as a callback (UI and commands are allowed). At most 4
+  listeners per plugin; `init` may start one. Reloading stops them.
+- Capability `"listen"`. In the WIT, the request id streams like a
+  program's: bodies arrive as `on-process-output`, a failure as
+  `on-process-done`. See `examples/competitest` (`receive`).
 
 ## Registers (API 0.3)
 

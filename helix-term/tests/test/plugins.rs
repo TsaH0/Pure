@@ -1393,6 +1393,120 @@ async fn competitest_example_judges_testcases_in_a_bottom_panel() -> anyhow::Res
     Ok(())
 }
 
+/// A port nothing listens on.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// POST `body` to 127.0.0.1:`port` like Competitive Companion (with
+/// `content_type`); the response's status line.
+fn post(port: u16, content_type: &str, body: &str) -> String {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "POST / HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response.lines().next().unwrap_or_default().to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn competitest_example_receives_testcases_from_competitive_companion() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    let source = work.join("sol.cpp");
+    std::fs::write(&source, "int main() {}\n")?;
+    for n in 0..3 {
+        std::fs::write(work.join(format!("sol_input{n}.txt")), "old")?;
+        std::fs::write(work.join(format!("sol_output{n}.txt")), "old")?;
+    }
+    let port = free_port();
+    let settings = format!(
+        "[competitest]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nallow-listen = [{port}]\ncompanion-port = {port}\n",
+        work.display().to_string()
+    );
+    let (mut app, _dir) = app_with_example_on("competitest", &source, &settings);
+    keys(&mut app, ":plugin-run competitest/receive<ret>").await;
+    assert!(
+        status(&app)
+            .0
+            .starts_with("CompetiTest: waiting for testcases"),
+        "{:?}",
+        status(&app)
+    );
+    let listening = move || std::net::TcpStream::connect(("127.0.0.1", port)).is_ok();
+    wait_for(&mut app, |_| listening().then_some(())).await;
+    let problem = r#"{"name": "A. Watermelon", "group": "Codeforces", "url": "https://codeforces.com/problemset/problem/4/A",
+        "memoryLimit": 64, "timeLimit": 1000, "tests": [{"input": "8\n", "output": "YES\n"}, {"input": "5\n", "output": "NO\n"}],
+        "batch": {"id": "b", "size": 1}}"#;
+    let sent = std::thread::spawn(move || {
+        // A web page can't send these; they never reach the plugin.
+        let refused = post(port, "text/plain", problem);
+        (refused, post(port, "application/json", problem))
+    });
+    let message = wait_for_status(&mut app, |s| s.contains("testcases of")).await;
+    let (refused, accepted) = sent.join().unwrap();
+    assert_eq!(refused, "HTTP/1.1 415 Unsupported Media Type");
+    assert_eq!(accepted, "HTTP/1.1 200 OK");
+    assert_eq!(
+        message,
+        "CompetiTest: 2 testcases of \"A. Watermelon\" for sol.cpp"
+    );
+    assert_eq!(std::fs::read_to_string(work.join("sol_input0.txt"))?, "8\n");
+    assert_eq!(
+        std::fs::read_to_string(work.join("sol_output1.txt"))?,
+        "NO\n"
+    );
+    assert!(!work.join("sol_input2.txt").exists());
+    // One problem was asked for: it stops listening.
+    wait_for(&mut app, |_| (!listening()).then_some(())).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn competitest_example_needs_the_port_granted() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let source = helix_stdx::path::canonicalize(root.path()).join("sol.cpp");
+    std::fs::write(&source, "int main() {}\n")?;
+    let (mut app, _dir) = app_with_example_on("competitest", &source, "");
+    keys(&mut app, ":plugin-run competitest/receive<ret>").await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(
+        message.contains("port 27121 is not in allow-listen for [competitest]"),
+        "{message}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn competitest_example_reports_a_taken_port() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let source = helix_stdx::path::canonicalize(root.path()).join("sol.cpp");
+    std::fs::write(&source, "int main() {}\n")?;
+    let taken = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = taken.local_addr()?.port();
+    let settings = format!("[competitest]\nallow-listen = [{port}]\ncompanion-port = {port}\n");
+    let (mut app, _dir) = app_with_example_on("competitest", &source, &settings);
+    keys(&mut app, ":plugin-run competitest/receive<ret>").await;
+    let message = wait_for_status(&mut app, |s| s.contains("can't listen")).await;
+    assert!(
+        message.starts_with(&format!("CompetiTest: can't listen on 127.0.0.1:{port}")),
+        "{message}"
+    );
+    assert_eq!(status(&app).1, Severity::Error);
+    drop(taken);
+    Ok(())
+}
+
 /// An editor on `file` with example plugin `name` loaded with `settings`.
 fn app_with_example_on(
     name: &str,

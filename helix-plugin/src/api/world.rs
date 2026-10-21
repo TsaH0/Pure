@@ -496,6 +496,14 @@ macro_rules! world_adapters {
                 Callback::ProcessOutput { id, chunk } => {
                     callbacks.call_on_process_output(store, *id, chunk).await
                 }
+                Callback::ListenRequest { id, body } => {
+                    callbacks.call_on_process_output(store, *id, body).await
+                }
+                Callback::ListenFailed { id, error } => {
+                    callbacks
+                        .call_on_process_done(store, *id, Err(error.as_str()))
+                        .await
+                }
                 Callback::PopupClosed { id } => callbacks.call_on_popup_close(store, *id).await,
                 Callback::Timer { id } => callbacks.call_on_timer(store, *id).await,
                 Callback::FilesDone { id, results } => {

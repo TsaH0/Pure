@@ -64,6 +64,9 @@ pub enum Permission {
     Filesystem,
     /// Read and write registers (API 0.3; the clipboard only write).
     Registers,
+    /// Receive HTTP requests on 127.0.0.1 (API 0.4 `listener`). The user
+    /// must also list the port in `allow-listen`.
+    Listen,
 }
 
 impl Permission {
@@ -76,6 +79,7 @@ impl Permission {
             Permission::Process => "process",
             Permission::Filesystem => "filesystem",
             Permission::Registers => "registers",
+            Permission::Listen => "listen",
         }
     }
 }
@@ -134,6 +138,8 @@ pub struct PluginSettings {
     /// Directories besides the workspace that `files` applies to
     /// (`allow-dirs`), absolute.
     pub dirs: Vec<PathBuf>,
+    /// Ports the plugin may listen on (`allow-listen`).
+    pub listen: Vec<u16>,
 }
 
 impl PluginSettings {
@@ -285,6 +291,7 @@ pub const CAPABILITIES: &[&str] = &[
     "revisions",
     "snippet-completions",
     "panels",
+    "listen",
 ];
 
 /// Most decorations in one layer.
@@ -294,6 +301,10 @@ pub const MAX_STATUSLINE: usize = 200;
 
 /// Most programs a plugin may run at once.
 pub const MAX_PROCESSES: usize = 16;
+/// Most ports a plugin may listen on at once.
+pub const MAX_LISTENERS: usize = 4;
+/// Largest request body a listener accepts.
+pub const MAX_LISTEN_BODY: usize = 4 << 20;
 /// Default and largest time limits of a background program.
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
@@ -470,6 +481,18 @@ pub enum Action {
         plugin: String,
         id: u32,
     },
+    /// Listen on 127.0.0.1:`port`, delivering [`Callback::ListenRequest`]
+    /// for each request and [`Callback::ListenFailed`] if listening fails.
+    Listen {
+        plugin: String,
+        id: u32,
+        port: u16,
+    },
+    /// Stop a listener started with `Listen`.
+    StopListen {
+        plugin: String,
+        id: u32,
+    },
     /// Show a picker and deliver [`Callback::PickerDone`].
     ShowPicker {
         plugin: String,
@@ -632,6 +655,7 @@ pub enum PendingKind {
     Timer,
     Completion,
     Files,
+    Listen,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -677,6 +701,18 @@ pub enum Callback {
         id: u32,
         results: Vec<Result<(), String>>,
     },
+    /// The body of a request a listener received; the listener stays open.
+    /// Delivered as `on-process-output`.
+    ListenRequest {
+        id: u32,
+        body: String,
+    },
+    /// The listener stopped (it couldn't bind, or accepting failed).
+    /// Delivered as `on-process-done` with an error.
+    ListenFailed {
+        id: u32,
+        error: String,
+    },
 }
 
 impl Callback {
@@ -693,11 +729,17 @@ impl Callback {
             Self::BackgroundDone { id, .. } => (*id, PendingKind::Background),
             Self::Timer { id } => (*id, PendingKind::Timer),
             Self::FilesDone { id, .. } => (*id, PendingKind::Files),
+            Self::ListenRequest { id, .. } | Self::ListenFailed { id, .. } => {
+                (*id, PendingKind::Listen)
+            }
         }
     }
 
     fn completes(&self) -> bool {
-        !matches!(self, Self::PickerQuery { .. } | Self::ProcessOutput { .. })
+        !matches!(
+            self,
+            Self::PickerQuery { .. } | Self::ProcessOutput { .. } | Self::ListenRequest { .. }
+        )
     }
 }
 
@@ -808,6 +850,8 @@ struct State {
     streaming: HashSet<u32>,
     process: ProcessGrant,
     files: FileGrant,
+    /// The ports in `allow-listen`.
+    listen: Vec<u16>,
     /// The directories `files` applies to: the workspace and `allow-dirs`.
     roots: Vec<PathBuf>,
     /// The plugin's own directory (`data-dir`), preopened read-write.
@@ -846,6 +890,7 @@ impl State {
             streaming: HashSet::new(),
             process: ProcessGrant::None,
             files: FileGrant::None,
+            listen: Vec::new(),
             roots: Vec::new(),
             data_dir: None,
             starts_program: None,
@@ -1789,6 +1834,32 @@ impl State {
         }
     }
 
+    /// `listener.listen`: receive requests on 127.0.0.1:`port`.
+    fn listen(&mut self, port: u16) -> Result<u32, String> {
+        self.need(Permission::Listen)?;
+        if !self.listen.contains(&port) {
+            return Err(format!(
+                "port {port} is not in allow-listen for [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        let listening = self
+            .pending
+            .values()
+            .filter(|kind| **kind == PendingKind::Listen)
+            .count();
+        if listening >= MAX_LISTENERS {
+            return Err(format!("at most {MAX_LISTENERS} listeners can run at once"));
+        }
+        let id = self.request(PendingKind::Listen)?;
+        self.actions.push(Action::Listen {
+            plugin: self.plugin.clone(),
+            id,
+            port,
+        });
+        Ok(id)
+    }
+
     fn document_revision(&mut self, doc: DocumentId) -> Result<u64, String> {
         self.need(Permission::ReadBuffers)?;
         Ok(self.document(doc)?.revision)
@@ -1821,6 +1892,7 @@ impl State {
                 self.streaming.remove(&id);
             }
             Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
+            Some(PendingKind::Listen) => self.actions.push(Action::StopListen { plugin, id }),
             Some(PendingKind::Completion) => self.actions.push(Action::Completions {
                 plugin,
                 id,
@@ -2302,6 +2374,8 @@ pub struct PluginInfo {
     pub disabled: Option<String>,
     pub process: ProcessGrant,
     pub files: FileGrant,
+    /// The ports in `allow-listen`.
+    pub listen: Vec<u16>,
     /// `[keys]` from `plugin.toml`.
     pub keys: Option<toml::Table>,
     pub timing: CallTiming,
@@ -2461,6 +2535,7 @@ impl PluginHost {
                 disabled: plugin.disabled.clone(),
                 process: plugin.store.data().process.clone(),
                 files: plugin.store.data().files,
+                listen: plugin.store.data().listen.clone(),
                 keys: plugin.manifest.keys.clone(),
                 timing: plugin.timing,
             })
@@ -2667,6 +2742,7 @@ impl PluginHost {
             streaming: HashSet::new(),
             process: settings.process,
             files: settings.files,
+            listen: settings.listen,
             roots: self
                 .workspace
                 .iter()

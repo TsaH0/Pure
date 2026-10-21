@@ -97,8 +97,9 @@ pub mod editor {
         kill, pick, pick_live, popup, prompt, push_items, run_interactive, set_items, spawn,
     };
     /// Optional features of this Pure ("cancel-request", "revisions",
-    /// "snippet-completions"): a plugin using them only loads on a Pure
-    /// that has them, so this is for features a plugin can do without.
+    /// "snippet-completions", "panels", "listen"): a plugin using them only
+    /// loads on a Pure that has them, so this is for features a plugin can
+    /// do without.
     #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
     pub use crate::bindings::helix::plugin::requests::capabilities;
     #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
@@ -245,6 +246,13 @@ pub mod panels {
             selected: None,
         }
     }
+}
+
+/// Local HTTP listeners (API 0.4, capability "listen"): see
+/// [`listener::listen`].
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+pub mod listener {
+    pub use crate::requests::listen;
 }
 
 /// Completion sources (API 0.3): subscribe to `EventKind::Completion`,

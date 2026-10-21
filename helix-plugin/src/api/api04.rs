@@ -176,3 +176,9 @@ impl v0_4::helix::plugin::snippets::Host for State {
         State::complete(self, id, items)
     }
 }
+
+impl v0_4::helix::plugin::listener::Host for State {
+    fn listen(&mut self, port: u16) -> std::result::Result<u32, String> {
+        State::listen(self, port)
+    }
+}

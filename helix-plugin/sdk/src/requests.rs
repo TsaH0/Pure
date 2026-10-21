@@ -614,6 +614,24 @@ pub fn cancel(id: RequestId) {
     GENERATIONS.with_borrow_mut(|generations| generations.remove(&id));
 }
 
+/// Receive HTTP requests on 127.0.0.1:`port` (API 0.4 `listener`; needs
+/// the `listen` permission and the port in the user's `allow-listen`).
+/// `on_request` gets each body: only JSON `POST`s addressed to
+/// `localhost` or `127.0.0.1` arrive, so web pages can't send them.
+/// `on_stop` gets the error if listening fails (the port is taken). Stop
+/// listening with [`cancel`].
+#[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
+pub fn listen(
+    port: u16,
+    on_request: impl FnMut(&str) -> Result<(), String> + 'static,
+    on_stop: impl FnOnce(String) -> Result<(), String> + 'static,
+) -> Result<RequestId, String> {
+    let id = crate::bindings::helix::plugin::listener::listen(port)?;
+    register_process(id, move |result| on_stop(result.err().unwrap_or_default()));
+    STREAMS.with_borrow_mut(|streams| streams.insert(id, Box::new(on_request)));
+    Ok(id)
+}
+
 /// Stop a timer from [`set_timer`] before it goes off.
 #[cfg(not(feature = "api-v0-2"))]
 pub fn cancel_timer(id: RequestId) {
