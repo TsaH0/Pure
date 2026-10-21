@@ -18,9 +18,10 @@ data is `~/.local/share/helix/`, and the cache is `~/.cache/helix/`.
   Wasmtime runs in a sandbox. Any language that can build a component for the
   WIT world `helix-plugin` works. Rust has an SDK (`helix-plugin-api`, in
   `helix-plugin/sdk`), and JavaScript has been verified (`examples/js-upper`).
-- **No network, environment variables or standard streams.** The plugin can
-  only touch its own data directory and, if the user grants it, the workspace
-  and the `allow-dirs` directories.
+- **No network, environment variables or standard streams** (except
+  receiving HTTP requests on ports the user granted, see `listener`). The
+  plugin can only touch its own data directory and, if the user grants it,
+  the workspace and the `allow-dirs` directories.
 - **Limits per call:** `init` gets 5 s, commands and callbacks 2 s, event
   handlers 250 ms, and background tasks 30 s. Memory is capped at 256 MiB. A
   plugin that runs out of time or memory, or traps (including a Rust
@@ -165,6 +166,7 @@ Permissions (exact strings, from `Permission` in `helix-plugin/src/lib.rs`):
 | `process` | `spawn`, `spawn_stream`, `run_interactive`, `kill` | `allow-process = true` or `["prog", ...]` |
 | `filesystem` | workspace access through WASI `std::fs`, `files::*` | `allow-files = "read"` or `"write"` (+ optional `allow-dirs`) |
 | `registers` | `register`, `set_register` (clipboard `+`/`*` write-only) | – |
+| `listen` | `listener::listen` (API 0.4, 127.0.0.1 only) | `allow-listen = [port, ...]` |
 
 Decorations, diagnostics, completion answers, timers, the sidebar, the
 statusline, popups, prompts, pickers, status messages, logging and background
@@ -181,12 +183,13 @@ enabled = false                # or `my-plugin = false`: don't load it
 allow-process = ["rg", "git"]  # or true (any program); checked against argv[0] as given
 allow-files = "read"           # "read" | "write" | false
 allow-dirs = ["~", "/tmp"]     # absolute dirs (~ expands) beyond the workspace
+allow-listen = [27121]         # ports listener::listen may use
 keys = false                   # ignore the plugin's [keys] (not [keys.buffer])
 width = 80                     # anything else is passed to init as JSON
 ```
 
 `init(config)` receives the table **minus** `enabled`, `allow-process`,
-`allow-files`, `allow-dirs` and `keys`, as a JSON object string (`"{}"` when
+`allow-files`, `allow-dirs`, `allow-listen` and `keys`, as a JSON object string (`"{}"` when
 there is none). The examples parse it by hand to stay dependency-free, for
 example `config.split("\"max-line\":")`. Adding `serde_json` also works.
 
@@ -562,6 +565,18 @@ items, size))` (size: columns 12–80 for sides, rows 3–40 for bottom),
 Users have `:panel-focus <dock>` / `:panel-close <dock>`. Capability
 `"panels"`. See `examples/competitest` and `examples/outline`.
 
+### Listening for requests (added to API 0.4, `listener`)
+
+`listener::listen(port, |body| ..., |error| ...) -> RequestId` receives HTTP
+requests on `127.0.0.1:port` (needs the `listen` permission and the port in
+`allow-listen`; capability `"listen"`). Only JSON `POST`s with a `Host` of
+`localhost`/`127.0.0.1` arrive, at most 4 MiB each; the sender gets an empty
+200. The error closure runs if listening fails (port taken). Stop with
+`editor::cancel(id)`. At most 4 per plugin; allowed from `init`. In the WIT,
+bodies arrive as `on-process-output(id, body)` and a failure as
+`on-process-done(id, err)`. See `examples/competitest` (`receive`, for the
+Competitive Companion browser extension).
+
 ### Background calls (`editor::run_background`)
 
 ```rust
@@ -617,8 +632,9 @@ The plugin must export every interface of the world (`plugin`, `callbacks`,
   `:write` and similar commands. Request them only when needed.
 - Prefer `files::apply` (checked against the roots, never overwrites, `Trash`
   never falls back to deleting) over raw `std::fs` writes for user files.
-- There is no network. To fetch something, run a program such as `curl` with
-  `allow-process`, and document the need.
+- There is no outgoing network. To fetch something, run a program such as
+  `curl` with `allow-process`, and document the need. Receiving is limited
+  to `listener::listen` on granted local ports.
 - Never `panic!` or `unwrap()` on host results or user input. A trap
   disables the plugin. Return `Err(String)` from commands, and in event
   handlers log the error (`editor::log`).
@@ -653,7 +669,7 @@ Not possible (from the roadmap's M12 table):
 | Folding | not possible: Helix has no folds |
 | Custom UI components (dashboards with layout) | only popups (markdown), pickers, prompts and the sidebar |
 | Debug adapters, language servers | use Helix's DAP/LSP via `languages.toml` |
-| Network access | not in the sandbox; run a program with `allow-process` |
+| Network access | not in the sandbox; run a program with `allow-process`. Receiving local HTTP requests: `listener` |
 | Format on save | use `formatter` in `languages.toml`; a plugin can offer a format command |
 | Changed-range info in `on_document_change`, partial layer updates | not in the API: re-read the text, diff it yourself, replace whole layers |
 

@@ -2,7 +2,7 @@ name = "competitest"
 version = "0.1.0"
 api = "0.4"
 description = "Run a competitive programming solution against its testcases, like competitest.nvim"
-permissions = ["read-buffers", "open-files", "process", "filesystem"]
+permissions = ["read-buffers", "open-files", "process", "filesystem", "listen"]
 wasm = "plugin.wasm"
 
 # Default bindings: only used where nothing else binds the key.
@@ -10,3 +10,4 @@ wasm = "plugin.wasm"
 r = "run"
 a = "add"
 p = "panel"
+t = "receive"

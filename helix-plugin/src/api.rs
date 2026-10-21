@@ -352,6 +352,9 @@ impl Instance {
             super::Callback::PopupClosed { .. } => anyhow::bail!("popup callbacks require API 0.3"),
             super::Callback::Timer { .. } => anyhow::bail!("timers require API 0.3"),
             super::Callback::FilesDone { .. } => anyhow::bail!("file results require API 0.4"),
+            super::Callback::ListenRequest { .. } | super::Callback::ListenFailed { .. } => {
+                anyhow::bail!("listeners require API 0.4")
+            }
             super::Callback::BackgroundDone { .. } => {
                 anyhow::bail!("background tasks require API 0.3")
             }

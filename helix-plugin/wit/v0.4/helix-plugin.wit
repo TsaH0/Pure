@@ -558,7 +558,7 @@ interface requests {
   use types.{request-id};
 
   /// The optional features this Pure has: "cancel-request", "revisions",
-  /// "snippet-completions", "panels".
+  /// "snippet-completions", "panels", "listen".
   capabilities: func() -> list<string>;
   /// Stop request `id` of this plugin, whatever kind it is: a timer, a
   /// program (killed), a background task, a files.apply batch (operations
@@ -593,6 +593,25 @@ interface snippets {
   complete: func(id: request-id, items: list<completion-item>) -> result<_, string>;
 }
 
+/// Receive HTTP requests on this machine, e.g. problems sent by the
+/// Competitive Companion browser extension. Needs the `listen` permission
+/// in plugin.toml, and the user must list the port in `allow-listen` in
+/// plugins.toml.
+interface listener {
+  use types.{request-id};
+
+  /// Listen on 127.0.0.1:`port` (never other addresses). The request stays
+  /// open: the body of each request arrives as
+  /// `callbacks.on-process-output(id, body)`. Only `POST`s with
+  /// `Content-Type: application/json` and a `Host` of `localhost` or
+  /// `127.0.0.1` arrive (so web pages can't send them), with a UTF-8 body
+  /// of at most 4 MiB; the sender gets an empty 200 response. If listening
+  /// fails, for example because the port is taken,
+  /// `callbacks.on-process-done(id, err)` ends it. Stop it with
+  /// `requests.cancel(id)`. At most 4 per plugin; allowed from `init`.
+  listen: func(port: u16) -> result<request-id, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -608,6 +627,7 @@ world helix-plugin {
   import revisions;
   import snippets;
   import panels;
+  import listener;
   export plugin;
   export callbacks;
   export events;

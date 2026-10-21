@@ -9,6 +9,12 @@
 //!   a testcase shows its input, expected and actual output side by side.
 //! - `add` (`space u a`) makes the next testcase's two files and opens them.
 //! - `panel` (`space u p`) shows or hides the results.
+//! - `receive` (`space u t`) gets testcases from the Competitive Companion
+//!   browser extension: click its button on a problem page and the
+//!   problem's tests replace the current file's testcases.
+//!   `receive problem` makes `<cwd>/<Problem>.<ext>` from a template
+//!   instead and opens it, `receive contest` puts every problem of a
+//!   contest in `<cwd>/<Contest>/`, `receive stop` stops listening.
 //!
 //! It runs your compiler and your program, so it needs (plugins.toml):
 //!
@@ -16,18 +22,27 @@
 //! [competitest]
 //! allow-process = true
 //! allow-files = "write"          # to create testcases
+//! allow-listen = [27121]         # for Competitive Companion
 //! timeout = 2000                 # ms per testcase
 //! # $(FNAME) is the file, $(FNOEXT) without its extension:
 //! compile.cpp = ["g++", "-O2", "-std=c++17", "-o", "$(FNOEXT)", "$(FNAME)"]
 //! run.cpp = ["./$(FNOEXT)"]
+//! companion-port = 27121         # Competitive Companion's default
+//! always-listen = false          # receive problems whenever they are sent
+//! received-extension = "cpp"     # for `receive problem` / `receive contest`
 //! ```
+//!
+//! New problem files start from `template.<ext>` in the plugin's data
+//! directory (`~/.local/share/helix/plugins/competitest/`), if it exists,
+//! with `$(PROBLEM)`, `$(GROUP)`, `$(URL)`, `$(TIMELIM)` and `$(MEMLIM)`
+//! filled in.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use helix_plugin_api::{
-    editor,
+    editor, listener,
     panels::{self, item, on_enter, Dock},
     register_plugin, CommandInfo, OpenAction, Output, Plugin, Registration, SpawnOptions,
 };
@@ -64,10 +79,301 @@ struct State {
     timeout: u32,
     /// Per extension: (compile, run), with `$(FNAME)` / `$(FNOEXT)`.
     commands: Vec<(String, Option<Vec<String>>, Vec<String>)>,
+    receive: Receive,
+}
+
+/// Receiving problems from Competitive Companion.
+#[derive(Default)]
+struct Receive {
+    port: u16,
+    /// Keep listening after a problem arrives (`always-listen`).
+    always: bool,
+    extension: String,
+    /// The running listener.
+    listener: Option<u32>,
+    /// What to do with the next problem; `None` while listening only
+    /// because of `always-listen`: then make problem files.
+    target: Option<Target>,
+    /// The contest batch being received: (id, problems so far).
+    batch: Option<(String, usize)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Target {
+    /// Replace the testcases of this file.
+    Testcases(PathBuf),
+    Problem,
+    Contest,
+}
+
+/// What Competitive Companion sends for one problem (the fields used).
+#[derive(Debug, Clone, PartialEq)]
+struct Problem {
+    name: String,
+    group: String,
+    url: String,
+    /// ms
+    time_limit: u64,
+    /// MB
+    memory_limit: u64,
+    tests: Vec<(String, String)>,
+    /// (id, number of problems): a contest arrives one problem at a time.
+    batch: (String, usize),
 }
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
+}
+
+fn parse_problem(body: &str) -> Result<Problem, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|err| format!("not a Competitive Companion problem: {err}"))?;
+    let text = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let name = text("name");
+    if name.trim().is_empty() {
+        return Err("not a Competitive Companion problem: no name".into());
+    }
+    let tests = value
+        .get("tests")
+        .and_then(|t| t.as_array())
+        .ok_or("not a Competitive Companion problem: no tests")?
+        .iter()
+        .map(|test| {
+            let field = |key| test.get(key).and_then(|v: &serde_json::Value| v.as_str()).map(str::to_string);
+            Some((field("input")?, field("output")?))
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or("not a Competitive Companion problem: a test has no input or output")?;
+    let batch = value.get("batch");
+    Ok(Problem {
+        name,
+        group: text("group"),
+        url: text("url"),
+        time_limit: value.get("timeLimit").and_then(|v| v.as_u64()).unwrap_or_default(),
+        memory_limit: value.get("memoryLimit").and_then(|v| v.as_u64()).unwrap_or_default(),
+        tests,
+        batch: (
+            batch.and_then(|b| b.get("id")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            batch.and_then(|b| b.get("size")).and_then(|v| v.as_u64()).map_or(1, |n| n.max(1) as usize),
+        ),
+    })
+}
+
+/// `name` as a file name: letters, digits, `-` and `_`; other runs become
+/// one `_` ("A. Watermelon" is "A_Watermelon").
+fn file_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_');
+    if out.is_empty() {
+        "problem".into()
+    } else {
+        out.chars().take(100).collect()
+    }
+}
+
+fn fill_template(template: &str, problem: &Problem) -> String {
+    template
+        .replace("$(PROBLEM)", &problem.name)
+        .replace("$(GROUP)", &problem.group)
+        .replace("$(URL)", &problem.url)
+        .replace("$(TIMELIM)", &problem.time_limit.to_string())
+        .replace("$(MEMLIM)", &problem.memory_limit.to_string())
+}
+
+/// The testcase files of `file` that exist.
+fn testcase_files(file: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(stem)) = (file.parent(), file.file_stem()) else {
+        return Vec::new();
+    };
+    let stem = stem.to_string_lossy();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+            ["input", "output"].iter().any(|kind| {
+                name.strip_prefix(&format!("{stem}_{kind}"))
+                    .and_then(|rest| rest.strip_suffix(".txt"))
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            })
+        })
+        .collect()
+}
+
+/// Replace `file`'s testcases with `tests`.
+fn write_testcases(file: &Path, tests: &[(String, String)]) -> Result<(), String> {
+    let dir = file.parent().ok_or("no directory")?;
+    let stem = file.file_stem().ok_or("no file name")?.to_string_lossy().into_owned();
+    let error = |path: &Path, err: std::io::Error| {
+        format!("{}: {err} (allow-files = \"write\" in plugins.toml)", path.display())
+    };
+    for old in testcase_files(file) {
+        std::fs::remove_file(&old).map_err(|err| error(&old, err))?;
+    }
+    for (number, (input, output)) in tests.iter().enumerate() {
+        let input_path = dir.join(format!("{stem}_input{number}.txt"));
+        let output_path = dir.join(format!("{stem}_output{number}.txt"));
+        std::fs::write(&input_path, input).map_err(|err| error(&input_path, err))?;
+        std::fs::write(&output_path, output).map_err(|err| error(&output_path, err))?;
+    }
+    Ok(())
+}
+
+/// Make `dir/<Problem>.<ext>` (unless it exists) and its testcases; the
+/// file.
+fn write_problem(dir: &Path, problem: &Problem, extension: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    let file = dir.join(format!("{}.{extension}", file_name(&problem.name)));
+    if !file.exists() {
+        let template = Path::new(&editor::data_dir()).join(format!("template.{extension}"));
+        let text = std::fs::read_to_string(template)
+            .map(|template| fill_template(&template, problem))
+            .unwrap_or_default();
+        std::fs::write(&file, text).map_err(|err| {
+            format!("{}: {err} (allow-files = \"write\" in plugins.toml)", file.display())
+        })?;
+    }
+    write_testcases(&file, &problem.tests)?;
+    Ok(file)
+}
+
+/// Start listening for Competitive Companion, if not already.
+fn start_listening() -> Result<(), String> {
+    let port = STATE.with_borrow(|state| {
+        (state.receive.listener.is_none()).then_some(state.receive.port)
+    });
+    let Some(port) = port else {
+        return Ok(());
+    };
+    let id = listener::listen(port, |body| received(body), move |error| {
+        STATE.with_borrow_mut(|state| {
+            state.receive.listener = None;
+            state.receive.target = None;
+        });
+        editor::set_error(&format!("CompetiTest: {error}"));
+        Ok(())
+    })?;
+    STATE.with_borrow_mut(|state| state.receive.listener = Some(id));
+    Ok(())
+}
+
+fn stop_listening() {
+    let listener = STATE.with_borrow_mut(|state| {
+        state.receive.target = None;
+        state.receive.batch = None;
+        state.receive.listener.take()
+    });
+    if let Some(id) = listener {
+        editor::cancel(id);
+    }
+}
+
+/// `receive [testcases|problem|contest|stop]`.
+fn receive(what: &str) -> Result<(), String> {
+    let target = match what {
+        "" | "testcases" => Target::Testcases(current_file()?),
+        "problem" => Target::Problem,
+        "contest" => Target::Contest,
+        "stop" => {
+            stop_listening();
+            editor::set_status("CompetiTest: stopped receiving");
+            return Ok(());
+        }
+        _ => return Err(format!("receive what? testcases, problem, contest or stop, not '{what}'")),
+    };
+    start_listening()?;
+    let port = STATE.with_borrow_mut(|state| {
+        state.receive.target = Some(target.clone());
+        state.receive.batch = None;
+        state.receive.port
+    });
+    let what = match target {
+        Target::Testcases(_) => "testcases",
+        Target::Problem => "a problem",
+        Target::Contest => "a contest",
+    };
+    editor::set_status(&format!(
+        "CompetiTest: waiting for {what} from Competitive Companion (port {port}); `receive stop` stops"
+    ));
+    Ok(())
+}
+
+/// A request from Competitive Companion.
+fn received(body: &str) -> Result<(), String> {
+    let problem = match parse_problem(body) {
+        Ok(problem) => problem,
+        Err(err) => {
+            editor::log(&err);
+            return Ok(());
+        }
+    };
+    let (target, extension) = STATE.with_borrow(|state| {
+        (state.receive.target.clone(), state.receive.extension.clone())
+    });
+    let tests = problem.tests.len();
+    // A batch of several problems is a contest even when listening only
+    // because of `always-listen`.
+    let contest = matches!(target, Some(Target::Contest)) || (target.is_none() && problem.batch.1 > 1);
+    let done = match target {
+        Some(Target::Testcases(file)) => {
+            write_testcases(&file, &problem.tests)?;
+            let name = file.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+            editor::set_status(&format!("CompetiTest: {tests} testcases of \"{}\" for {name}", problem.name));
+            if STATE.with_borrow(|state| state.file.as_ref() == Some(&file)) {
+                STATE.with_borrow_mut(|state| {
+                    state.testcases = find_testcases(&file);
+                    state.compile_error = None;
+                });
+                show_panel()?;
+            }
+            true
+        }
+        _ if contest => {
+            let dir = Path::new(&editor::cwd()).join(file_name(&problem.group));
+            write_problem(&dir, &problem, &extension)?;
+            let (got, size) = STATE.with_borrow_mut(|state| {
+                let batch = &mut state.receive.batch;
+                match batch {
+                    Some((id, got)) if *id == problem.batch.0 => *got += 1,
+                    _ => *batch = Some((problem.batch.0.clone(), 1)),
+                }
+                (batch.as_ref().map_or(1, |(_, got)| *got), problem.batch.1)
+            });
+            editor::set_status(&format!(
+                "CompetiTest: {got}/{size} problems of \"{}\" in {}",
+                problem.group,
+                dir.display()
+            ));
+            got >= size
+        }
+        _ => {
+            let file = write_problem(Path::new(&editor::cwd()), &problem, &extension)?;
+            editor::open_file(&file.to_string_lossy())?;
+            editor::set_status(&format!("CompetiTest: \"{}\" with {tests} testcases", problem.name));
+            true
+        }
+    };
+    if done {
+        let keep = STATE.with_borrow_mut(|state| {
+            state.receive.target = None;
+            state.receive.batch = None;
+            state.receive.always
+        });
+        if !keep {
+            stop_listening();
+        }
+    }
+    Ok(())
 }
 
 fn default_commands() -> Vec<(String, Option<Vec<String>>, Vec<String>)> {
@@ -129,6 +435,34 @@ fn parse_settings(config: &str) -> Result<(u32, Vec<(String, Option<Vec<String>>
         }
     }
     Ok((timeout, commands))
+}
+
+/// Settings: `companion-port`, `always-listen`, `received-extension`.
+fn parse_receive_settings(config: &str) -> Result<Receive, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(config).map_err(|err| format!("invalid settings: {err}"))?;
+    let port = match value.get("companion-port") {
+        None => 27121,
+        Some(port) => port
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+            .ok_or("companion-port must be a port number")?,
+    };
+    let extension = match value.get("received-extension") {
+        None => "cpp".to_string(),
+        Some(ext) => ext
+            .as_str()
+            .map(|ext| ext.trim_start_matches('.').to_string())
+            .filter(|ext| !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric()))
+            .ok_or("received-extension must be an extension like \"cpp\"")?,
+    };
+    Ok(Receive {
+        port,
+        always: value.get("always-listen").and_then(|v| v.as_bool()).unwrap_or(false),
+        extension,
+        ..Default::default()
+    })
 }
 
 /// `$(FNAME)` and `$(FNOEXT)` filled in for `file`.
@@ -410,10 +744,16 @@ struct CompetiTest;
 impl Plugin for CompetiTest {
     fn init(config: String) -> Result<Registration, String> {
         let (timeout, commands) = parse_settings(&config)?;
+        let receive = parse_receive_settings(&config)?;
+        let always = receive.always;
         STATE.with_borrow_mut(|state| {
             state.timeout = timeout;
             state.commands = commands;
+            state.receive = receive;
         });
+        if always {
+            start_listening()?;
+        }
         let command = |name: &str, doc: &str| CommandInfo {
             name: name.into(),
             doc: doc.into(),
@@ -424,6 +764,10 @@ impl Plugin for CompetiTest {
                 command("add", "Add a testcase for the current file"),
                 command("panel", "Show or hide the testcase results"),
                 command("show", "Show a testcase's input, expected and actual output"),
+                command(
+                    "receive",
+                    "Receive from Competitive Companion: testcases (default), problem, contest or stop",
+                ),
             ],
             events: Vec::new(),
         })
@@ -443,6 +787,7 @@ impl Plugin for CompetiTest {
                 }
             }
             "show" => show(args.first().map_or("0", String::as_str)),
+            "receive" => receive(args.first().map_or("", String::as_str)),
             _ => Err(format!("unknown command {name}")),
         }
     }
@@ -468,6 +813,72 @@ mod test {
         assert_eq!(judge(&ok(Some(1), ""), "5", 3, 1000), Verdict::RuntimeError("exit 1".into()));
         let killed = Ok(Output { exit_code: None, stdout: String::new(), stderr: "[killed after 1000 ms]".into() });
         assert_eq!(judge(&killed, "5", 999, 1000), Verdict::TimeLimit);
+    }
+
+    const COMPANION: &str = r#"{
+        "name": "A. Watermelon",
+        "group": "Codeforces - Beta Round #4 (Div. 2 Only)",
+        "url": "https://codeforces.com/problemset/problem/4/A",
+        "interactive": false,
+        "memoryLimit": 64,
+        "timeLimit": 1000,
+        "tests": [{"input": "8\n", "output": "YES\n"}, {"input": "5\n", "output": "NO\n"}],
+        "testType": "single",
+        "input": {"type": "stdin"},
+        "output": {"type": "stdout"},
+        "languages": {"java": {"mainClass": "Main", "taskClass": "AWatermelon"}},
+        "batch": {"id": "123e4567-e89b-12d3-a456-426614174000", "size": 1}
+    }"#;
+
+    #[test]
+    fn parses_competitive_companion_problems() {
+        let problem = parse_problem(COMPANION).unwrap();
+        assert_eq!(problem.name, "A. Watermelon");
+        assert_eq!(problem.tests, [("8\n".into(), "YES\n".into()), ("5\n".into(), "NO\n".into())]);
+        assert_eq!((problem.time_limit, problem.memory_limit), (1000, 64));
+        assert_eq!(problem.batch.1, 1);
+        assert!(parse_problem("{}").is_err());
+        assert!(parse_problem(r#"{"name": "x", "tests": [{"input": "1"}]}"#).is_err());
+        assert!(parse_problem("nope").is_err());
+    }
+
+    #[test]
+    fn names_and_templates() {
+        assert_eq!(file_name("A. Watermelon"), "A_Watermelon");
+        assert_eq!(file_name("Codeforces - Beta Round #4 (Div. 2 Only)"), "Codeforces_-_Beta_Round_4_Div_2_Only");
+        assert_eq!(file_name("../../etc"), "etc");
+        assert_eq!(file_name("/// "), "problem");
+        let problem = parse_problem(COMPANION).unwrap();
+        assert_eq!(fill_template("// $(PROBLEM) $(TIMELIM)ms $(MEMLIM)MB $(URL)", &problem), "// A. Watermelon 1000ms 64MB https://codeforces.com/problemset/problem/4/A");
+    }
+
+    #[test]
+    fn receive_settings() {
+        let receive = parse_receive_settings("{}").unwrap();
+        assert_eq!((receive.port, receive.always, receive.extension.as_str()), (27121, false, "cpp"));
+        let receive = parse_receive_settings(r#"{"companion-port": 10045, "always-listen": true, "received-extension": ".py"}"#).unwrap();
+        assert_eq!((receive.port, receive.always, receive.extension.as_str()), (10045, true, "py"));
+        assert!(parse_receive_settings(r#"{"companion-port": 70000}"#).is_err());
+        assert!(parse_receive_settings(r#"{"received-extension": "../x"}"#).is_err());
+    }
+
+    #[test]
+    fn received_testcases_replace_the_old_ones() {
+        let dir = std::env::temp_dir().join(format!("competitest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sol.cpp");
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("sol_input{n}.txt")), "old").unwrap();
+            std::fs::write(dir.join(format!("sol_output{n}.txt")), "old").unwrap();
+        }
+        std::fs::write(dir.join("sol_inputs.txt"), "not a testcase").unwrap();
+        write_testcases(&file, &parse_problem(COMPANION).unwrap().tests).unwrap();
+        let found = find_testcases(&file);
+        assert_eq!(found.len(), 2);
+        assert_eq!(std::fs::read_to_string(&found[1].expected).unwrap(), "NO\n");
+        assert!(!dir.join("sol_input2.txt").exists());
+        assert!(dir.join("sol_inputs.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

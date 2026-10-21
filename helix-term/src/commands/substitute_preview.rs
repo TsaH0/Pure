@@ -1,12 +1,15 @@
 //! Live preview of `:s` while it is typed, like Neovim's `inccommand=split`:
-//! the matches are highlighted in the buffer, and a panel at the bottom of the
-//! editor shows the changed lines as they will be after the substitution
-//! (or, while the pattern is still being typed, the lines with their matches).
-//! The document is not touched until the command runs.
+//! in the buffer, each match is struck out with its replacement shown right
+//! after it (while only the pattern is typed, the matches are highlighted),
+//! and a panel at the bottom of the editor shows the changed lines as they
+//! will be after the substitution. The document is not touched until the
+//! command runs.
 
 use std::ops::Range;
 
+use helix_core::doc_formatter::FormattedGrapheme;
 use helix_core::substitute::{self, Scope, Substitution};
+use helix_core::text_annotations::InlineAnnotation;
 use helix_core::{syntax::OverlayHighlights, Rope, Selection};
 use helix_event::runtime_local;
 use helix_view::graphics::{Modifier, Rect, Style};
@@ -14,6 +17,9 @@ use helix_view::{DocumentId, Editor, Theme};
 use parking_lot::Mutex;
 use tui::buffer::Buffer as Surface;
 use tui::widgets::{Block, Widget};
+
+use crate::ui::document::TextRenderer;
+use crate::ui::text_decorations::Decoration;
 
 /// Lines kept for the panel (more than ever fit on a screen).
 const MAX_LINES: usize = 200;
@@ -27,6 +33,9 @@ struct Preview {
     doc: DocumentId,
     /// Char ranges of the matches in the document.
     matches: Vec<Range<usize>>,
+    /// While replacing: each change whose replacement was computed, as
+    /// (matched char range, replacement), in document order.
+    replacements: Vec<(Range<usize>, String)>,
     lines: Vec<Line>,
     /// Panel rows computed (before the `MAX_LINES` cut), and whether some
     /// changes weren't turned into rows at all.
@@ -150,6 +159,7 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
         Some(Preview {
             doc: doc.id(),
             matches: Vec::new(),
+            replacements: Vec::new(),
             lines: Vec::new(),
             total_rows: 0,
             rows_incomplete: false,
@@ -260,6 +270,16 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
         outcome.lines,
         plural(outcome.lines)
     );
+    let replacements = if replacing {
+        changes[..outcome.expanded]
+            .iter()
+            .map(|(from, to, replacement)| {
+                (*from..*to, replacement.as_deref().unwrap_or("").to_string())
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     Some(Preview {
         doc: doc.id(),
         matches: changes
@@ -267,6 +287,7 @@ fn compute(editor: &Editor, input: &str) -> Option<Preview> {
             .map(|(from, to, _)| *from..*to)
             .filter(|range| !range.is_empty())
             .collect(),
+        replacements,
         lines,
         total_rows,
         rows_incomplete,
@@ -351,11 +372,12 @@ fn highlight_style(theme: &Theme) -> Style {
         .unwrap_or_else(|| Style::default().add_modifier(Modifier::REVERSED))
 }
 
-/// The matches in `doc`, highlighted in the buffer.
+/// The matches in `doc`, highlighted in the buffer while no replacement is
+/// shown (with one, [`inline`] shows them struck out instead).
 pub fn overlay(doc: DocumentId, theme: &Theme) -> Option<OverlayHighlights> {
     let preview = PREVIEW.lock();
     let preview = preview.as_ref().filter(|preview| preview.doc == doc)?;
-    if preview.matches.is_empty() {
+    if preview.matches.is_empty() || !preview.replacements.is_empty() {
         return None;
     }
     let highlight = ["ui.highlight", "ui.cursor.match", "ui.selection.primary"]
@@ -365,6 +387,104 @@ pub fn overlay(doc: DocumentId, theme: &Theme) -> Option<OverlayHighlights> {
         highlight,
         ranges: preview.matches.clone(),
     })
+}
+
+/// The substitution shown in place in `doc`, for the changes touching the
+/// chars `visible`: each replacement as virtual text after its match, and
+/// the matched char ranges, to strike out ([`StruckOut`]).
+pub fn inline(
+    doc: DocumentId,
+    visible: Range<usize>,
+) -> Option<(Vec<InlineAnnotation>, Vec<Range<usize>>)> {
+    let preview = PREVIEW.lock();
+    let preview = preview.as_ref().filter(|preview| preview.doc == doc)?;
+    let replacements = &preview.replacements;
+    let first = replacements.partition_point(|(range, _)| range.end < visible.start);
+    let changes = replacements[first..]
+        .iter()
+        .take_while(|(range, _)| range.start <= visible.end);
+    let mut annotations = Vec::new();
+    let mut struck = Vec::new();
+    for (range, replacement) in changes {
+        if !range.is_empty() {
+            struck.push(range.clone());
+        }
+        if !replacement.is_empty() {
+            annotations.push(InlineAnnotation::new(range.end, inline_text(replacement)));
+        }
+    }
+    (!annotations.is_empty() || !struck.is_empty()).then_some((annotations, struck))
+}
+
+/// `replacement` on one line: virtual text can't break lines.
+fn inline_text(replacement: &str) -> String {
+    let mut text = String::with_capacity(replacement.len());
+    let mut chars = replacement.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' || helix_core::line_ending::LineEnding::from_char(c).is_some() {
+            if c == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            text.push('⏎');
+        } else {
+            text.push(c);
+        }
+    }
+    text
+}
+
+/// The style of replaced text: the theme's `diff.minus`, struck out.
+pub fn struck_style(theme: &Theme) -> Style {
+    ["diff.minus", "error"]
+        .iter()
+        .find_map(|scope| theme.try_get_exact(scope))
+        .unwrap_or_default()
+        .add_modifier(Modifier::CROSSED_OUT)
+}
+
+/// The highlight of replacement text: the theme's `diff.plus`.
+pub fn added_highlight(theme: &Theme) -> Option<helix_core::syntax::Highlight> {
+    ["diff.plus", "string"]
+        .iter()
+        .find_map(|scope| theme.find_highlight_exact(scope))
+}
+
+/// Strikes out the text in `ranges` (sorted char ranges) as it is drawn.
+pub struct StruckOut {
+    pub ranges: Vec<Range<usize>>,
+    pub style: Style,
+}
+
+impl StruckOut {
+    /// The first char at or after `pos` that is struck out.
+    fn next_from(&self, pos: usize) -> usize {
+        let i = self.ranges.partition_point(|range| range.end <= pos);
+        self.ranges
+            .get(i)
+            .map_or(usize::MAX, |range| range.start.max(pos))
+    }
+}
+
+impl Decoration for StruckOut {
+    fn reset_pos(&mut self, pos: usize) -> usize {
+        self.next_from(pos)
+    }
+
+    fn decorate_grapheme(
+        &mut self,
+        renderer: &mut TextRenderer,
+        grapheme: &FormattedGrapheme,
+    ) -> usize {
+        let pos = grapheme.char_idx;
+        if self.next_from(pos) == pos {
+            // Not the replacement drawn after a match.
+            if !grapheme.is_virtual() {
+                renderer.patch_next_grapheme(self.style);
+            }
+            return pos + 1;
+        }
+        self.next_from(pos)
+    }
 }
 
 /// Draw the panel at the bottom of `area` (the editor area, without the

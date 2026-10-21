@@ -21,6 +21,7 @@
 pub mod install;
 pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
+mod listen;
 mod picker;
 mod popup;
 mod process;
@@ -107,6 +108,7 @@ fn abort_timers(plugin: Option<&str>) {
 fn tear_down(editor: &mut Editor, plugin: &str) {
     process::kill_plugin(plugin);
     abort_timers(Some(plugin));
+    listen::stop_plugin(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
         if !doc.plugin_decorations.is_empty() {
@@ -458,6 +460,7 @@ fn install(
     editor.plugin_statusline.clear();
     editor.panels.clear();
     abort_timers(None);
+    listen::stop_plugin(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -526,6 +529,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-process");
     table.remove("allow-files");
     table.remove("allow-dirs");
+    table.remove("allow-listen");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -534,6 +538,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             process: process_grant(settings, name)?,
             files: file_grant(settings, name)?,
             dirs: allowed_dirs(settings, name)?,
+            listen: allowed_ports(settings, name)?,
         })
     })())
 }
@@ -660,6 +665,28 @@ fn allowed_dirs(settings: &toml::Table, name: &str) -> anyhow::Result<Vec<PathBu
             let dir = helix_stdx::path::expand_tilde(Path::new(dir.as_str().ok_or_else(error)?));
             anyhow::ensure!(dir.is_absolute(), error());
             Ok(helix_stdx::path::canonicalize(dir))
+        })
+        .collect()
+}
+
+/// `allow-listen` for plugin `name`: the ports it may listen on.
+fn allowed_ports(settings: &toml::Table, name: &str) -> anyhow::Result<Vec<u16>> {
+    let Some(value) = settings
+        .get(name)
+        .and_then(|table| table.get("allow-listen"))
+    else {
+        return Ok(Vec::new());
+    };
+    let error = || anyhow::anyhow!("[{name}] allow-listen: expected a list of ports (1-65535)");
+    value
+        .as_array()
+        .ok_or_else(error)?
+        .iter()
+        .map(|port| {
+            port.as_integer()
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port != 0)
+                .ok_or_else(error)
         })
         .collect()
 }
@@ -980,6 +1007,8 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             Action::Kill { plugin, id } => {
                 ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
             }
+            Action::Listen { plugin, id, port } => listen::start(plugin, id, port),
+            Action::StopListen { plugin, id } => listen::stop(&plugin, id),
             Action::ShowPicker {
                 plugin,
                 id,
@@ -2022,6 +2051,17 @@ pub fn describe() -> String {
             .contains(&helix_plugin::Permission::Filesystem)
         {
             out.push_str(&format!("files: {}\n", plugin.files));
+        }
+        if plugin
+            .permissions
+            .contains(&helix_plugin::Permission::Listen)
+        {
+            let ports: Vec<_> = plugin.listen.iter().map(u16::to_string).collect();
+            if ports.is_empty() {
+                out.push_str("listen: not granted\n");
+            } else {
+                out.push_str(&format!("listen: 127.0.0.1 port {}\n", ports.join(", ")));
+            }
         }
         if let Some(keys) = &plugin.keys {
             let mut bound = Vec::new();
