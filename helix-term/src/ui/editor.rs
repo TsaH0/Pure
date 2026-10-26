@@ -1342,7 +1342,7 @@ impl EditorView {
             if self.completion.is_some() {
                 crate::plugins::completion_menu_event(editor, MenuEvent::Closed(Close::Replaced));
             }
-            let menu = completion.menu_state(editor);
+            let menu = completion.menu_state(editor, crate::plugins::reads_menu());
             crate::plugins::completion_menu_event(editor, MenuEvent::Opened(menu.count));
             menu_events::set(Some(menu));
         }
@@ -1358,8 +1358,8 @@ impl EditorView {
         let Some(completion) = &self.completion else {
             return;
         };
-        let menu = completion.menu_state(editor);
-        let before = menu_events::snapshot().map(|menu| menu.count);
+        let menu = completion.menu_state(editor, crate::plugins::reads_menu());
+        let before = menu_events::count();
         if before != Some(menu.count) {
             crate::plugins::completion_menu_event(editor, MenuEvent::Updated(menu.count));
         }

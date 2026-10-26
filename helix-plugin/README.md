@@ -74,6 +74,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
 | [`todos`](examples/todos) | `list`; highlights TODO / FIXME / NOTE, signs, end-of-line notes, a statusline count | – |
 | [`finder`](examples/finder) | `files` (rg), `grep` (live, rg), `branches` (git) | `[finder]` `allow-process = ["rg", "git"]` |
+| [`lens`](examples/lens) | API 0.5: under each Rust function, how often the file uses it; `space L` toggles; a settings schema, `config-change`, a `lens.uses` service | `[lens]` `min-uses = 1`, `scope = "comment"` |
 
 ```toml
 # config.toml
@@ -216,13 +217,13 @@ The versioned WIT files are the complete API reference.
 
 ## API versions and SDK callbacks
 
-Pure accepts `api = "0.1"` to `api = "0.4"` side by side. Existing
-components load without rebuilding. SDK 0.4 generates the 0.4 ABI by
-default; set `api = "0.4"` in the plugin manifest. To rebuild an older
+Pure accepts `api = "0.1"` to `api = "0.5"` side by side. Existing
+components load without rebuilding. SDK 0.5 generates the 0.5 ABI by
+default; set `api = "0.5"` in the plugin manifest. To rebuild an older
 component, select exactly one legacy feature and keep its manifest API:
 
 ```toml
-# For api = "0.3" (api-v0-2 for "0.2", api-v0-1 for "0.1"):
+# For api = "0.4" (api-v0-3 for "0.3", api-v0-2 for "0.2", api-v0-1 for "0.1"):
 helix-plugin-api = { path = "/path/to/helix/helix-plugin/sdk", features = ["api-v0-3"] }
 ```
 
@@ -259,6 +260,67 @@ and callbacks, so events cannot interrupt typing. API 0.1's
 WIT remains at [`wit/v0.1/`](wit/v0.1/), 0.2 at [`wit/v0.2/`](wit/v0.2/)
 and 0.3 at [`wit/v0.3/`](wit/v0.3/). A released version may gain host
 functions (imports: old components don't use them), never exports.
+
+## API 0.5
+
+0.5 adds key callbacks, completion-menu control, filtered subscriptions and
+hooks, structured commands, editor state, services between plugins, floats,
+marks, virtual lines, process sessions, progress, file watches, language
+server requests and settings schemas. The design, with what each feature
+guarantees, is [`docs/plugin-api-0.5.md`](../docs/plugin-api-0.5.md); the
+WIT is [`wit/v0.5/`](wit/v0.5/). [`examples/lens`](examples/lens) uses
+most of it. In the SDK:
+
+```rust,ignore
+use helix_plugin_api::{keymaps, services, subscriptions, KeyOutcome, Mode};
+
+// A key bound to a closure, in the `plugin` layer (your own keys win).
+keymaps::bind(
+    keymaps::binding(Mode::Normal, "space L", "toggle", "Toggle lenses"),
+    |_keys, _count| Ok(KeyOutcome::Handled), // or PassThrough
+)?;
+// Only Rust documents' changes reach the plugin.
+let rust = subscriptions::Filter { language: Some("rust".into()), ..subscriptions::any() };
+subscriptions::subscribe(subscriptions::EventType::DocumentChange, &rust)?;
+// Other plugins call "<this plugin>.uses" with a JSON payload.
+services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.into()))?;
+```
+
+| Interface | What it does | Needs |
+| --- | --- | --- |
+| `keymaps` | bind keys to `on-key` (or closures); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
+| `completion-menu` | the open menu's items and selection; select, next, previous, confirm, abort (drops the preview), close (keeps it); `completion-menu` events say why it closed | – |
+| `subscriptions`, `hooks` | subscribe and unsubscribe at any time, filtered by language, path glob, document or command; `pre-command` and `pre-save` may cancel (and `pre-save` may edit) | – |
+| `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; views and what the UI shows | `run-commands` (and `allow-process` for commands that start programs) |
+| `services` | register from `init`, discover, call with JSON (1 MiB); versions, allowed callers, no cycles, at most four plugins deep; `dependencies` in `plugin.toml` load first | – |
+| `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
+| `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |
+
+**Settings schemas.** Declare settings in `plugin.toml`; the editor checks
+the user's against them before `init` (unknown names, wrong types and
+values out of range are load errors naming the setting) and fills in the
+defaults. Types: `boolean`, `string`, `integer`, `number`, `string-list`,
+`enum` (with `values`).
+
+```toml
+[settings.min-uses]
+type = "integer"
+default = 0
+min = 0
+description = "Only functions used at least this often"
+```
+
+When `:config-reload` finds that only a plugin's settings changed, a plugin
+subscribed to `config-change` gets the new settings (checked, defaults
+filled in) instead of being reloaded. A changed grant, key or `enabled`
+reloads the plugins.
+
+**Diagnosing plugins.** `:plugin-doctor` reports each plugin's state,
+permissions and grants (and permissions asked for but not granted), events,
+subscriptions, keys and their conflicts, services, dependencies, settings
+and call times. `:plugin-trace [plugin] [on|off]` logs every call with its
+time to `:plugin-log`. `:plugin-keys` lists the plugins' key bindings by
+layer.
 
 ## Running programs
 

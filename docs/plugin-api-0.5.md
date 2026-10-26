@@ -1,14 +1,33 @@
 # Plugin API 0.5: evaluation and design
 
 This document evaluates Pure's plugin system against eight capability areas,
-and specifies what API 0.5 adds for each. It is the contract for the 0.5
-implementation; the **Status** column of each table is kept up to date as the
-work lands.
+and specifies what API 0.5 adds for each. It was the contract for the 0.5
+implementation; the status below says what landed and where it differs.
 
 API 0.5 is a new WIT world (`helix-plugin/wit/v0.5`). Released worlds may
 gain imports, never exports, and most of what follows needs new exports
 (key callbacks, hooks, completion and lifecycle events, service calls). 0.5
 contains everything in 0.4. Pure keeps loading 0.1–0.4 components unchanged.
+
+## Status (2026-10-26): all eight areas implemented
+
+Each line names the tests that cover it (host tests in
+`helix-plugin/src/test.rs`, editor tests in `helix-term/tests/test/plugins.rs`).
+
+| Area | Status | Differs from the design below |
+| --- | --- | --- |
+| 1. Keymaps | Done: `keymaps.set/unset/list`, `hooks.on-key`, layers, pass-through, document/language scope, `:plugin-keys` (`api_05_key_bindings_*`, `plugin_key_bindings_*`) | — |
+| 2. Completion | Done: `completion-menu` state and control, lifecycle events with close reasons, `completion-keys` (`plugins_navigate_and_confirm_the_completion_menu`, `aborting_drops_the_preview_and_closing_keeps_it`, `leaving_insert_mode_reports_why_the_menu_closed`, `completion_keys_drive_the_menu`) | `close` keeps the preview, `abort` drops it |
+| 3. Events | Done: filtered subscriptions, pre-command and pre-save hooks, buffer/view enter and leave, plugin-change, config-change, shutdown (`api_05_subscriptions_*`, `api_05_hooks_*`, `pre_command_hooks_*`, `pre_save_hooks_*`, `plugins_hear_about_focus_plugins_and_shutdown`) | — |
+| 4. Commands and state | Done: `commands.list/execute/batch/set-mode`, `state.views/ui` (`api_05_commands_*`, `plugins_run_native_and_typable_commands_with_results`, `plugin_batches_stop_at_the_first_failure`, `plugins_switch_modes_and_see_views_and_ui`) | Commands need `run-commands`, and `allow-process` for those that start programs. `state.ui` is as of the last frame |
+| 5. Services | Done: register/discover/call, callers, versions, cycles and depth, unavailable providers, `dependencies` and `optional-dependencies` (`api_05_services_*`, `api_05_service_chains_*`, `api_05_unavailable_providers_fail_calls`, `api_05_dependencies_load_first`, `plugins_call_each_others_services`) | — |
+| 6. UI | Done: floats, marks, virtual lines, patched highlight and annotation layers (`plugin_floats_*`, `plugin_marks_follow_edits`, `api_05_marks_*`, `plugin_virtual_lines_*`, `plugins_patch_parts_of_decoration_layers`) | Virtual lines go below a line only (Helix's line annotations have no rows above) |
+| 7. Async | Done: sessions, progress, file watching, LSP requests (`plugin_sessions_*`, `plugin_session_input_is_bounded`, `plugin_progress_*`, `plugins_watch_paths_they_may_read`, `plugin_lsp_requests_need_the_grant`) | `lsp` also needs the user's `allow-lsp`; the editor's lifecycle methods (`initialize`, `shutdown`, `exit`, `$/…`) are refused. The statusline shows plugins' text by default now, so progress is visible |
+| 8. Configuration and tooling | Done: settings schemas, `config-change` on `:config-reload`, `:plugin-doctor`, `:plugin-trace`, 0.5 capabilities (`api_05_settings_*`, `api_05_plugins_hear_about_settings_changes`, `api_05_tracing_and_the_doctor_report`, `lens_example_*`, `plugin_settings_schemas_are_checked_at_load`, `plugin_doctor_and_trace_report_what_plugins_do`) | Setting types are `boolean`, `string`, `integer`, `number`, `string-list` and `enum`. A grant, key or `enabled` change reloads the plugins instead. The doctor (not `:plugin-list`) shows settings. Tracing logs each call into the plugin with its time and number of actions, not each host function |
+
+The `lens` example (`helix-plugin/examples/lens`) uses most of it: a
+settings schema, `config-change`, a key bound to a closure, filtered
+subscriptions, virtual lines and a service.
 
 ## Ground rules that apply to every area
 
@@ -247,7 +266,7 @@ None.
 | Windows (splits) | open with hsplit/vsplit | queries (`state.views`), focus events |
 | Floating windows | popups (markdown, no keys), pickers, prompts | **floats**: interactive item lists with keys, focus, size, position |
 | Extmarks | decorations follow edits, but no queryable anchors | **marks**: tracked positions with gravity, queryable |
-| Virtual text | inline annotations, overlays, conceals, line backgrounds | + **virtual lines** above/below a line |
+| Virtual text | inline annotations, overlays, conceals, line backgrounds | + **virtual lines** below a line |
 | Incremental decoration updates | replace a whole layer | + **patch** a range of a layer |
 
 All of these are editor-managed primitives: plugins describe content, the
@@ -295,7 +314,7 @@ components, in-editor integration tests.
 - **Settings schemas** in `plugin.toml`:
   ```toml
   [settings.width]
-  type = "integer"      # string, integer, number, boolean, array, table
+  type = "integer"      # boolean, string, integer, number, string-list, enum
   default = 80
   min = 20
   max = 200

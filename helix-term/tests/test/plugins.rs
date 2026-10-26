@@ -3815,3 +3815,89 @@ async fn plugin_lsp_requests_need_the_grant() -> anyhow::Result<()> {
     assert_error(&app, "\"lsp\"");
     Ok(())
 }
+
+/// The virtual lines on the current document: `(line, text)`.
+fn virtual_rows(app: &Application) -> Vec<(usize, String)> {
+    let doc = helix_view::doc!(app.editor);
+    doc.plugin_decorations
+        .virtual_rows(doc.text().slice(..))
+        .into_iter()
+        .map(|(line, text, _)| (line, text.to_string()))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lens_example_shows_uses_and_follows_settings_changes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("main.rs");
+    std::fs::write(
+        &file,
+        "fn main() {\n    helper();\n    helper();\n}\n\nfn helper() {}\n",
+    )?;
+    let (mut app, _plugins) = app_with_example_on("lens", &file, "");
+    let rows = wait_for(&mut app, |app| {
+        let rows = virtual_rows(app);
+        (rows.len() == 2).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [
+            (0, "    ↳ unused in this file".to_string()),
+            (5, "    ↳ 2 uses".to_string())
+        ]
+    );
+    // The settings change: the plugin hears about it, no reload.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = 1\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert_eq!(virtual_rows(&app), [(5, "    ↳ 2 uses".to_string())]);
+    // Settings the schema refuses are reported, and change nothing.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = \"lots\"\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert_error(&app, "min-uses: expected integer");
+    assert_eq!(virtual_rows(&app).len(), 1);
+    // Its key, bound from init.
+    keys(&mut app, "<space>L").await;
+    assert!(virtual_rows(&app).is_empty());
+    keys(&mut app, "<space>L").await;
+    assert_eq!(virtual_rows(&app).len(), 1);
+    // A changed grant reloads the plugins.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = 1\nallow-lsp = true\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert!(status(&app).0.contains("Plugins reloaded"), "{:?}", status(&app));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_settings_schemas_are_checked_at_load() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("main.rs");
+    std::fs::write(&file, "fn main() {}\n")?;
+    let (app, _plugins) = app_with_example_on("lens", &file, "[lens]\nmin-use = 2\n");
+    assert_error(&app, "unknown setting 'min-use' (the plugin has: enabled, min-uses, scope)");
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_doctor_and_trace_report_what_plugins_do() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""process""#, "");
+    let report = helix_term::plugins::doctor();
+    assert!(report.contains("## testplugin3 1 (API 0.5)"), "{report}");
+    assert!(report.contains("**Not granted:** process (needs allow-process)"), "{report}");
+    keys(&mut app, ":plugin-doctor<ret>").await;
+    keys(&mut app, ":plugin-trace testplugin3<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "Tracing 1 plugin(s): every call and its time go to :plugin-log"
+    );
+    keys(&mut app, ":plugin-run testplugin3/caps<ret>").await;
+    assert!(helix_term::plugins::log_lines("testplugin3")?
+        .iter()
+        .any(|line| line.starts_with("trace: command call, ")));
+    keys(&mut app, ":plugin-trace nope<ret>").await;
+    assert_error(&app, "no such plugin loaded");
+    keys(&mut app, ":plugin-trace off<ret>").await;
+    assert!(status(&app).0.starts_with("Stopped tracing"));
+    Ok(())
+}

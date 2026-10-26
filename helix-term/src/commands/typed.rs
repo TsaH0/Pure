@@ -3102,6 +3102,66 @@ fn plugin_key(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
 
 /// `:plugin-keys`: the plugins' key bindings, their layers and what they
 /// shadow or what shadows them.
+fn plugin_doctor(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let report = crate::plugins::doctor();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let keys = compositor
+                    .find::<ui::EditorView>()
+                    .map(|view| view.keymaps.plugin_report())
+                    .unwrap_or_default();
+                let mut contents = format!("# Plugin doctor\n\n{report}");
+                if !keys.is_empty() {
+                    contents.push_str(&format!(
+                        "## Key bindings and conflicts\n\n```\n{}\n```\n",
+                        keys.join("\n")
+                    ));
+                }
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugin-doctor", contents).auto_close(true);
+                compositor.replace_or_push("plugin-doctor", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn plugin_trace(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    // [plugin] [on|off]
+    let (plugin, on) = match (args.first(), args.get(1)) {
+        (Some("off"), None) => (None, false),
+        (Some("on") | None, None) => (None, true),
+        (Some(plugin), None) => (Some(plugin), true),
+        (Some(plugin), Some("on")) => (Some(plugin), true),
+        (Some(plugin), Some("off")) => (Some(plugin), false),
+        (_, Some(other)) => bail!("expected on or off, not '{other}'"),
+    };
+    let count = crate::plugins::set_trace(plugin, on);
+    if count == 0 {
+        bail!("no such plugin loaded");
+    }
+    let what = if on { "Tracing" } else { "Stopped tracing" };
+    cx.editor.set_status(format!(
+        "{what} {count} plugin(s): every call and its time go to :plugin-log"
+    ));
+    Ok(())
+}
+
 fn plugin_keys(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4721,6 +4781,28 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-doctor",
+        aliases: &[],
+        doc: "Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times.",
+        fun: plugin_doctor,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-trace",
+        aliases: &[],
+        doc: "Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on|off]`.",
+        fun: plugin_trace,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (0, Some(2)),
             ..Signature::DEFAULT
         },
     },

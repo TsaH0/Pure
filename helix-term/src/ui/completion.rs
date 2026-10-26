@@ -473,14 +473,19 @@ impl Completion {
     }
 
     /// The menu as plugins see it.
-    pub fn menu_state(&self, editor: &Editor) -> menu_events::MenuSnapshot {
+    /// The menu as plugins see it; the item labels only when a plugin
+    /// can read them (`with_items`).
+    pub fn menu_state(&self, editor: &Editor, with_items: bool) -> menu_events::MenuSnapshot {
         let menu = self.popup.contents();
         let selected = menu.cursor();
         menu_events::MenuSnapshot {
-            items: menu
-                .shown(menu_events::MAX_ITEMS)
-                .map(|item| item.label().to_string())
-                .collect(),
+            items: if with_items {
+                menu.shown(menu_events::MAX_ITEMS)
+                    .map(|item| item.label().to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            },
             count: menu.len() as u32,
             selected: selected.map(|i| i as u32),
             previewing: selected.is_some()
@@ -570,6 +575,16 @@ pub mod menu_events {
     /// The open menu, as of the last change.
     pub fn snapshot() -> Option<MenuSnapshot> {
         MENU.lock().clone()
+    }
+
+    /// Whether the menu is open (without copying it).
+    pub fn is_open() -> bool {
+        MENU.lock().is_some()
+    }
+
+    /// How many items the open menu has.
+    pub fn count() -> Option<u32> {
+        MENU.lock().as_ref().map(|menu| menu.count)
     }
 
     pub(crate) fn set(menu: Option<MenuSnapshot>) {

@@ -80,6 +80,9 @@ runtime_local! {
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
     /// Whether a plugin may read registers, so snapshots include them.
     static WANTS_REGISTERS: AtomicBool = AtomicBool::new(false);
+    /// Whether an API 0.5 plugin is loaded (it can read the completion
+    /// menu's items and `state.ui`).
+    static HAS_V05: AtomicBool = AtomicBool::new(false);
     /// Completion requests waiting for a plugin's answer: `(plugin, id)`.
     static COMPLETIONS: Mutex<Vec<(String, u32, tokio::sync::oneshot::Sender<Vec<PluginCompletion>>)>> = Mutex::new(Vec::new());
     /// A background load is running: directories wait for it.
@@ -290,7 +293,10 @@ fn finish_hook(
 /// themselves aren't hooked.
 pub fn pre_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) -> Result<(), String> {
     use helix_plugin::v05::SubscriptionEvent;
-    if !wants2(SubscriptionEvent::PreCommand) || APPLYING.load(Ordering::Relaxed) > 0 {
+    if !wants2(SubscriptionEvent::PreCommand)
+        || APPLYING.load(Ordering::Relaxed) > 0
+        || !with_host(|host| host.hooks_command(command)).unwrap_or(false)
+    {
         return Ok(());
     }
     let snapshot = snapshot(editor);
@@ -716,6 +722,7 @@ fn install(
         host.as_ref().is_some_and(|host| host.wants_registers()),
         Ordering::Relaxed,
     );
+    HAS_V05.store(host.as_ref().is_some_and(has_v05), Ordering::Relaxed);
     clear_plugin_diagnostics(editor);
     COMPLETIONS.lock().clear();
     *MARKS.lock() = host.as_ref().map(PluginHost::marks);
@@ -756,6 +763,84 @@ pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> an
     let settings: toml::Table = toml::from_str(settings)?;
     load_from(editor, dir, &settings);
     Ok(())
+}
+
+/// `:config-reload`: read `plugins.toml` again and apply what changed.
+pub fn config_reloaded(editor: &mut Editor) {
+    let (settings, error) = read_settings();
+    match error {
+        Some(err) => editor.set_error(err.to_string()),
+        None => settings_changed(editor, &settings),
+    }
+}
+
+/// The user's plugin settings are now `settings`: plugins whose own
+/// settings changed get a `config-change` event; if what a plugin is
+/// granted (or which plugins are enabled) changed, they are all reloaded.
+pub fn settings_changed(editor: &mut Editor, settings: &toml::Table) {
+    let Some((dir, old)) = LOADED.lock().clone() else {
+        return;
+    };
+    if &old == settings {
+        return;
+    }
+    // Grants, keys and `enabled` decide what is loaded and allowed.
+    let fixed = |table: &toml::Table| -> std::collections::BTreeMap<String, toml::Value> {
+        table
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    toml::Value::Table(table) => toml::Value::Table(
+                        table
+                            .iter()
+                            .filter(|(key, _)| {
+                                key.starts_with("allow-") || *key == "enabled" || *key == "keys"
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect(),
+                    ),
+                    other => other.clone(),
+                };
+                (name.clone(), value)
+            })
+            .filter(|(_, value)| value.as_table().is_none_or(|table| !table.is_empty()))
+            .collect()
+    };
+    if fixed(&old) != fixed(settings) {
+        load_from(editor, &dir, settings);
+        editor.set_status("Plugins reloaded: their permissions or keys changed");
+        return;
+    }
+    *LOADED.lock() = Some((dir, settings.clone()));
+    let names: Vec<String> = with_host(|host| {
+        host.plugins()
+            .iter()
+            .map(|plugin| plugin.name().to_string())
+            .collect()
+    })
+    .unwrap_or_default();
+    for name in names {
+        let Some(Ok(plugin_settings)) = plugin_settings(settings, &name) else {
+            continue;
+        };
+        let snapshot = snapshot(editor);
+        match with_host(|host| host.set_config(&name, &plugin_settings.config, &snapshot)) {
+            Some(Ok(Some(actions))) => apply(editor, None, actions),
+            Some(Err(err)) => editor.set_error(format!("{err:#}")),
+            _ => {}
+        }
+    }
+    refresh_wanted(editor);
+}
+
+/// The report of `:plugin-doctor`.
+pub fn doctor() -> String {
+    with_host(|host| host.doctor()).unwrap_or_else(|| "No plugins are loaded.".into())
+}
+
+/// Trace `plugin`'s calls (or all plugins'), or stop: how many plugins.
+pub fn set_trace(plugin: Option<&str>, on: bool) -> usize {
+    with_host(|host| host.set_trace(plugin, on)).unwrap_or(0)
 }
 
 /// The settings for plugin `name`, or `None` if it is disabled.
@@ -1048,8 +1133,22 @@ struct UiFlags {
     pending: Vec<helix_view::input::KeyEvent>,
 }
 
+fn has_v05(host: &PluginHost) -> bool {
+    host.plugins()
+        .iter()
+        .any(|p| p.disabled().is_none() && p.manifest().at_least_0_5())
+}
+
+/// Whether a plugin can read the completion menu's items.
+pub fn reads_menu() -> bool {
+    HAS_V05.load(Ordering::Relaxed)
+}
+
 /// The compositor's layers, each frame.
 pub fn set_ui_layers(layers: impl Iterator<Item = &'static str>) {
+    if !HAS_V05.load(Ordering::Relaxed) {
+        return;
+    }
     let (mut prompt, mut picker, mut popup) = (false, false, false);
     for layer in layers {
         prompt |= layer.contains("ui::prompt::Prompt");
@@ -1062,6 +1161,9 @@ pub fn set_ui_layers(layers: impl Iterator<Item = &'static str>) {
 
 /// The keys typed so far of a sequence, each frame.
 pub fn set_pending_keys(keys: &[helix_view::input::KeyEvent]) {
+    if !HAS_V05.load(Ordering::Relaxed) {
+        return;
+    }
     let mut ui = UI.lock();
     if ui.pending != keys {
         ui.pending = keys.to_vec();
@@ -1095,7 +1197,7 @@ fn views_and_ui(editor: &Editor) -> (Vec<helix_plugin::v05::ViewInfo>, helix_plu
     let pending: Vec<String> = flags.pending.iter().map(|key| key.to_string()).collect();
     let ui = helix_plugin::v05::UiState {
         mode: plugin_mode(editor.mode()),
-        completion_menu: crate::ui::completion::menu_events::snapshot().is_some(),
+        completion_menu: crate::ui::completion::menu_events::is_open(),
         prompt: flags.prompt,
         picker: flags.picker,
         popup: flags.popup,
@@ -2659,6 +2761,7 @@ fn refresh_wanted(editor: &mut Editor) {
         with_host(|host| host.wants_registers()).unwrap_or(false),
         Ordering::Relaxed,
     );
+    HAS_V05.store(with_host(|host| has_v05(host)).unwrap_or(false), Ordering::Relaxed);
     for plugin in disabled {
         tear_down(editor, &plugin);
     }

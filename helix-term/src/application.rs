@@ -522,6 +522,8 @@ impl Application {
         match refresh_config() {
             Ok(_) => {
                 self.editor.set_status("Config refreshed");
+                // Plugins' settings may have changed too.
+                crate::plugins::config_reloaded(&mut self.editor);
             }
             Err(err) => {
                 self.editor.set_error(err.to_string());

@@ -5126,3 +5126,126 @@ fn api_05_marks_move_with_edits_and_go_with_their_text() {
     marks.remove_plugin("p");
     assert!(marks.set("p", doc, 0, v05::Gravity::Before).is_ok());
 }
+
+const SCHEMA: &str = r#"
+[settings.flags]
+type = "string"
+default = ""
+[settings.width]
+type = "integer"
+default = 10
+min = 1
+max = 100
+description = "Columns"
+[settings.mode]
+type = "enum"
+values = ["fast", "slow"]
+default = "fast"
+[settings.tags]
+type = "string-list"
+"#;
+
+/// testplugin3 with `SCHEMA`, loaded with `config` (JSON).
+fn schema_host(config: &str) -> (PluginHost, anyhow::Result<Vec<Action>>, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(root.path(), "testplugin3", &fixture("tests/fixtures/testplugin3.wasm"), ALL);
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(&path, format!("{manifest}{SCHEMA}")).unwrap();
+    let loaded = host.load_with(&dir, PluginSettings::new(config));
+    (host, loaded, root)
+}
+
+#[test]
+fn api_05_settings_are_checked_against_the_schema() {
+    // Defaults fill in what the user didn't set.
+    let (mut host, loaded, _root) = schema_host(r#"{"width": 20}"#);
+    loaded.unwrap();
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_str(statuses(&actions)[0].strip_prefix("config:").unwrap()).unwrap();
+    assert_eq!(
+        config,
+        serde_json::json!({"flags": "", "width": 20, "mode": "fast"})
+    );
+    for (config, error) in [
+        (r#"{"widht": 20}"#, "unknown setting 'widht' (the plugin has: flags, mode, tags, width)"),
+        (r#"{"width": "wide"}"#, "width: expected integer"),
+        (r#"{"width": 2.5}"#, "width: expected integer"),
+        (r#"{"width": 500}"#, "width: 500 is outside 1..=100"),
+        (r#"{"mode": "medium"}"#, "mode: 'medium' is not one of fast, slow"),
+        (r#"{"tags": ["a", 1]}"#, "tags: expected string-list"),
+    ] {
+        let (_, loaded, _root) = schema_host(config);
+        let err = format!("{:#}", loaded.unwrap_err());
+        assert!(err.contains(error), "{config}: {err}");
+    }
+    // A schema whose default doesn't fit is the plugin's error.
+    let err = Manifest::parse(
+        "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.n]\ntype = \"integer\"\ndefault = \"x\"\n",
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("setting 'n': default: expected integer"), "{err:#}");
+    let err = Manifest::parse(
+        "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.e]\ntype = \"enum\"\n",
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("an enum needs values"), "{err:#}");
+}
+
+#[test]
+fn api_05_plugins_hear_about_settings_changes() {
+    let (mut host, loaded, _root) = schema_host(r#"{"flags": "subscribe-config"}"#);
+    loaded.unwrap();
+    let snap = snapshot("text\n", 0, 0);
+    // Unchanged (after defaults): nothing.
+    let same = r#"{"flags": "subscribe-config", "width": 10}"#;
+    assert!(host.set_config("testplugin3", same, &snap).unwrap().is_none());
+    let changed = r#"{"flags": "subscribe-config", "width": 30}"#;
+    assert!(host.set_config("testplugin3", changed, &snap).unwrap().is_some());
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    assert!(statuses(&actions)[0].contains(r#""width":30"#), "{actions:?}");
+    // Invalid settings are refused and keep the old ones.
+    let err = host
+        .set_config("testplugin3", r#"{"width": 0}"#, &snap)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("outside 1..=100"));
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    assert!(statuses(&actions)[0].contains(r#""width":30"#));
+    // A plugin that doesn't listen isn't called.
+    let (mut host, loaded, _root) = schema_host("{}");
+    loaded.unwrap();
+    assert!(host
+        .set_config("testplugin3", r#"{"width": 30}"#, &snap)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn api_05_tracing_and_the_doctor_report() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    assert_eq!(host.set_trace(Some("nope"), true), 0);
+    assert_eq!(host.set_trace(Some("testplugin3"), true), 1);
+    v5_run(&mut host, "bind", &["plugin", "go", "normal", "space", "g"]).unwrap();
+    let log = host.log_lines("testplugin3").unwrap();
+    let trace = log.iter().find(|line| line.starts_with("trace: command call, ")).unwrap();
+    assert!(trace.ends_with(" actions"), "{trace}");
+    host.set_trace(None, false);
+    let before = host.log_lines("testplugin3").unwrap().len();
+    v5_run(&mut host, "caps", &[]).unwrap();
+    assert_eq!(host.log_lines("testplugin3").unwrap().len(), before);
+    let report = host.doctor();
+    for part in [
+        "## testplugin3 1.0.0 (API 0.5)",
+        "Running.",
+        "- Permissions: read-buffers, edit-buffers, open-files, run-commands",
+        "- Granted in plugins.toml: none",
+        "`space g` → go (Plugin)",
+        "- Calls: ",
+    ] {
+        assert!(report.contains(part), "{part} not in:\n{report}");
+    }
+}

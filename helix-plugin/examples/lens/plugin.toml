@@ -1,0 +1,23 @@
+name = "lens"
+version = "0.1.0"
+api = "0.5"
+description = "Under each Rust function, how often the file uses it (a code lens)"
+permissions = ["read-buffers"]
+wasm = "plugin.wasm"
+
+# Checked when the plugin loads; set them under [lens] in plugins.toml.
+[settings.enabled]
+type = "boolean"
+default = true
+description = "Show the lenses (space L toggles them)"
+
+[settings.min-uses]
+type = "integer"
+default = 0
+min = 0
+description = "Only functions used at least this often"
+
+[settings.scope]
+type = "string"
+default = "comment"
+description = "How the lenses look (a theme scope)"

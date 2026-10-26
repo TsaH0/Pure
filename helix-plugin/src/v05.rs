@@ -1648,6 +1648,14 @@ impl crate::PluginHost {
 
     /// Ask the plugins that subscribed to `pre-command` for `command`, in
     /// load order, until one cancels it.
+    /// Whether a plugin hooks `command` (checked before making a
+    /// snapshot for [`Self::pre_command`]).
+    pub fn hooks_command(&self, command: &str) -> bool {
+        self.plugins
+            .iter()
+            .any(|p| p.wants2(SubscriptionEvent::PreCommand, None, Some(command)))
+    }
+
     pub fn pre_command(&mut self, command: &str, snapshot: &crate::Snapshot) -> HookResult {
         let names: Vec<String> = self
             .plugins
@@ -1845,5 +1853,174 @@ impl crate::PluginHost {
                 },
             )
             .map(|((), actions)| actions)
+    }
+}
+
+impl crate::PluginHost {
+    /// Log every call of `plugin` (or of all plugins) with its time, or
+    /// stop. Returns how many plugins it applied to.
+    pub fn set_trace(&mut self, plugin: Option<&str>, on: bool) -> usize {
+        let mut count = 0;
+        for p in &mut self.plugins {
+            if plugin.is_none_or(|plugin| p.manifest.name == plugin) {
+                p.trace = on;
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// The user changed `plugin`'s settings (`config`, JSON): check them
+    /// against its schema and tell it (`config-change`) if they differ.
+    /// `Ok(None)`: unchanged, or the plugin doesn't listen.
+    pub fn set_config(
+        &mut self,
+        plugin: &str,
+        config: &str,
+        snapshot: &crate::Snapshot,
+    ) -> anyhow::Result<Option<Vec<crate::Action>>> {
+        let Some(p) = self.plugins.iter_mut().find(|p| p.manifest.name == plugin) else {
+            return Ok(None);
+        };
+        let config = crate::settings::apply(plugin, &p.manifest.settings, config)?;
+        if config == p.config {
+            return Ok(None);
+        }
+        p.config = config.clone();
+        if !p.wants2(SubscriptionEvent::ConfigChange, None, None) {
+            return Ok(None);
+        }
+        self.dispatch2_to(plugin, &Event2::ConfigChange(config), snapshot)
+            .transpose()
+    }
+
+    /// A report on every plugin for `:plugin-doctor` (Markdown).
+    pub fn doctor(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        if self.plugins.is_empty() {
+            return "No plugins are loaded.".into();
+        }
+        for p in &self.plugins {
+            let state = p.store.data();
+            let m = &p.manifest;
+            let _ = writeln!(out, "## {} {} (API {})\n", m.name, m.version, m.api);
+            match &p.disabled {
+                Some(reason) => {
+                    let _ = writeln!(out, "**Disabled:** {reason}\n");
+                }
+                None => {
+                    let _ = writeln!(out, "Running.\n");
+                }
+            }
+            let permissions: Vec<&str> = m.permissions.iter().map(|p| p.as_str()).collect();
+            let _ = writeln!(out, "- Permissions: {}", list(&permissions));
+            let mut grants = Vec::new();
+            match &state.process {
+                crate::ProcessGrant::None => {}
+                crate::ProcessGrant::Any => grants.push("allow-process = true".to_string()),
+                crate::ProcessGrant::Only(programs) => {
+                    grants.push(format!("allow-process = {programs:?}"))
+                }
+            }
+            if state.files != crate::FileGrant::None {
+                grants.push(format!("allow-files: {}", state.files));
+            }
+            if !state.listen.is_empty() {
+                grants.push(format!("allow-listen = {:?}", state.listen));
+            }
+            if state.v05.key_override {
+                grants.push("allow-key-override".into());
+            }
+            if state.v05.lsp {
+                grants.push("allow-lsp".into());
+            }
+            let _ = writeln!(out, "- Granted in plugins.toml: {}", list(&grants));
+            // Asked for but not granted: why calls fail.
+            let mut missing = Vec::new();
+            for (permission, granted, setting) in [
+                (crate::Permission::Process, state.process != crate::ProcessGrant::None, "allow-process"),
+                (crate::Permission::Filesystem, state.files != crate::FileGrant::None, "allow-files"),
+                (crate::Permission::Listen, !state.listen.is_empty(), "allow-listen"),
+                (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
+            ] {
+                if m.permissions.contains(&permission) && !granted {
+                    missing.push(format!("{} (needs {setting})", permission.as_str()));
+                }
+            }
+            if !missing.is_empty() {
+                let _ = writeln!(out, "- **Not granted:** {}", missing.join(", "));
+            }
+            let commands: Vec<&str> = p.commands.iter().map(|c| c.name.as_str()).collect();
+            let _ = writeln!(out, "- Commands: {}", list(&commands));
+            let events: Vec<String> = p.events.iter().map(|e| format!("{e:?}")).collect();
+            let subscriptions: Vec<String> = state
+                .v05
+                .subscriptions
+                .iter()
+                .map(|s| format!("{:?}", s.event))
+                .collect();
+            let _ = writeln!(out, "- Events: {}", list(&events));
+            if m.at_least_0_5() {
+                let _ = writeln!(out, "- Subscriptions: {}", list(&subscriptions));
+                let keys: Vec<String> = state
+                    .v05
+                    .key_bindings
+                    .iter()
+                    .map(|b| format!("{:?} `{}` → {} ({:?})", b.mode, b.keys, b.name, b.layer))
+                    .collect();
+                let _ = writeln!(out, "- Key bindings: {}", list(&keys));
+                let services: Vec<String> = state
+                    .v05
+                    .own_services
+                    .iter()
+                    .map(|s| s.info())
+                    .map(|s| format!("{}.{} {}", s.plugin, s.name, s.version))
+                    .collect();
+                let _ = writeln!(out, "- Services: {}", list(&services));
+            }
+            if !m.dependencies.is_empty() || !m.optional_dependencies.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "- Depends on: {} (optional: {})",
+                    list(&m.dependencies),
+                    list(&m.optional_dependencies)
+                );
+            }
+            if !m.settings.is_empty() {
+                let _ = writeln!(out, "- Settings (now `{}`):", p.config);
+                for (key, spec) in &m.settings {
+                    let default = spec
+                        .default
+                        .as_ref()
+                        .map_or(String::new(), |d| format!(", default {d}"));
+                    let _ = writeln!(
+                        out,
+                        "  - `{key}`: {}{default}. {}",
+                        spec.kind.as_str(),
+                        spec.description
+                    );
+                }
+            }
+            let timing = p.timing;
+            let _ = writeln!(
+                out,
+                "- Calls: {}, {:.1} ms in all, slowest {:.2} ms{}",
+                timing.calls,
+                timing.total.as_secs_f64() * 1000.0,
+                timing.slowest.as_secs_f64() * 1000.0,
+                if p.trace { " (tracing)" } else { "" }
+            );
+            let _ = writeln!(out);
+        }
+        out
+    }
+}
+
+fn list(items: &[impl AsRef<str>]) -> String {
+    if items.is_empty() {
+        "none".into()
+    } else {
+        items.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(", ")
     }
 }

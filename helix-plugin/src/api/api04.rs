@@ -135,7 +135,12 @@ macro_rules! v04_adapters {
 
         impl $w::helix::plugin::requests::Host for State {
             fn capabilities(&mut self) -> Vec<String> {
-                crate::CAPABILITIES.iter().map(|c| c.to_string()).collect()
+                let v05 = stringify!($w) == "v0_5";
+                crate::CAPABILITIES
+                    .iter()
+                    .chain(if v05 { crate::CAPABILITIES_05 } else { &[] })
+                    .map(|c| c.to_string())
+                    .collect()
             }
             fn cancel(&mut self, id: u32) {
                 State::cancel_request(self, id)

@@ -30,6 +30,7 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+pub mod settings;
 pub mod v05;
 
 use api::{v0_1, v0_2, v0_3, v0_4, v0_5, Instance};
@@ -325,6 +326,26 @@ pub const CAPABILITIES: &[&str] = &[
     "listen",
 ];
 
+/// What API 0.5 adds, for plugins built for it (also in `capabilities`).
+pub const CAPABILITIES_05: &[&str] = &[
+    "keymaps",
+    "completion-menu",
+    "subscriptions",
+    "hooks",
+    "commands",
+    "state",
+    "services",
+    "floats",
+    "marks",
+    "virtual-lines",
+    "patch-decorations",
+    "sessions",
+    "progress",
+    "watch",
+    "lsp",
+    "settings-schema",
+];
+
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
 /// Longest statusline segment, in chars.
@@ -372,6 +393,10 @@ pub struct Manifest {
     /// Plugins that load first when they are there.
     #[serde(default)]
     pub optional_dependencies: Vec<String>,
+    /// The settings the plugin takes (`[settings.<name>]`): the user's are
+    /// checked against them.
+    #[serde(default)]
+    pub settings: settings::Schema,
 }
 
 fn default_wasm() -> PathBuf {
@@ -391,6 +416,8 @@ impl Manifest {
 
     pub fn parse(source: &str) -> anyhow::Result<Self> {
         let manifest: Manifest = toml::from_str(source)?;
+        settings::check_schema(&manifest.settings)
+            .with_context(|| format!("plugin '{}'", manifest.name))?;
         if !is_valid_name(&manifest.name) {
             bail!(
                 "invalid plugin name '{}': use lowercase letters, digits, '-' and '_'",
@@ -875,6 +902,15 @@ enum CallContext {
 }
 
 impl CallContext {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Command => "command",
+            Self::Event => "event",
+            Self::Callback => "callback",
+        }
+    }
+
     fn allows_ui(self) -> bool {
         matches!(self, Self::Command | Self::Callback)
     }
@@ -2302,6 +2338,10 @@ pub struct Plugin {
     worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
     /// How long its calls took.
     timing: CallTiming,
+    /// Its settings as it was given them (JSON, defaults filled in).
+    config: String,
+    /// Log every call with its time (`:plugin-trace`).
+    trace: bool,
 }
 
 /// Calls to a plugin and their time, for `:plugin-list`.
@@ -2461,6 +2501,17 @@ impl Plugin {
         let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
         drop(busy);
         let took = started.elapsed();
+        if self.trace {
+            let state = self.store.data_mut();
+            let message = format!(
+                "trace: {} call, {:.3} ms, {} actions{}",
+                context.as_str(),
+                took.as_secs_f64() * 1000.0,
+                state.actions.len(),
+                if result.is_err() { ", failed" } else { "" }
+            );
+            state.log(message);
+        }
         self.timing.calls += 1;
         self.timing.total += took;
         self.timing.slowest = self.timing.slowest.max(took);
@@ -2911,6 +2962,7 @@ impl PluginHost {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .remove_plugin(&name);
+        let config = settings::apply(&name, &manifest.settings, &settings.config)?;
         for dependency in &manifest.dependencies {
             if !self
                 .plugins
@@ -3012,8 +3064,9 @@ impl PluginHost {
             component: component.clone(),
             worker: None,
             timing: CallTiming::default(),
+            config: config.clone(),
+            trace: false,
         };
-        let config = settings.config;
         let (registration, actions) = plugin.call(
             Snapshot::default(),
             CallContext::Init,

@@ -16,6 +16,8 @@ thread_local! {
     /// Hooks answer `cancel` while set.
     static CANCEL_COMMANDS: Cell<bool> = const { Cell::new(false) };
     static CANCEL_SAVES: Cell<bool> = const { Cell::new(false) };
+    /// The settings from `init` (or the last config change).
+    static CONFIG: RefCell<String> = const { RefCell::new(String::new()) };
 }
 fn item(text: &str) -> helix::plugin::ui::Item {
     helix::plugin::ui::Item {
@@ -82,6 +84,17 @@ fn bind(args: &[String]) -> Result<(), String> {
 struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn init(config: String) -> Result<types::Registration, String> {
+        CONFIG.with_borrow_mut(|c| *c = config.clone());
+        if config.contains("subscribe-config") {
+            use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+            let filter = Filter {
+                language: None,
+                path_glob: None,
+                document: None,
+                commands: Vec::new(),
+            };
+            subscribe(EventType::ConfigChange, &filter)?;
+        }
         if config.contains("subscribe-plugins") {
             use helix::plugin::subscriptions::{subscribe, EventType, Filter};
             let filter = Filter {
@@ -180,6 +193,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "watch",
                 "lsp-servers",
                 "lsp-request",
+                "config",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -742,6 +756,10 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("lsp:{id}"));
                 Ok(())
             }
+            "config" => {
+                host::set_status(&format!("config:{}", CONFIG.with_borrow(|c| c.clone())));
+                Ok(())
+            }
             "float-close" => {
                 helix::plugin::floats::close();
                 Ok(())
@@ -1106,6 +1124,9 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
 }
 impl exports::helix::plugin::events2::Guest for TestPlugin {
     fn on_event(event: exports::helix::plugin::events2::Event) {
+        if let exports::helix::plugin::events2::Event::ConfigChange(config) = &event {
+            CONFIG.with_borrow_mut(|c| *c = config.clone());
+        }
         record(format!("e2:{event:?}"));
     }
 }

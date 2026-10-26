@@ -75,11 +75,25 @@ pub fn pre_save(
 
 pub fn check_focus(_editor: &Editor) {}
 
+pub fn reads_menu() -> bool {
+    false
+}
+
 pub fn set_ui_layers(_layers: impl Iterator<Item = &'static str>) {}
 
 pub fn set_pending_keys(_keys: &[helix_view::input::KeyEvent]) {}
 
 pub fn shutdown(_editor: &mut Editor) {}
+
+pub fn config_reloaded(_editor: &mut Editor) {}
+
+pub fn doctor() -> String {
+    "Plugins are not built into this Pure.".into()
+}
+
+pub fn set_trace(_plugin: Option<&str>, _on: bool) -> usize {
+    0
+}
 
 pub fn key(
     _editor: &mut Editor,

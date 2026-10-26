@@ -257,7 +257,7 @@ pub(super) fn register_hooks(_handlers: &Handlers) {
                 .completions
                 .event(CompletionEvent::Cancel);
             use crate::ui::completion::menu_events;
-            if menu_events::snapshot().is_some() {
+            if menu_events::is_open() {
                 menu_events::set_close_reason(menu_events::Close::ModeChange);
             }
             clear_completions(event.cx);

@@ -4,7 +4,8 @@ import glob, json, os, pty, re, select, statistics, sys, threading, time
 
 SP = os.path.dirname(os.path.abspath(__file__))
 FILE = os.path.join(SP, "work", "big.rs")
-CFG = os.path.join(os.path.dirname(SP), "bench-cfg")
+# Another config dir (plugins installed, say) with BENCH_CFG.
+CFG = os.environ.get("BENCH_CFG", os.path.join(os.path.dirname(SP), "bench-cfg"))
 ESC = b"\x1b"
 
 

@@ -168,7 +168,19 @@ allow-dirs = ["~"]               # more directories than the workspace
 
 [competitest]
 allow-listen = [27121]           # local ports it may receive requests on
+
+[my-keys]
+allow-key-override = true        # its keys may take precedence over yours
+
+[my-lsp-tool]
+allow-lsp = true                 # it may send requests to language servers
 ```
+
+Plugins that declare their settings have them checked when they load: a
+misspelled name or a wrong type is an error that names the setting. After
+you change only a plugin's settings, `:config-reload` passes them on
+without reloading it; changing what it is allowed (`allow-…`), its keys or
+`enabled` reloads the plugins.
 
 `allow-listen` lets a plugin receive requests from programs on your
 machine, such as the Competitive Companion browser extension. It listens
@@ -184,3 +196,9 @@ A plugin that runs editor commands can only run those that start programs
 A plugin that crashes, takes too long (2 s for a command) or uses too much
 memory (256 MiB) is disabled until `:plugin-reload`; the editor keeps
 running.
+
+When a plugin misbehaves, `:plugin-doctor` shows each plugin's state, what
+it asked for and what you granted (and what is missing), its keys and
+their conflicts, its settings and how long its calls take.
+`:plugin-trace <plugin>` logs each of its calls with its time (see
+`:plugin-log`); `:plugin-trace off` stops.
