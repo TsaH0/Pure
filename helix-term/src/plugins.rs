@@ -70,6 +70,8 @@ runtime_local! {
     static WANTED2: AtomicU32 = AtomicU32::new(0);
     /// The focused view and its document, as last reported to plugins.
     static LAST_FOCUS: Mutex<Option<(ViewId, DocumentId)>> = Mutex::new(None);
+    /// The host's marks, moved by every edit (without the host's lock).
+    static MARKS: Mutex<Option<helix_plugin::v05::SharedMarks>> = Mutex::new(None);
     /// What the UI shows (prompt, picker, popup) and the keys typed so far,
     /// for `state.ui`.
     static UI: Mutex<UiFlags> = Mutex::new(UiFlags { prompt: false, picker: false, popup: false, pending: Vec::new() });
@@ -713,6 +715,7 @@ fn install(
     );
     clear_plugin_diagnostics(editor);
     COMPLETIONS.lock().clear();
+    *MARKS.lock() = host.as_ref().map(PluginHost::marks);
     *HOST.lock() = host;
 
     apply(editor, None, actions);
@@ -735,6 +738,7 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     process::kill_all();
     GENERATION.fetch_add(1, Ordering::Relaxed);
     *HOST.lock() = None;
+    *MARKS.lock() = None;
     *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
     let (host, actions, errors) = build_host(dir, settings);
     install(editor, host, actions, errors);
@@ -1725,6 +1729,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     helix_plugin::Decorations::Conceals(conceals) => {
                         store.set_conceals(layer, conceals, len)
                     }
+                    helix_plugin::Decorations::VirtualLines(lines) => {
+                        store.set_virtual_lines(layer, lines, len)
+                    }
+                    helix_plugin::Decorations::PatchHighlights(range, highlights) => {
+                        store.patch_highlights(layer, range, highlights, len)
+                    }
+                    helix_plugin::Decorations::PatchAnnotations(range, annotations) => {
+                        store.patch_annotations(layer, range, annotations, len)
+                    }
                     helix_plugin::Decorations::RawOnCursorLine(raw) => {
                         store.set_raw_on_cursor_line(layer, raw)
                     }
@@ -2499,12 +2512,24 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
+        if let Some(marks) = &*MARKS.lock() {
+            marks
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .map(plugin_doc_id(event.doc.id()), event.changes);
+        }
         if !event.ghost_transaction && APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::DocumentChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        if let Some(marks) = &*MARKS.lock() {
+            marks
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .close(plugin_doc_id(event.doc.id()));
+        }
         queue(Event::DocumentClose(plugin_doc_id(event.doc.id())));
         Ok(())
     });

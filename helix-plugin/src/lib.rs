@@ -196,6 +196,18 @@ pub enum Decorations {
     RawOnCursorLine(bool),
     /// Not a replacement: the modes the layer is drawn in (empty: all).
     RenderModes(Vec<Mode>),
+    /// `(char position of the line break, text, theme scope)`: rows below
+    /// lines (API 0.5).
+    VirtualLines(Vec<(usize, String, String)>),
+    /// Not a replacement: the highlights starting in the range are replaced
+    /// (API 0.5).
+    PatchHighlights(
+        std::ops::Range<usize>,
+        Vec<(std::ops::Range<usize>, String)>,
+    ),
+    /// Not a replacement: the virtual text in the range is replaced (API
+    /// 0.5).
+    PatchAnnotations(std::ops::Range<usize>, Vec<(usize, String, String)>),
 }
 
 /// Most background tasks a plugin may have at once, and their default time
@@ -2507,6 +2519,8 @@ pub struct PluginHost {
     /// What the editor provides to 0.5 calls (see
     /// [`PluginHost::set_editor_fns`]).
     editor_fns: v05::EditorFns,
+    /// Every plugin's marks (API 0.5), moved by the editor's edits.
+    marks: v05::SharedMarks,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
 }
@@ -2623,6 +2637,7 @@ impl PluginHost {
             data_root: None,
             starts_program: None,
             editor_fns: v05::EditorFns::default(),
+            marks: Default::default(),
             ticker,
             runtime,
         })
@@ -2686,6 +2701,12 @@ impl PluginHost {
 
     /// What the editor provides to API 0.5 calls (key checks, the command
     /// list). Applies to plugins loaded afterwards.
+    /// The marks, for the editor to move with every edit
+    /// ([`v05::Marks::map`]).
+    pub fn marks(&self) -> v05::SharedMarks {
+        self.marks.clone()
+    }
+
     pub fn set_editor_fns(&mut self, fns: v05::EditorFns) {
         self.editor_fns = fns;
         for plugin in &mut self.plugins {
@@ -2848,6 +2869,11 @@ impl PluginHost {
         if self.plugin(&name).is_some() {
             bail!("plugin '{name}' is already loaded");
         }
+        // A reloaded plugin starts without marks.
+        self.marks
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove_plugin(&name);
         for dependency in &manifest.dependencies {
             if !self
                 .plugins
@@ -2898,6 +2924,7 @@ impl PluginHost {
             v05: v05::V05 {
                 key_override: settings.key_override,
                 editor: self.editor_fns,
+                marks: self.marks.clone(),
                 ..Default::default()
             },
             log: Default::default(),

@@ -2,6 +2,7 @@
 //! methods behind the 0.5 imports.
 
 use crate::{DocumentId, Mode, State};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -286,6 +287,8 @@ pub(crate) struct V05 {
     /// While serving a call: the plugins that led to it, first caller
     /// first.
     pub chain: Vec<String>,
+    /// Every plugin's marks (the host's, shared).
+    pub marks: SharedMarks,
 }
 
 impl Default for V05 {
@@ -301,7 +304,164 @@ impl Default for V05 {
             own_services: Vec::new(),
             services: Default::default(),
             chain: Vec::new(),
+            marks: Default::default(),
         }
+    }
+}
+
+/// Most marks per plugin.
+pub const MAX_MARKS: usize = 10_000;
+
+/// Positions plugins track in documents (`marks`), moved by every edit
+/// ([`Marks::map`]).
+#[derive(Debug, Default)]
+pub struct Marks {
+    next: u64,
+    docs: HashMap<DocumentId, Vec<Mark>>,
+    /// Each mark's document.
+    index: HashMap<u64, DocumentId>,
+    per_plugin: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone)]
+struct Mark {
+    id: u64,
+    plugin: Arc<str>,
+    pos: usize,
+    gravity: Gravity,
+}
+
+pub type SharedMarks = Arc<std::sync::Mutex<Marks>>;
+
+impl Marks {
+    /// Follow an edit of `doc`. A mark goes when the text on both sides of
+    /// it is deleted.
+    pub fn map(&mut self, doc: DocumentId, changes: &helix_core::ChangeSet) {
+        let Some(marks) = self.docs.get_mut(&doc) else {
+            return;
+        };
+        let mut deleted = Vec::new();
+        let mut pos = 0;
+        for change in changes.changes() {
+            match change {
+                helix_core::Operation::Retain(n) => pos += n,
+                helix_core::Operation::Delete(n) => {
+                    deleted.push(pos..pos + n);
+                    pos += n;
+                }
+                helix_core::Operation::Insert(_) => {}
+            }
+        }
+        let mut gone = Vec::new();
+        marks.retain_mut(|mark| {
+            let i = deleted.partition_point(|range| range.end <= mark.pos);
+            if deleted.get(i).is_some_and(|range| range.start < mark.pos) {
+                gone.push((mark.id, mark.plugin.clone()));
+                return false;
+            }
+            let assoc = match mark.gravity {
+                Gravity::Before => helix_core::Assoc::Before,
+                Gravity::After => helix_core::Assoc::After,
+            };
+            mark.pos = changes.map_pos(mark.pos, assoc);
+            true
+        });
+        for (id, plugin) in gone {
+            self.forget(id, &plugin);
+        }
+    }
+
+    /// `doc` was closed: its marks go.
+    pub fn close(&mut self, doc: DocumentId) {
+        for mark in self.docs.remove(&doc).unwrap_or_default() {
+            self.forget(mark.id, &mark.plugin);
+        }
+    }
+
+    fn forget(&mut self, id: u64, plugin: &str) {
+        self.index.remove(&id);
+        if let Some(count) = self.per_plugin.get_mut(plugin) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    /// Remove every mark of `plugin` (reloaded).
+    pub(crate) fn remove_plugin(&mut self, plugin: &str) {
+        for marks in self.docs.values_mut() {
+            marks.retain(|mark| &*mark.plugin != plugin);
+        }
+        self.docs.retain(|_, marks| !marks.is_empty());
+        self.index.retain(|_, doc| self.docs.contains_key(doc));
+        let live: std::collections::HashSet<u64> = self
+            .docs
+            .values()
+            .flat_map(|marks| marks.iter().map(|mark| mark.id))
+            .collect();
+        self.index.retain(|id, _| live.contains(id));
+        self.per_plugin.remove(plugin);
+    }
+
+    pub(crate) fn set(
+        &mut self,
+        plugin: &str,
+        doc: DocumentId,
+        pos: usize,
+        gravity: Gravity,
+    ) -> Result<u64, String> {
+        let count = self.per_plugin.entry(plugin.to_string()).or_default();
+        if *count >= MAX_MARKS {
+            return Err(format!("at most {MAX_MARKS} marks"));
+        }
+        *count += 1;
+        self.next += 1;
+        let id = self.next;
+        self.docs.entry(doc).or_default().push(Mark {
+            id,
+            plugin: plugin.into(),
+            pos,
+            gravity,
+        });
+        self.index.insert(id, doc);
+        Ok(id)
+    }
+
+    pub(crate) fn get(&self, plugin: &str, id: u64) -> Option<(DocumentId, usize)> {
+        let doc = *self.index.get(&id)?;
+        self.docs[&doc]
+            .iter()
+            .find(|mark| mark.id == id && &*mark.plugin == plugin)
+            .map(|mark| (doc, mark.pos))
+    }
+
+    pub(crate) fn remove(&mut self, plugin: &str, id: u64) {
+        let Some(&doc) = self.index.get(&id) else {
+            return;
+        };
+        let marks = self.docs.get_mut(&doc).unwrap();
+        let Some(i) = marks
+            .iter()
+            .position(|mark| mark.id == id && &*mark.plugin == plugin)
+        else {
+            return;
+        };
+        marks.swap_remove(i);
+        if marks.is_empty() {
+            self.docs.remove(&doc);
+        }
+        self.forget(id, plugin);
+    }
+
+    pub(crate) fn list(&self, plugin: &str, doc: DocumentId) -> Vec<(u64, u32)> {
+        let mut marks: Vec<(u64, u32)> = self
+            .docs
+            .get(&doc)
+            .into_iter()
+            .flatten()
+            .filter(|mark| &*mark.plugin == plugin)
+            .map(|mark| (mark.id, mark.pos as u32))
+            .collect();
+        marks.sort_by_key(|&(id, pos)| (pos, id));
+        marks
     }
 }
 
@@ -931,48 +1091,130 @@ impl State {
         }
         Ok(())
     }
+    fn marks(&self) -> std::sync::MutexGuard<'_, Marks> {
+        self.v05.marks.lock().unwrap_or_else(|err| err.into_inner())
+    }
     pub(crate) fn set_mark(
         &mut self,
-        _doc: DocumentId,
-        _position: u32,
-        _gravity: Gravity,
+        doc: DocumentId,
+        position: u32,
+        gravity: Gravity,
     ) -> Result<u64, String> {
-        not_yet("marks.set")
+        let len = self.document(doc)?.text.len_chars();
+        if position as usize > len {
+            return Err(format!(
+                "invalid position {position} for a document of {len} chars"
+            ));
+        }
+        let plugin = self.plugin.clone();
+        self.marks().set(&plugin, doc, position as usize, gravity)
     }
-    pub(crate) fn get_mark(&mut self, _id: u64) -> Option<(DocumentId, u32)> {
-        None
+    pub(crate) fn get_mark(&mut self, id: u64) -> Option<(DocumentId, u32)> {
+        self.marks()
+            .get(&self.plugin, id)
+            .map(|(doc, pos)| (doc, pos as u32))
     }
-    pub(crate) fn remove_mark(&mut self, _id: u64) {}
-    pub(crate) fn list_marks(&mut self, _doc: DocumentId) -> Vec<(u64, u32)> {
-        Vec::new()
+    pub(crate) fn remove_mark(&mut self, id: u64) {
+        let plugin = self.plugin.clone();
+        self.marks().remove(&plugin, id);
+    }
+    pub(crate) fn list_marks(&mut self, doc: DocumentId) -> Vec<(u64, u32)> {
+        self.marks().list(&self.plugin, doc)
     }
     pub(crate) fn set_virtual_lines(
         &mut self,
-        _doc: DocumentId,
-        _layer: String,
-        _lines: Vec<crate::PluginVirtualLine>,
+        doc: DocumentId,
+        layer: String,
+        lines: Vec<crate::PluginVirtualLine>,
     ) -> Result<(), String> {
-        not_yet("decorations2.set-virtual-lines")
+        self.need_layer(doc, &layer, lines.len())?;
+        let text = self.document(doc)?.text.slice(..);
+        let mut checked = Vec::with_capacity(lines.len());
+        for line in lines {
+            if line.line >= text.len_lines() {
+                return Err(format!(
+                    "invalid line {} for a document of {} lines",
+                    line.line,
+                    text.len_lines()
+                ));
+            }
+            if line.text.contains(['\n', '\r']) {
+                return Err("a virtual line can't contain line breaks".into());
+            }
+            let line_break = helix_core::line_ending::line_end_char_index(&text, line.line);
+            checked.push((line_break, line.text, line.scope));
+        }
+        self.decorate(doc, layer, crate::Decorations::VirtualLines(checked));
+        Ok(())
+    }
+    /// `from..to` within a document of `len` chars.
+    fn patch_range(from: u32, to: u32, len: usize) -> Result<std::ops::Range<usize>, String> {
+        let (from, to) = (from as usize, to as usize);
+        if from > to || to > len {
+            return Err(format!(
+                "invalid range {from}..{to} for a document of {len} chars"
+            ));
+        }
+        Ok(from..to)
     }
     pub(crate) fn patch_highlights(
         &mut self,
-        _doc: DocumentId,
-        _layer: String,
-        _from: u32,
-        _to: u32,
-        _highlights: Vec<(u32, u32, String)>,
+        doc: DocumentId,
+        layer: String,
+        from: u32,
+        to: u32,
+        highlights: Vec<(u32, u32, String)>,
     ) -> Result<(), String> {
-        not_yet("decorations2.patch-highlights")
+        let len = self.need_layer(doc, &layer, highlights.len())?;
+        let range = Self::patch_range(from, to, len)?;
+        let mut checked = Vec::with_capacity(highlights.len());
+        for (start, end, scope) in highlights {
+            let (start, end) = (start as usize, end as usize);
+            if !range.contains(&start) || end < start || end > len {
+                return Err(format!(
+                    "highlight {start}..{end} doesn't start in {}..{}",
+                    range.start, range.end
+                ));
+            }
+            checked.push((start..end, scope));
+        }
+        self.decorate(
+            doc,
+            layer,
+            crate::Decorations::PatchHighlights(range, checked),
+        );
+        Ok(())
     }
     pub(crate) fn patch_annotations(
         &mut self,
-        _doc: DocumentId,
-        _layer: String,
-        _from: u32,
-        _to: u32,
-        _annotations: Vec<(u32, String, String)>,
+        doc: DocumentId,
+        layer: String,
+        from: u32,
+        to: u32,
+        annotations: Vec<(u32, String, String)>,
     ) -> Result<(), String> {
-        not_yet("decorations2.patch-annotations")
+        let len = self.need_layer(doc, &layer, annotations.len())?;
+        let range = Self::patch_range(from, to, len)?;
+        let mut checked = Vec::with_capacity(annotations.len());
+        for (position, text, scope) in annotations {
+            let position = position as usize;
+            if !(range.contains(&position) || (position == range.end && position == len)) {
+                return Err(format!(
+                    "position {position} isn't in {}..{}",
+                    range.start, range.end
+                ));
+            }
+            if text.contains('\n') {
+                return Err("virtual text can't contain line breaks".into());
+            }
+            checked.push((position, text, scope));
+        }
+        self.decorate(
+            doc,
+            layer,
+            crate::Decorations::PatchAnnotations(range, checked),
+        );
+        Ok(())
     }
     pub(crate) fn start_session(
         &mut self,

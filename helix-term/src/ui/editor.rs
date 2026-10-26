@@ -252,6 +252,11 @@ impl EditorView {
             .diagnostics_handler
             .show_cursorline_diagnostics(doc, view.id);
         let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
+        // Before the diagnostics: their rows come first (as in
+        // `View::text_annotations`).
+        if let Some(lines) = PluginVirtualLines::new(doc, theme) {
+            decorations.add_decoration(lines);
+        }
         decorations.add_decoration(InlineDiagnostics::new(
             doc,
             theme,
@@ -964,7 +969,6 @@ impl EditorView {
         );
     }
 
-    /// Apply the highlighting on the lines where a cursor is active
     /// Plugins' whole-line backgrounds for the visible lines, filling the
     /// text area of the view (not the gutter).
     fn plugin_line_backgrounds(
@@ -2222,5 +2226,86 @@ fn canonicalize_key(key: &mut KeyEvent) {
     } = key
     {
         key.modifiers.remove(KeyModifiers::SHIFT)
+    }
+}
+
+/// Plugins' virtual lines, drawn in the rows `PluginDecorations::virtual_line_rows`
+/// reserves below their lines.
+struct PluginVirtualLines {
+    /// `(the char index of a line's line break, its rows)`, sorted.
+    rows: Vec<(usize, Vec<(String, Style)>)>,
+    next: usize,
+    /// The line whose line break was just drawn.
+    pending: Option<usize>,
+}
+
+impl PluginVirtualLines {
+    fn new(doc: &Document, theme: &Theme) -> Option<Self> {
+        if doc.plugin_decorations.is_empty() {
+            return None;
+        }
+        let text = doc.text().slice(..);
+        let mut rows: Vec<(usize, Vec<(String, Style)>)> = Vec::new();
+        for (line, row, scope) in doc.plugin_decorations.virtual_rows(text) {
+            if line + 1 >= text.len_lines() {
+                continue;
+            }
+            let line_break = helix_core::line_ending::line_end_char_index(&text, line);
+            let style = theme.try_get(scope).unwrap_or_default();
+            match rows.last_mut() {
+                Some((last, rows)) if *last == line_break => rows.push((row.to_string(), style)),
+                _ => rows.push((line_break, vec![(row.to_string(), style)])),
+            }
+        }
+        (!rows.is_empty()).then_some(Self {
+            rows,
+            next: 0,
+            pending: None,
+        })
+    }
+
+    fn next_anchor(&self) -> usize {
+        self.rows.get(self.next).map_or(usize::MAX, |(pos, _)| *pos)
+    }
+}
+
+impl Decoration for PluginVirtualLines {
+    fn reset_pos(&mut self, pos: usize) -> usize {
+        self.next = self.rows.partition_point(|(anchor, _)| *anchor < pos);
+        self.pending = None;
+        self.next_anchor()
+    }
+
+    fn decorate_grapheme(
+        &mut self,
+        _renderer: &mut TextRenderer,
+        _grapheme: &helix_core::doc_formatter::FormattedGrapheme,
+    ) -> usize {
+        // The line break of a line with rows: they follow its last visual
+        // line.
+        self.pending = Some(self.next);
+        self.next += 1;
+        self.next_anchor()
+    }
+
+    fn render_virt_lines(
+        &mut self,
+        renderer: &mut TextRenderer,
+        pos: LinePos,
+        virt_off: helix_core::Position,
+    ) -> helix_core::Position {
+        let Some(i) = self.pending.take() else {
+            return helix_core::Position::new(0, 0);
+        };
+        let rows = &self.rows[i].1;
+        let (x, width) = (renderer.viewport.x, renderer.viewport.width as usize);
+        for (n, (row, style)) in rows.iter().enumerate() {
+            let y = pos.visual_line as usize + virt_off.row + n;
+            if y >= renderer.offset.row + renderer.viewport.height as usize {
+                break;
+            }
+            renderer.set_stringn(x, y as u16, row, width, *style);
+        }
+        helix_core::Position::new(rows.len(), 0)
     }
 }

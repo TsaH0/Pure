@@ -9,8 +9,10 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use helix_core::syntax::OverlayHighlights;
-use helix_core::text_annotations::{Conceal, InlineAnnotation, Overlay, TextAnnotations};
-use helix_core::{Assoc, ChangeSet, RopeSlice};
+use helix_core::text_annotations::{
+    Conceal, InlineAnnotation, LineAnnotation, Overlay, TextAnnotations,
+};
+use helix_core::{Assoc, ChangeSet, Position, RopeSlice};
 
 use crate::document::Mode;
 use crate::graphics::Style;
@@ -42,6 +44,31 @@ impl RenderMode {
 impl Clone for RenderMode {
     fn clone(&self) -> Self {
         Self(AtomicU8::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+/// Rows reserved below lines for plugins' virtual lines: `(the char after
+/// a line break, rows)`, sorted.
+#[derive(Debug, Clone)]
+pub struct VirtualRows {
+    anchors: Vec<(usize, usize)>,
+}
+
+impl LineAnnotation for VirtualRows {
+    fn insert_virtual_lines(
+        &mut self,
+        line_end_char_idx: usize,
+        _line_end_visual_pos: Position,
+        _doc_line: usize,
+    ) -> Position {
+        // Also called where soft wrap breaks a line: never at a line start.
+        match self
+            .anchors
+            .binary_search_by_key(&line_end_char_idx, |(anchor, _)| *anchor)
+        {
+            Ok(i) => Position::new(self.anchors[i].1, 0),
+            Err(_) => Position::new(0, 0),
+        }
     }
 }
 
@@ -81,6 +108,9 @@ pub struct PluginDecorations {
     raw_on_cursor_line: std::collections::BTreeSet<String>,
     /// Layers drawn only in some modes: a mask of [`mode_bit`]s.
     render_modes: BTreeMap<String, u8>,
+    /// Rows of text below lines: `(a char of the line, text, scope)`,
+    /// sorted per layer.
+    virtual_lines: BTreeMap<String, Vec<(usize, String, String)>>,
     mode: RenderMode,
 }
 
@@ -145,6 +175,7 @@ impl PluginDecorations {
             && self.signs.is_empty()
             && self.line_backgrounds.is_empty()
             && self.conceals.is_empty()
+            && self.virtual_lines.is_empty()
     }
 
     /// Whether `layer` is drawn in the current mode.
@@ -377,6 +408,111 @@ impl PluginDecorations {
             .retain(|layer| !layer.starts_with(&prefix));
         self.render_modes
             .retain(|layer, _| !layer.starts_with(&prefix));
+        self.virtual_lines
+            .retain(|layer, _| !layer.starts_with(&prefix));
+    }
+
+    /// Replace `layer`'s virtual lines: `(a char of the line, text,
+    /// scope)`, each a row below that line.
+    pub fn set_virtual_lines(
+        &mut self,
+        layer: String,
+        mut lines: Vec<(usize, String, String)>,
+        len: usize,
+    ) {
+        lines.retain(|(pos, _, _)| *pos <= len);
+        lines.sort_by_key(|(pos, _, _)| *pos);
+        if lines.is_empty() {
+            self.virtual_lines.remove(&layer);
+        } else {
+            self.virtual_lines.insert(layer, lines);
+        }
+    }
+
+    /// Replace the highlights of `layer` that start in `range` with
+    /// `highlights`.
+    pub fn patch_highlights(
+        &mut self,
+        layer: String,
+        range: Range<usize>,
+        highlights: Vec<(Range<usize>, String)>,
+        len: usize,
+    ) {
+        let mut kept = self.highlights.remove(&layer).unwrap_or_default();
+        kept.retain(|(span, _)| !range.contains(&span.start));
+        kept.extend(highlights);
+        self.set_highlights(layer, kept, len);
+    }
+
+    /// Replace the virtual text of `layer` at positions in `range` (or at
+    /// `range.end` when that is the end of the text) with `annotations`.
+    pub fn patch_annotations(
+        &mut self,
+        layer: String,
+        range: Range<usize>,
+        annotations: Vec<(usize, String, String)>,
+        len: usize,
+    ) {
+        let replaced = |pos: usize| range.contains(&pos) || (pos == range.end && pos == len);
+        let mut kept: Vec<(usize, String, String)> = self
+            .annotations
+            .remove(&layer)
+            .map(|layer| {
+                layer
+                    .groups
+                    .into_iter()
+                    .flat_map(|(scope, annotations)| {
+                        annotations
+                            .into_iter()
+                            .map(move |a| (a.char_idx, a.text.to_string(), scope.clone()))
+                    })
+                    .filter(|(pos, _, _)| !replaced(*pos))
+                    .collect()
+            })
+            .unwrap_or_default();
+        kept.extend(annotations);
+        self.set_annotations(layer, kept, len);
+    }
+
+    /// The virtual lines of the shown layers: `(line, text, scope)`, by line
+    /// (layers in name order on the same line).
+    pub fn virtual_rows(&self, text: RopeSlice) -> Vec<(usize, &str, &str)> {
+        let mut rows: Vec<(usize, &str, &str)> = self
+            .virtual_lines
+            .iter()
+            .filter(|(layer, _)| self.shown(layer))
+            .flat_map(|(_, lines)| {
+                lines.iter().map(|(pos, line, scope)| {
+                    let pos = (*pos).min(text.len_chars());
+                    (text.char_to_line(pos), line.as_str(), scope.as_str())
+                })
+            })
+            .collect();
+        // Stable: layers keep their order on a line.
+        rows.sort_by_key(|(line, _, _)| *line);
+        rows
+    }
+
+    /// Room for the virtual lines below their lines, for
+    /// [`TextAnnotations::add_line_annotation`].
+    pub fn virtual_line_rows(&self, text: RopeSlice) -> Option<VirtualRows> {
+        if self.virtual_lines.is_empty() {
+            return None;
+        }
+        let mut anchors: Vec<(usize, usize)> = Vec::new();
+        for (line, _, _) in self.virtual_rows(text) {
+            // Rows go after the line break, before the next line. The last
+            // line has none.
+            if line + 1 >= text.len_lines() {
+                continue;
+            }
+            let anchor = text.line_to_char(line + 1);
+            match anchors.last_mut() {
+                Some((last, rows)) if *last == anchor => *rows += 1,
+                _ => anchors.push((anchor, 1)),
+            }
+        }
+        (!anchors.is_empty()).then_some(VirtualRows { anchors })
     }
 
     /// Follow an edit: `len` is the new text's length.
@@ -446,6 +582,9 @@ impl PluginDecorations {
         }
         for signs in self.signs.values_mut() {
             changes.update_positions(signs.iter_mut().map(|sign| (&mut sign.pos, Assoc::After)));
+        }
+        for lines in self.virtual_lines.values_mut() {
+            changes.update_positions(lines.iter_mut().map(|(pos, _, _)| (pos, Assoc::After)));
         }
     }
 

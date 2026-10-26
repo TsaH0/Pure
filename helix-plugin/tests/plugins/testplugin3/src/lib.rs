@@ -164,6 +164,15 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "call",
                 "discover",
                 "register-late",
+                "mark",
+                "marks",
+                "unmark",
+                "vlines",
+                "patch-hl",
+                "patch-ann",
+                "float",
+                "float-close",
+                "float-selected",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -570,6 +579,113 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 Ok(())
             }
             "register-late" => helix::plugin::services::register("late", "1.0.0", &[]),
+            "mark" => {
+                // mark position before|after
+                use helix::plugin::marks::Gravity;
+                let doc = host::current_document().ok_or("no document")?;
+                let pos = args.first().and_then(|p| p.parse().ok()).ok_or("a position")?;
+                let gravity = match args.get(1).map(String::as_str) {
+                    Some("after") => Gravity::After,
+                    _ => Gravity::Before,
+                };
+                let id = helix::plugin::marks::set(doc, pos, gravity)?;
+                host::set_status(&format!("mark:{id}"));
+                Ok(())
+            }
+            "marks" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let marks = helix::plugin::marks::list(doc)
+                    .iter()
+                    .map(|(id, pos)| format!("{id}@{pos}"))
+                    .collect::<Vec<_>>();
+                let first = args
+                    .first()
+                    .and_then(|id| id.parse().ok())
+                    .map(|id| format!("{:?}", helix::plugin::marks::get(id).map(|(_, pos)| pos)))
+                    .unwrap_or_default();
+                host::set_status(&format!("marks:{}:{first}", marks.join(",")));
+                Ok(())
+            }
+            "unmark" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::marks::remove(id);
+                Ok(())
+            }
+            "vlines" => {
+                // vlines line text [line text...]
+                use helix::plugin::decorations2::VirtualLine;
+                let doc = host::current_document().ok_or("no document")?;
+                let lines = args
+                    .chunks(2)
+                    .map(|pair| VirtualLine {
+                        line: pair[0].parse().unwrap_or(0),
+                        text: pair.get(1).cloned().unwrap_or_default(),
+                        scope: "comment".into(),
+                    })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::set_virtual_lines(doc, "rows", &lines)
+            }
+            "patch-hl" => {
+                // patch-hl from to [start end...]
+                use helix::plugin::decorations::Highlight;
+                let doc = host::current_document().ok_or("no document")?;
+                let n: Vec<u32> = args.iter().filter_map(|a| a.parse().ok()).collect();
+                let highlights = n[2..]
+                    .chunks(2)
+                    .map(|pair| Highlight { from: pair[0], to: pair[1], scope: "error".into() })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::patch_highlights(doc, "hl", n[0], n[1], &highlights)
+            }
+            "patch-ann" => {
+                // patch-ann from to [pos text...]
+                use helix::plugin::decorations::Annotation;
+                let doc = host::current_document().ok_or("no document")?;
+                let (from, to) = (args[0].parse().unwrap_or(0), args[1].parse().unwrap_or(0));
+                let annotations = args[2..]
+                    .chunks(2)
+                    .map(|pair| Annotation {
+                        position: pair[0].parse().unwrap_or(0),
+                        text: pair[1].clone(),
+                        scope: "comment".into(),
+                    })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::patch_annotations(doc, "ann", from, to, &annotations)
+            }
+            "float" => {
+                use helix::plugin::floats::{Float, Position};
+                let items = args
+                    .iter()
+                    .skip(1)
+                    .map(|text| helix::plugin::sidebar::SidebarItem {
+                        text: text.clone(),
+                        scope: String::new(),
+                        depth: 0,
+                        command: Some("float-selected".into()),
+                        args: vec![text.clone()],
+                    })
+                    .collect();
+                helix::plugin::floats::show(&Float {
+                    title: args.first().cloned().unwrap_or_default(),
+                    items,
+                    width: 30,
+                    height: 6,
+                    position: Position::Center,
+                    selected: Some(0),
+                    focus: true,
+                })
+            }
+            "float-close" => {
+                helix::plugin::floats::close();
+                Ok(())
+            }
+            "float-selected" => {
+                host::set_status(&format!(
+                    "float-selected:{:?}:{}",
+                    helix::plugin::floats::selected(),
+                    args.join(",")
+                ));
+                Ok(())
+            }
             "count-commands" => {
                 use helix::plugin::commands::CommandKind;
                 let commands = helix::plugin::commands::list();

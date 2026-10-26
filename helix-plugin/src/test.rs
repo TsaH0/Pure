@@ -5089,3 +5089,37 @@ fn api_05_dependencies_load_first() {
         .iter()
         .any(|name| name.starts_with("cycle") || name.starts_with("needs")));
 }
+
+#[test]
+fn api_05_marks_move_with_edits_and_go_with_their_text() {
+    use helix_core::{Rope, Transaction};
+    let mut marks = v05::Marks::default();
+    let doc = 1;
+    let a = marks.set("p", doc, 2, v05::Gravity::Before).unwrap();
+    let b = marks.set("p", doc, 2, v05::Gravity::After).unwrap();
+    let c = marks.set("p", doc, 5, v05::Gravity::Before).unwrap();
+    let other = marks.set("q", doc, 5, v05::Gravity::Before).unwrap();
+    let text = Rope::from("abcdefgh");
+    // Insert at 2, delete 4..6 (around c).
+    let tx = Transaction::change(&text, [(2, 2, Some("XY".into())), (4, 6, None)].into_iter());
+    marks.map(doc, tx.changes());
+    assert_eq!(marks.get("p", a), Some((doc, 2)));
+    assert_eq!(marks.get("p", b), Some((doc, 4)));
+    assert_eq!(marks.get("p", c), None);
+    assert_eq!(marks.get("q", other), None);
+    // Only a plugin's own marks.
+    assert_eq!(marks.get("q", a), None);
+    assert_eq!(marks.list("p", doc), [(a, 2), (b, 4)]);
+    marks.remove("q", a);
+    assert_eq!(marks.list("p", doc).len(), 2);
+    marks.close(doc);
+    assert!(marks.list("p", doc).is_empty());
+    // Limits are per plugin, and freed marks count no more.
+    for _ in 0..v05::MAX_MARKS {
+        marks.set("p", doc, 0, v05::Gravity::Before).unwrap();
+    }
+    assert!(marks.set("p", doc, 0, v05::Gravity::Before).is_err());
+    assert!(marks.set("q", doc, 0, v05::Gravity::Before).is_ok());
+    marks.remove_plugin("p");
+    assert!(marks.set("p", doc, 0, v05::Gravity::Before).is_ok());
+}

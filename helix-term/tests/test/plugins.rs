@@ -3456,3 +3456,174 @@ async fn plugins_call_each_others_services() -> anyhow::Result<()> {
     assert!(status.ends_with(r#":Err("failed on purpose")"#), "{status}");
     Ok(())
 }
+
+/// The current status message's text after `prefix`.
+fn status_after<'a>(status: &'a str, prefix: &str) -> &'a str {
+    status
+        .strip_prefix(prefix)
+        .unwrap_or_else(|| panic!("{status}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_marks_follow_edits() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    let mut ids = Vec::new();
+    for args in ["4", "4 after", "2"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/mark {args}<ret>"),
+        )
+        .await;
+        ids.push(status_after(&status(&app).0, "mark:").to_string());
+    }
+    let (before, after, inside) = (&ids[0], &ids[1], &ids[2]);
+    // Typing before them moves them.
+    keys(&mut app, "iXX<esc>").await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/marks {before}<ret>"),
+    )
+    .await;
+    assert_eq!(
+        status(&app).0,
+        format!("marks:{inside}@4,{before}@6,{after}@6:Some(6)")
+    );
+    // Text inserted right at them: gravity decides.
+    keys(&mut app, "gh6li!<esc>").await;
+    assert_eq!(text(&app), "XXone !two\n");
+    keys(&mut app, ":plugin-run testplugin3/marks<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        format!("marks:{inside}@4,{before}@6,{after}@7:")
+    );
+    // Deleting the text around a mark removes it.
+    keys(&mut app, "gh2lv2ld").await;
+    assert_eq!(text(&app), "XX !two\n");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/marks {inside}<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, format!("marks:{before}@3,{after}@4:None"));
+    // Removed explicitly.
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/unmark {before}<ret>"),
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin3/marks<ret>").await;
+    assert_eq!(status(&app).0, format!("marks:{after}@4:"));
+    // Out of range.
+    keys(&mut app, ":plugin-run testplugin3/mark 99<ret>").await;
+    assert_error(&app, "invalid position 99");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_virtual_lines_take_rows_below_their_lines() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\nthree\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/vlines 0 first-row 0 second-row 1 below-two<ret>",
+    )
+    .await;
+    let screen = app.terminal_buffer().clone();
+    let rows: Vec<String> = (screen.area.y..screen.area.bottom())
+        .map(|y| {
+            (screen.area.x..screen.area.right())
+                .map(|x| screen[(x, y)].symbol.to_string())
+                .collect::<String>()
+        })
+        .collect();
+    let find = |text: &str| {
+        rows.iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text} not on screen: {rows:#?}"))
+    };
+    let one = find("one");
+    assert_eq!(find("first-row"), one + 1);
+    assert_eq!(find("second-row"), one + 2);
+    assert_eq!(find("two"), one + 3);
+    assert_eq!(find("below-two"), one + 4);
+    assert_eq!(find("three"), one + 5);
+    // They move with their line.
+    keys(&mut app, "Ozero<esc>").await;
+    let screen = app.terminal_buffer().clone();
+    let row_of = |text: &str| {
+        (screen.area.y..screen.area.bottom())
+            .find(|&y| {
+                (screen.area.x..screen.area.right())
+                    .map(|x| screen[(x, y)].symbol.to_string())
+                    .collect::<String>()
+                    .contains(text)
+            })
+            .unwrap()
+    };
+    assert_eq!(row_of("first-row"), row_of("one") + 1);
+    assert_eq!(row_of("one"), row_of("zero") + 1);
+    keys(&mut app, ":plugin-run testplugin3/vlines 9 nope<ret>").await;
+    assert_error(&app, "invalid line 9");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_patch_parts_of_decoration_layers() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two three\n", None, "");
+    let ranges = |app: &Application| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .highlight_ranges("testplugin3/hl")
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/patch-hl 0 14 0 3 4 7 8 13<ret>",
+    )
+    .await;
+    assert_eq!(ranges(&app), [0..3, 4..7, 8..13]);
+    // Only the part in 4..8 changes.
+    keys(&mut app, ":plugin-run testplugin3/patch-hl 4 8 5 6<ret>").await;
+    assert_eq!(ranges(&app), [0..3, 5..6, 8..13]);
+    keys(&mut app, ":plugin-run testplugin3/patch-hl 4 8 9 10<ret>").await;
+    assert_error(&app, "doesn't start in 4..8");
+    let texts = |app: &Application| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .annotation_texts("testplugin3/ann")
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/patch-ann 0 14 3 a 7 b 14 c<ret>",
+    )
+    .await;
+    assert_eq!(texts(&app), ["a", "b", "c"]);
+    keys(&mut app, ":plugin-run testplugin3/patch-ann 5 14 9 d<ret>").await;
+    assert_eq!(texts(&app), ["a", "d"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_floats_take_keys_and_run_their_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/float Pick alpha beta gamma<ret>",
+    )
+    .await;
+    let screen = app.terminal_buffer().clone();
+    let shown: String = (screen.area.y..screen.area.bottom())
+        .flat_map(|y| (screen.area.x..screen.area.right()).map(move |x| (x, y)))
+        .map(|(x, y)| screen[(x, y)].symbol.to_string())
+        .collect();
+    assert!(shown.contains("Pick") && shown.contains("beta"), "{shown}");
+    // The float has the keys: j moves its selection, enter runs the item.
+    keys(&mut app, "j<ret>").await;
+    assert_eq!(status(&app).0, "float-selected:Some(1):beta");
+    assert_eq!(text(&app), "one\n");
+    keys(&mut app, ":plugin-run testplugin3/float-close<ret>").await;
+    assert!(app
+        .editor
+        .panels
+        .iter()
+        .all(|panel| panel.dock != helix_view::sidebar::Dock::Float));
+    Ok(())
+}

@@ -510,6 +510,12 @@ impl View {
             });
             doc.plugin_decorations
                 .annotate(theme, cursor_line, &mut text_annotations);
+            if let Some(rows) = doc
+                .plugin_decorations
+                .virtual_line_rows(doc.text().slice(..))
+            {
+                text_annotations.add_line_annotation(Box::new(rows));
+            }
         }
 
         let config = doc.config.load();
