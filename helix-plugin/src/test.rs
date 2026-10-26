@@ -72,6 +72,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             modified: true,
             owner: None,
             revision: 0,
+            language_servers: Vec::new(),
         },
     );
     Snapshot {
@@ -1094,7 +1095,8 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Command
         | PendingKind::Batch
         | PendingKind::Service
-        | PendingKind::Lsp => unreachable!(),
+        | PendingKind::Lsp
+        | PendingKind::Watch => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -4230,6 +4232,7 @@ fn conceals_are_checked_against_the_text() {
             modified: false,
             owner: None,
             revision: 0,
+            language_servers: Vec::new(),
         },
     );
     state

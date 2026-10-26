@@ -68,6 +68,9 @@ pub enum Permission {
     /// Receive HTTP requests on 127.0.0.1 (API 0.4 `listener`). The user
     /// must also list the port in `allow-listen`.
     Listen,
+    /// Send requests to language servers (API 0.5 `lsp`). The user must
+    /// also grant it with `allow-lsp`.
+    Lsp,
 }
 
 impl Permission {
@@ -81,6 +84,7 @@ impl Permission {
             Permission::Filesystem => "filesystem",
             Permission::Registers => "registers",
             Permission::Listen => "listen",
+            Permission::Lsp => "lsp",
         }
     }
 }
@@ -143,6 +147,8 @@ pub struct PluginSettings {
     pub listen: Vec<u16>,
     /// Key bindings may use the `override` layer (`allow-key-override`).
     pub key_override: bool,
+    /// Requests to language servers (`allow-lsp`).
+    pub lsp: bool,
 }
 
 impl PluginSettings {
@@ -333,6 +339,8 @@ pub const MAX_LISTEN_BODY: usize = 4 << 20;
 /// Default and largest time limits of a background program.
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// Longest a session (API 0.5 `sessions`) may run.
+pub const MAX_SESSION_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// Most items in a plugin picker.
 pub const MAX_PICKER_ITEMS: usize = 1_000_000;
 /// Most columns in a plugin picker.
@@ -435,6 +443,8 @@ pub struct DocumentSnapshot {
     pub owner: Option<(String, String)>,
     /// Changes with every change to the text.
     pub revision: u64,
+    /// The language servers attached to it (API 0.5 `lsp.servers`).
+    pub language_servers: Vec<String>,
 }
 
 /// The editor state a plugin call can read.
@@ -511,6 +521,8 @@ pub enum Action {
         stdin: Option<String>,
         timeout: Duration,
         stream: bool,
+        /// A session's input, written while it runs (API 0.5 `sessions`).
+        session: Option<v05::SessionInput>,
     },
     /// Hand the terminal to a program, then deliver
     /// [`Callback::ProcessDone`].
@@ -521,6 +533,27 @@ pub enum Action {
         cwd: Option<PathBuf>,
         chooser_file: bool,
         wait_for_key: bool,
+    },
+    /// Watch `path` and deliver `events2` file changes (API 0.5).
+    Watch {
+        plugin: String,
+        id: u32,
+        path: PathBuf,
+        recursive: bool,
+    },
+    /// Stop a `Watch`.
+    Unwatch {
+        plugin: String,
+        id: u32,
+    },
+    /// Send an LSP request and deliver its reply (API 0.5).
+    LspRequest {
+        plugin: String,
+        id: u32,
+        doc: DocumentId,
+        server: Option<String>,
+        method: String,
+        params: String,
     },
     /// Kill a program started with `Spawn`.
     Kill {
@@ -744,6 +777,8 @@ pub enum PendingKind {
     Service,
     /// API 0.5 `lsp.request`.
     Lsp,
+    /// A watched path (API 0.5 `watch`).
+    Watch,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -1286,6 +1321,7 @@ impl State {
             stdin,
             timeout,
             stream,
+            session: None,
         });
         Ok(id)
     }
@@ -2002,6 +2038,7 @@ impl State {
             }
             Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
             Some(PendingKind::Listen) => self.actions.push(Action::StopListen { plugin, id }),
+            Some(PendingKind::Watch) => self.actions.push(Action::Unwatch { plugin, id }),
             Some(PendingKind::Completion) => self.actions.push(Action::Completions {
                 plugin,
                 id,
@@ -2923,6 +2960,7 @@ impl PluginHost {
             starts_program: self.starts_program,
             v05: v05::V05 {
                 key_override: settings.key_override,
+                lsp: settings.lsp,
                 editor: self.editor_fns,
                 marks: self.marks.clone(),
                 ..Default::default()

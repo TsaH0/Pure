@@ -26,6 +26,7 @@ mod picker;
 mod popup;
 mod process;
 mod prompt;
+mod watch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -119,6 +120,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     process::kill_plugin(plugin);
     abort_timers(Some(plugin));
     listen::stop_plugin(Some(plugin));
+    watch::stop_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -692,6 +694,7 @@ fn install(
     editor.panels.clear();
     abort_timers(None);
     listen::stop_plugin(None);
+    watch::stop_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -773,6 +776,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-dirs");
     table.remove("allow-listen");
     table.remove("allow-key-override");
+    table.remove("allow-lsp");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -782,16 +786,19 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             files: file_grant(settings, name)?,
             dirs: allowed_dirs(settings, name)?,
             listen: allowed_ports(settings, name)?,
-            key_override: match settings
-                .get(name)
-                .and_then(|table| table.get("allow-key-override"))
-            {
-                None => false,
-                Some(toml::Value::Boolean(allowed)) => *allowed,
-                Some(_) => anyhow::bail!("[{name}] allow-key-override: expected true or false"),
-            },
+            key_override: flag(settings, name, "allow-key-override")?,
+            lsp: flag(settings, name, "allow-lsp")?,
         })
     })())
+}
+
+/// A `true`/`false` setting of plugin `name` (false if missing).
+fn flag(settings: &toml::Table, name: &str, key: &str) -> anyhow::Result<bool> {
+    match settings.get(name).and_then(|table| table.get(key)) {
+        None => Ok(false),
+        Some(toml::Value::Boolean(allowed)) => Ok(*allowed),
+        Some(_) => anyhow::bail!("[{name}] {key}: expected true or false"),
+    }
 }
 
 type Keys = HashMap<Mode, crate::keymap::KeyTrie>;
@@ -1203,6 +1210,44 @@ fn set_mode(editor: &mut Editor, jobs: &mut Jobs, mode: helix_plugin::Mode) {
     }
 }
 
+/// Send a plugin's request to a language server; deliver the reply later.
+fn lsp_request(
+    editor: &Editor,
+    plugin: String,
+    id: u32,
+    doc: helix_plugin::DocumentId,
+    server: Option<String>,
+    method: String,
+    params: String,
+) {
+    use helix_plugin::v05::Callback2;
+    let params = serde_json::from_str(&params).unwrap_or(serde_json::Value::Null);
+    let reply = editor_doc_id(editor, doc).and_then(|doc| {
+        let doc = editor.documents.get(&doc)?;
+        doc.language_servers()
+            .find(|client| server.as_deref().is_none_or(|name| client.name() == name))
+            .map(|client| client.call_raw(method, params))
+    });
+    let Some(reply) = reply else {
+        let result = Err("the language server is gone".to_string());
+        return deliver2_later(plugin, Callback2::LspReply { id, result });
+    };
+    tokio::spawn(async move {
+        let result = match reply.await {
+            Ok(value) => {
+                let json = value.to_string();
+                if json.len() > 16 << 20 {
+                    Err("the reply is larger than 16 MiB".to_string())
+                } else {
+                    Ok(json)
+                }
+            }
+            Err(err) => Err(err.to_string()),
+        };
+        deliver2_later(plugin, Callback2::LspReply { id, result });
+    });
+}
+
 /// Serve a plugin's service call after this event, then deliver the
 /// reply to the caller.
 fn serve_later(call: helix_plugin::v05::ServiceCall) {
@@ -1432,6 +1477,10 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     selection,
                     modified: doc.is_modified(),
                     revision: doc.version().max(0) as u64,
+                    language_servers: doc
+                        .language_servers()
+                        .map(|server| server.name().to_string())
+                        .collect(),
                     owner: doc
                         .plugin_owner
                         .clone()
@@ -1546,13 +1595,14 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 stdin,
                 timeout,
                 stream,
+                session,
             } => ui.push(Box::new(move |_, _| {
                 if with_host(|host| {
                     host.has_request(&plugin, id, helix_plugin::PendingKind::Process)
                 })
                 .unwrap_or(false)
                 {
-                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream);
+                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream, session);
                 }
             })),
             Action::RunInteractive {
@@ -1650,6 +1700,25 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::StopListen { plugin, id } => listen::stop(&plugin, id),
+            Action::Watch {
+                plugin,
+                id,
+                path,
+                recursive,
+            } => {
+                if let Err(err) = watch::start(plugin, id, path, recursive) {
+                    editor.set_error(err);
+                }
+            }
+            Action::Unwatch { plugin, id } => watch::stop(&plugin, id),
+            Action::LspRequest {
+                plugin,
+                id,
+                doc,
+                server,
+                method,
+                params,
+            } => lsp_request(editor, plugin, id, doc, server, method, params),
             Action::ShowPicker {
                 plugin,
                 id,

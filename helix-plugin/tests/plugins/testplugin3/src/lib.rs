@@ -173,6 +173,13 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "float",
                 "float-close",
                 "float-selected",
+                "session",
+                "session-write",
+                "session-close",
+                "progress",
+                "watch",
+                "lsp-servers",
+                "lsp-request",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -673,6 +680,67 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     selected: Some(0),
                     focus: true,
                 })
+            }
+            "session" => {
+                let id = helix::plugin::sessions::start(
+                    &args,
+                    &helix::plugin::process::SpawnOptions {
+                        cwd: None,
+                        stdin: None,
+                        timeout_ms: None,
+                        stream: true,
+                    },
+                )?;
+                host::set_status(&format!("session:{id}"));
+                Ok(())
+            }
+            "session-write" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                // "big:N" writes N bytes.
+                let data = match args.get(1).and_then(|a| a.strip_prefix("big:")) {
+                    Some(n) => "x".repeat(n.parse().unwrap_or(0)),
+                    None => format!("{}\n", args[1..].join(" ")),
+                };
+                helix::plugin::sessions::write(id, &data)
+            }
+            "session-close" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::sessions::close_input(id)
+            }
+            "progress" => {
+                // progress title message percent: begins, reports; "end" ends
+                // the last one.
+                use helix::plugin::progress;
+                thread_local! { static TOKEN: Cell<u32> = const { Cell::new(0) }; }
+                match args.first().map(String::as_str) {
+                    Some("end") => progress::end(TOKEN.get()),
+                    Some(title) => {
+                        let token = progress::begin(title);
+                        TOKEN.set(token);
+                        if let Some(message) = args.get(1) {
+                            progress::report(token, message, args.get(2).and_then(|p| p.parse().ok()));
+                        }
+                    }
+                    None => return Err("a title".into()),
+                }
+                Ok(())
+            }
+            "watch" => {
+                let id = helix::plugin::watch::add(args.first().ok_or("a path")?, args.get(1).is_some())?;
+                host::set_status(&format!("watching:{id}"));
+                Ok(())
+            }
+            "lsp-servers" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let servers = helix::plugin::lsp::servers(doc)?;
+                host::set_status(&format!("servers:{}", servers.join(",")));
+                Ok(())
+            }
+            "lsp-request" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let id = helix::plugin::lsp::request(doc, None, &args[0], args.get(1).map_or("null", String::as_str))?;
+                host::set_status(&format!("lsp:{id}"));
+                Ok(())
             }
             "float-close" => {
                 helix::plugin::floats::close();

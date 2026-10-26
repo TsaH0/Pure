@@ -731,6 +731,8 @@ impl Default for StatusLineConfig {
             ],
             center: vec![],
             right: vec![
+                // Empty unless a plugin shows something (progress).
+                E::Plugins,
                 E::Diagnostics,
                 E::Selections,
                 E::Register,

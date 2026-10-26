@@ -3627,3 +3627,191 @@ async fn plugin_floats_take_keys_and_run_their_commands() -> anyhow::Result<()> 
         .all(|panel| panel.dock != helix_view::sidebar::Dock::Float));
     Ok(())
 }
+
+/// `app_v5` with the test plugin asking for `permissions` too.
+fn app_v5_granted(
+    text: &str,
+    permissions: &str,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let (mut app, dir) = app_v5(text, None, settings);
+    std::fs::write(
+        dir.path().join("testplugin3/plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}, {permissions}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_sessions_take_input_while_running() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = true\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/session cat<ret>").await;
+    let id = status_after(&status(&app).0, "session:").to_string();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} hello there<ret>"),
+    )
+    .await;
+    let chunk = wait_for_status(&mut app, |s| s.starts_with("chunk:")).await;
+    assert!(chunk.starts_with("chunk:hello there\n"), "{chunk}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} again<ret>"),
+    )
+    .await;
+    let chunk = wait_for_status(&mut app, |s| s.starts_with("chunk:again")).await;
+    assert!(chunk.starts_with("chunk:again\n"), "{chunk}");
+    // Closing the input ends `cat`.
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-close {id}<ret>"),
+    )
+    .await;
+    let done = wait_for_status(&mut app, |s| s.starts_with("done:")).await;
+    assert!(done.starts_with("done:Some(0)"), "{done}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} late<ret>"),
+    )
+    .await;
+    assert_error(&app, &format!("no running session {id}"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_session_input_is_bounded() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = true\n",
+    );
+    // `sleep` never reads its input: the pipe fills, the rest waits.
+    keys(&mut app, ":plugin-run testplugin3/session sleep 30<ret>").await;
+    let id = status_after(&status(&app).0, "session:").to_string();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1048576<ret>"),
+    )
+    .await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1000000<ret>"),
+    )
+    .await;
+    assert_error(&app, "busy");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1048577<ret>"),
+    )
+    .await;
+    assert_error(&app, "at most 1 MiB per write");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-close {id}<ret>"),
+    )
+    .await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} x<ret>"),
+    )
+    .await;
+    assert_error(&app, "input is closed");
+    // Programs need the grant as for spawn.
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""process""#, "");
+    keys(&mut app, ":plugin-run testplugin3/session cat<ret>").await;
+    assert_error(&app, "allow-process");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_progress_shows_in_the_statusline() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    let progress = |app: &Application| {
+        app.editor
+            .plugin_statusline
+            .iter()
+            .filter(|(key, _)| key.starts_with("testplugin3/progress-"))
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/progress Indexing files 40<ret>",
+    )
+    .await;
+    assert_eq!(progress(&app), ["Indexing: files 40%"]);
+    // Shown by default.
+    let screen = app.terminal_buffer().clone();
+    let shown: String = (screen.area.y..screen.area.bottom())
+        .flat_map(|y| (screen.area.x..screen.area.right()).map(move |x| (x, y)))
+        .map(|(x, y)| screen[(x, y)].symbol.to_string())
+        .collect();
+    assert!(shown.contains("Indexing: files 40%"));
+    keys(&mut app, ":plugin-run testplugin3/progress end<ret>").await;
+    assert!(progress(&app).is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_watch_paths_they_may_read() -> anyhow::Result<()> {
+    let watched = tempfile::tempdir()?;
+    let dir = watched.path().canonicalize()?;
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"read\"\nallow-dirs = [\"{}\"]\n",
+        dir.display()
+    );
+    let (mut app, _plugins) = app_v5_granted("#[o|]#ne\n", r#""filesystem""#, &settings);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/watch {} r<ret>", dir.display()),
+    )
+    .await;
+    let id = status_after(&status(&app).0, "watching:").to_string();
+    // (A file in a directory made just now could come before its watch.)
+    std::fs::write(dir.join("new.txt"), "hi")?;
+    let line = wait_for(&mut app, |_| {
+        helix_term::plugins::log_lines("testplugin3")
+            .ok()?
+            .into_iter()
+            .find(|line| line.contains("FileChange") && line.contains("new.txt"))
+    })
+    .await;
+    assert!(line.contains(&format!("FileChange(({id}, [")), "{line}");
+    // Outside the granted directories: refused.
+    keys(&mut app, ":plugin-run testplugin3/watch /etc<ret>").await;
+    assert_error(&app, "outside the directories");
+    keys(&mut app, ":plugin-run testplugin3/watch relative<ret>").await;
+    assert_error(&app, "absolute");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_lsp_requests_need_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""lsp""#, "");
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_error(&app, "allow-lsp = true");
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""lsp""#,
+        "[testplugin3]\nallow-lsp = true\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_eq!(status(&app).0, "servers:");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-request textDocument/hover {}<ret>",
+    )
+    .await;
+    assert_error(&app, "no language server on this document");
+    // Without the permission in plugin.toml, the grant isn't enough.
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "[testplugin3]\nallow-lsp = true\n");
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_error(&app, "\"lsp\"");
+    Ok(())
+}

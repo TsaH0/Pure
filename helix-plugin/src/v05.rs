@@ -244,10 +244,6 @@ pub enum Callback2 {
     },
 }
 
-fn not_yet<T>(what: &str) -> Result<T, String> {
-    Err(format!("{what} is not available yet"))
-}
-
 /// Most key bindings per plugin.
 pub const MAX_KEY_BINDINGS: usize = 256;
 
@@ -272,6 +268,8 @@ pub const MAX_SUBSCRIPTIONS: usize = 64;
 pub(crate) struct V05 {
     /// The user's `allow-key-override`.
     pub key_override: bool,
+    /// The user's `allow-lsp`.
+    pub lsp: bool,
     pub editor: EditorFns,
     pub key_bindings: Vec<KeyBinding>,
     pub subscriptions: Vec<Subscription>,
@@ -289,12 +287,57 @@ pub(crate) struct V05 {
     pub chain: Vec<String>,
     /// Every plugin's marks (the host's, shared).
     pub marks: SharedMarks,
+    /// Running sessions' input: `None` once closed.
+    pub sessions: HashMap<u32, Option<SessionWriter>>,
+    /// Progress shown in the statusline: token -> title.
+    pub progress: std::collections::BTreeMap<u32, String>,
+    pub next_progress: u32,
+}
+
+/// Most progress reports a plugin shows at once.
+pub const MAX_PROGRESS: usize = 8;
+
+/// Most input a session may have waiting to be written.
+pub const MAX_SESSION_QUEUE: usize = 1 << 20;
+
+/// The plugin's end of a session's input.
+#[derive(Debug)]
+pub(crate) struct SessionWriter {
+    sender: tokio::sync::mpsc::UnboundedSender<String>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// The editor's end of a session's input: what to write to the program,
+/// in order, until the plugin closes it. Taken once.
+#[derive(Debug, Clone)]
+pub struct SessionInput {
+    receiver: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<String>>>>,
+    queued: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SessionInput {
+    /// The input and a counter of the bytes waiting: subtract what is
+    /// written.
+    pub fn take(
+        &self,
+    ) -> Option<(
+        tokio::sync::mpsc::UnboundedReceiver<String>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    )> {
+        let receiver = self
+            .receiver
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        Some((receiver, self.queued.clone()))
+    }
 }
 
 impl Default for V05 {
     fn default() -> Self {
         Self {
             key_override: false,
+            lsp: false,
             editor: EditorFns::default(),
             key_bindings: Vec::new(),
             subscriptions: Vec::new(),
@@ -305,6 +348,9 @@ impl Default for V05 {
             services: Default::default(),
             chain: Vec::new(),
             marks: Default::default(),
+            sessions: HashMap::new(),
+            progress: Default::default(),
+            next_progress: 0,
         }
     }
 }
@@ -1218,38 +1264,240 @@ impl State {
     }
     pub(crate) fn start_session(
         &mut self,
-        _argv: Vec<String>,
-        _cwd: Option<String>,
-        _stdin: Option<String>,
-        _timeout_ms: Option<u32>,
+        argv: Vec<String>,
+        cwd: Option<String>,
+        stdin: Option<String>,
+        timeout_ms: Option<u32>,
     ) -> Result<u32, String> {
-        not_yet("sessions.start")
+        self.need_process(&argv)?;
+        let timeout = timeout_ms
+            .map(|ms| std::time::Duration::from_millis(ms.into()))
+            .unwrap_or(crate::DEFAULT_PROCESS_TIMEOUT)
+            .min(crate::MAX_SESSION_TIMEOUT);
+        let id = self.request(crate::PendingKind::Process)?;
+        self.streaming.insert(id);
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Ended sessions' writers go when a new one starts.
+        let pending = &self.pending;
+        self.v05.sessions.retain(|id, _| pending.contains_key(id));
+        self.v05.sessions.insert(
+            id,
+            Some(SessionWriter {
+                sender,
+                queued: queued.clone(),
+            }),
+        );
+        self.actions.push(crate::Action::Spawn {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            cwd: cwd.map(std::path::PathBuf::from),
+            stdin,
+            timeout,
+            stream: true,
+            session: Some(SessionInput {
+                receiver: Arc::new(std::sync::Mutex::new(Some(receiver))),
+                queued,
+            }),
+        });
+        Ok(id)
     }
-    pub(crate) fn session_write(&mut self, _id: u32, _data: String) -> Result<(), String> {
-        not_yet("sessions.write")
+    fn session(&mut self, id: u32) -> Result<&mut Option<SessionWriter>, String> {
+        if self.pending.get(&id) != Some(&crate::PendingKind::Process) {
+            self.v05.sessions.remove(&id);
+        }
+        self.v05
+            .sessions
+            .get_mut(&id)
+            .ok_or_else(|| format!("no running session {id}"))
     }
-    pub(crate) fn session_close_input(&mut self, _id: u32) -> Result<(), String> {
-        not_yet("sessions.close-input")
+    pub(crate) fn session_write(&mut self, id: u32, data: String) -> Result<(), String> {
+        let writer = self
+            .session(id)?
+            .as_ref()
+            .ok_or_else(|| format!("session {id}'s input is closed"))?;
+        let queued = writer.queued.load(Ordering::Relaxed);
+        if data.len() > MAX_SESSION_QUEUE {
+            return Err("at most 1 MiB per write".into());
+        }
+        if queued + data.len() > MAX_SESSION_QUEUE {
+            return Err("busy".into());
+        }
+        writer.queued.fetch_add(data.len(), Ordering::Relaxed);
+        // The program ended: its result is on the way.
+        let _ = writer.sender.send(data);
+        Ok(())
     }
-    pub(crate) fn progress_begin(&mut self, _title: String) -> u32 {
-        0
+    pub(crate) fn session_close_input(&mut self, id: u32) -> Result<(), String> {
+        // Dropping the sender closes the program's input once the rest is
+        // written.
+        self.session(id)?.take();
+        Ok(())
     }
-    pub(crate) fn progress_report(&mut self, _token: u32, _message: String, _percent: Option<u8>) {}
-    pub(crate) fn progress_end(&mut self, _token: u32) {}
-    pub(crate) fn watch(&mut self, _path: String, _recursive: bool) -> Result<u32, String> {
-        not_yet("watch.add")
+    /// Progress is a statusline segment ("progress-<token>").
+    fn show_progress(&mut self, token: u32, text: String) {
+        let _ = self.set_statusline(format!("progress-{token}"), text);
     }
-    pub(crate) fn lsp_servers(&mut self, _doc: DocumentId) -> Result<Vec<String>, String> {
-        not_yet("lsp.servers")
+    pub(crate) fn progress_begin(&mut self, title: String) -> u32 {
+        // The oldest goes to make room.
+        if self.v05.progress.len() >= MAX_PROGRESS {
+            if let Some((&oldest, _)) = self.v05.progress.iter().next() {
+                self.progress_end(oldest);
+            }
+        }
+        self.v05.next_progress = self.v05.next_progress.wrapping_add(1).max(1);
+        let token = self.v05.next_progress;
+        let title: String = title.chars().take(64).collect();
+        self.show_progress(token, format!("{title}…"));
+        self.v05.progress.insert(token, title);
+        token
+    }
+    pub(crate) fn progress_report(&mut self, token: u32, message: String, percent: Option<u8>) {
+        let Some(title) = self.v05.progress.get(&token) else {
+            return;
+        };
+        let mut text = title.clone();
+        if !message.is_empty() {
+            text.push_str(": ");
+            text.extend(message.chars().take(80));
+        }
+        if let Some(percent) = percent {
+            text.push_str(&format!(" {}%", percent.min(100)));
+        }
+        self.show_progress(token, text);
+    }
+    pub(crate) fn progress_end(&mut self, token: u32) {
+        if self.v05.progress.remove(&token).is_some() {
+            self.show_progress(token, String::new());
+        }
+    }
+    pub(crate) fn watch(&mut self, path: String, recursive: bool) -> Result<u32, String> {
+        self.need(crate::Permission::Filesystem)?;
+        if self.files == crate::FileGrant::None {
+            return Err("watching needs allow-files in plugins.toml".into());
+        }
+        if self.context == crate::CallContext::Init {
+            return Err("watch.add can't be used from init".into());
+        }
+        let path = std::path::PathBuf::from(path);
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "not an absolute, normalized path: {}",
+                path.display()
+            ));
+        }
+        // Inside a root, also through symlinks.
+        let real = std::fs::canonicalize(&path)
+            .map_err(|err| format!("can't watch {}: {err}", path.display()))?;
+        let inside = self.roots.iter().any(|root| {
+            path.starts_with(root)
+                && std::fs::canonicalize(root).is_ok_and(|root| real.starts_with(root))
+        });
+        if !inside {
+            return Err(format!(
+                "{} is outside the directories this plugin may read",
+                path.display()
+            ));
+        }
+        let watching = self
+            .pending
+            .values()
+            .filter(|kind| **kind == crate::PendingKind::Watch)
+            .count();
+        if watching >= MAX_WATCHES {
+            return Err(format!("at most {MAX_WATCHES} watched paths"));
+        }
+        let id = self.request(crate::PendingKind::Watch)?;
+        self.actions.push(crate::Action::Watch {
+            plugin: self.plugin.clone(),
+            id,
+            path: real,
+            recursive,
+        });
+        Ok(id)
+    }
+    fn need_lsp(&self) -> Result<(), String> {
+        self.need(crate::Permission::Lsp)?;
+        if !self.v05.lsp {
+            return Err(format!(
+                "language server requests need allow-lsp = true under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn lsp_servers(&mut self, doc: DocumentId) -> Result<Vec<String>, String> {
+        self.need_lsp()?;
+        Ok(self.document(doc)?.language_servers.clone())
     }
     pub(crate) fn lsp_request(
         &mut self,
-        _doc: DocumentId,
-        _server: Option<String>,
-        _method: String,
-        _params: String,
+        doc: DocumentId,
+        server: Option<String>,
+        method: String,
+        params: String,
     ) -> Result<u32, String> {
-        not_yet("lsp.request")
+        self.need_lsp()?;
+        if self.context == crate::CallContext::Init {
+            return Err("lsp.request can't be used from init".into());
+        }
+        let servers = &self.document(doc)?.language_servers;
+        match &server {
+            Some(name) if !servers.contains(name) => {
+                return Err(format!("no language server '{name}' on this document"))
+            }
+            None if servers.is_empty() => return Err("no language server on this document".into()),
+            _ => {}
+        }
+        if LSP_LIFECYCLE.contains(&method.as_str()) || method.starts_with("$/") {
+            return Err(format!("'{method}' is the editor's to send"));
+        }
+        if method.is_empty() || method.len() > 256 {
+            return Err("a method of 1 to 256 bytes".into());
+        }
+        check_json("the params", &params)?;
+        let id = self.request(crate::PendingKind::Lsp)?;
+        self.actions.push(crate::Action::LspRequest {
+            plugin: self.plugin.clone(),
+            id,
+            doc,
+            server,
+            method,
+            params,
+        });
+        Ok(id)
+    }
+}
+
+/// Most watched paths per plugin.
+pub const MAX_WATCHES: usize = 16;
+
+/// Requests that would break the editor's session with a server.
+const LSP_LIFECYCLE: &[&str] = &["initialize", "shutdown", "exit", "initialized"];
+
+impl crate::PluginHost {
+    /// Paths under watch `id` of `plugin` changed: tell it (if it still
+    /// watches).
+    pub fn file_change(
+        &mut self,
+        plugin: &str,
+        id: u32,
+        paths: Vec<String>,
+        snapshot: &crate::Snapshot,
+    ) -> Option<anyhow::Result<Vec<crate::Action>>> {
+        let watching = self.plugins.iter().any(|p| {
+            p.manifest.name == plugin
+                && p.store.data().pending.get(&id) == Some(&crate::PendingKind::Watch)
+        });
+        if !watching {
+            return None;
+        }
+        self.dispatch2_to(plugin, &Event2::FileChange(id, paths), snapshot)
     }
 }
 
