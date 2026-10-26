@@ -3302,3 +3302,117 @@ async fn plugins_hear_about_focus_plugins_and_shutdown() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_native_and_typable_commands_with_results() -> anyhow::Result<()> {
+    let (mut app, dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec #3 move_char_right<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("command-done:")).await;
+    assert!(status.ends_with(":Ok(())"), "{status}");
+    assert_eq!(cursor(&app), 3);
+    // Typable commands get their arguments as they are: no expansion.
+    let path = dir.path().join("out %{cursor_line}.txt");
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/exec write '{}'<ret>",
+            path.display()
+        ),
+    )
+    .await;
+    // (The write's own message replaces the plugin's status.)
+    let done = wait_for(&mut app, |_| {
+        helix_term::plugins::log_lines("testplugin3")
+            .ok()?
+            .into_iter()
+            .filter(|line| line.starts_with("event:command-done:"))
+            .nth(1)
+    })
+    .await;
+    assert!(done.ends_with(":Ok(())"), "{done}");
+    wait_for(&mut app, |_| {
+        std::fs::read_to_string(&path)
+            .ok()
+            .filter(|text| !text.is_empty())
+    })
+    .await;
+    assert_eq!(std::fs::read_to_string(&path)?, "one two\n");
+    // A failure is reported to the plugin.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec set-option no-such-option 1<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("command-done:")).await;
+    assert!(status.contains("Err("), "{status}");
+    // Programs only with allow-process.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec run-shell-command true<ret>",
+    )
+    .await;
+    assert_error(&app, "allow-process");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_batches_stop_at_the_first_failure() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/batch move_char_right ; set-option no-such-option 1 ; mode:insert<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("batch-done:")).await;
+    assert!(
+        status.contains(":[Ok(()), Err(\"'set-option': "),
+        "{status}"
+    );
+    assert!(status.ends_with(r#", Err("skipped")]"#), "{status}");
+    // The first step ran; nothing is rolled back; the mode didn't change.
+    assert_eq!(cursor(&app), 1);
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/batch mode:insert ; move_char_right<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("batch-done:")).await;
+    assert!(status.ends_with(":[Ok(()), Ok(())]"), "{status}");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_switch_modes_and_see_views_and_ui() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/set-mode select<ret>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Select);
+    keys(
+        &mut app,
+        "<esc>:vsplit<ret>:plugin-run testplugin3/views<ret>",
+    )
+    .await;
+    let (views, _) = status(&app);
+    let views: Vec<&str> = views.strip_prefix("views:").unwrap().split(',').collect();
+    assert_eq!(views.len(), 2, "{views:?}");
+    assert_eq!(
+        views.iter().filter(|view| view.ends_with('*')).count(),
+        1,
+        "{views:?}"
+    );
+    keys(&mut app, ":plugin-run testplugin3/ui-state<ret>").await;
+    let (ui, _) = status(&app);
+    assert!(ui.starts_with("ui:Mode::Normal:menu=false:"), "{ui}");
+    assert!(ui.contains(":picker=false:popup=false:panel=None:"), "{ui}");
+    keys(&mut app, ":plugin-run testplugin3/count-commands<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "commands:native=true:typable=true:plugin=true:true:true:true"
+    );
+    Ok(())
+}

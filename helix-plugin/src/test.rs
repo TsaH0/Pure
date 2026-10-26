@@ -84,6 +84,15 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         registers: BTreeMap::new(),
         panels: Vec::new(),
         completion_menu: None,
+        views: vec![crate::v05::ViewInfo {
+            id: 1,
+            document: 1,
+            area: (0, 0, 80, 24),
+            first_line: 0,
+            last_line: 2,
+            focused: true,
+        }],
+        ui: crate::v05::UiState::default(),
     }
 }
 
@@ -1081,7 +1090,11 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Timer
         | PendingKind::Completion
         | PendingKind::Files
-        | PendingKind::Listen => unreachable!(),
+        | PendingKind::Listen
+        | PendingKind::Command
+        | PendingKind::Batch
+        | PendingKind::Service
+        | PendingKind::Lsp => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -4624,5 +4637,105 @@ fn api_05_hooks_run_in_order_until_one_cancels() {
     assert_eq!(
         result.cancelled,
         Some(("testplugin3".to_string(), "not now".to_string()))
+    );
+}
+
+#[test]
+fn api_05_commands_are_listed_checked_and_reported() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    host.set_editor_fns(v05::EditorFns {
+        check_keys: None,
+        commands: Some(|| {
+            vec![
+                v05::CommandEntry {
+                    name: "move_char_left".into(),
+                    doc: "Move left".into(),
+                    kind: v05::CommandKind::Native,
+                },
+                v05::CommandEntry {
+                    name: "write".into(),
+                    doc: "Write".into(),
+                    kind: v05::CommandKind::Typable,
+                },
+            ]
+        }),
+    });
+    let actions = v5_run(&mut host, "count-commands", &[]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["commands:native=true:typable=true:plugin=true:true:true:true"]
+    );
+    // Unknown commands fail at the call.
+    let err = v5_run(&mut host, "exec", &["no_such_command"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("no command 'no_such_command'"),
+        "{err:#}"
+    );
+    let err = v5_run(&mut host, "exec", &["other/thing"]).unwrap_err();
+    assert!(format!("{err:#}").contains("no plugin command"), "{err:#}");
+    // A known one becomes an action; its result comes back by id.
+    let actions = v5_run(&mut host, "exec", &["#3", "move_char_left"]).unwrap();
+    let execute = actions.iter().find_map(|action| match action {
+        Action::Execute {
+            id, name, count, ..
+        } => Some((*id, name.clone(), *count)),
+        _ => None,
+    });
+    let (id, name, count) = execute.unwrap();
+    assert_eq!((name.as_str(), count), ("move_char_left", Some(3)));
+    let snap = snapshot("text\n", 0, 0);
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::CommandDone {
+                id,
+                result: Err("boom".into()),
+            },
+            &snap,
+        )
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        [format!("command-done:{id}:Err(\"boom\")")]
+    );
+    // Only once.
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::CommandDone { id, result: Ok(()) },
+            &snap,
+        )
+        .unwrap();
+    assert!(actions.is_empty());
+    // Batches check every step first.
+    let err = v5_run(&mut host, "batch", &["write", ";", "nope"]).unwrap_err();
+    assert!(format!("{err:#}").contains("no command 'nope'"), "{err:#}");
+    let actions = v5_run(&mut host, "batch", &["write", "a.txt", ";", "mode:insert"]).unwrap();
+    let steps = actions.iter().find_map(|action| match action {
+        Action::Batch { steps, .. } => Some(steps.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        steps.unwrap(),
+        [
+            v05::Step::Command {
+                name: "write".into(),
+                args: vec!["a.txt".into()],
+                count: None
+            },
+            v05::Step::SetMode(Mode::Insert)
+        ]
+    );
+    let actions = v5_run(&mut host, "set-mode", &["select"]).unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::SetMode(Mode::Select))));
+    // State comes from the snapshot.
+    let actions = v5_run(&mut host, "views", &[]).unwrap();
+    assert_eq!(statuses(&actions), ["views:1:1:80x24:0-2*"]);
+    let actions = v5_run(&mut host, "ui-state", &[]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["ui:Mode::Normal:menu=false:prompt=false:picker=false:popup=false:panel=None:keys="]
     );
 }

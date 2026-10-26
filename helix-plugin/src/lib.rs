@@ -434,6 +434,10 @@ pub struct Snapshot {
     pub panels: Vec<SidebarSnapshot>,
     /// The completion menu, if it is open (API 0.5).
     pub completion_menu: Option<v05::MenuState>,
+    /// The views (API 0.5).
+    pub views: Vec<v05::ViewInfo>,
+    /// What the UI shows (API 0.5).
+    pub ui: v05::UiState,
 }
 
 impl Default for Snapshot {
@@ -448,6 +452,8 @@ impl Default for Snapshot {
             registers: BTreeMap::new(),
             panels: Vec::new(),
             completion_menu: None,
+            views: Vec::new(),
+            ui: v05::UiState::default(),
         }
     }
 }
@@ -514,6 +520,24 @@ pub enum Action {
         plugin: String,
         id: u32,
     },
+    /// Run command `name` (native, typable without expansion, or
+    /// "plugin/command") and deliver [`v05::Callback2::CommandDone`].
+    Execute {
+        plugin: String,
+        id: u32,
+        name: String,
+        args: Vec<String>,
+        count: Option<u32>,
+    },
+    /// Run `steps` in order, stopping at the first failure, and deliver
+    /// [`v05::Callback2::BatchDone`].
+    Batch {
+        plugin: String,
+        id: u32,
+        steps: Vec<v05::Step>,
+    },
+    /// Switch mode like the mode keys (API 0.5).
+    SetMode(Mode),
     /// Drive the completion menu (API 0.5). Applied in order with the other
     /// actions: the ones after it wait until it is done.
     CompletionMenu(v05::MenuAction),
@@ -690,6 +714,14 @@ pub enum PendingKind {
     Completion,
     Files,
     Listen,
+    /// API 0.5 `commands.execute`.
+    Command,
+    /// API 0.5 `commands.batch`.
+    Batch,
+    /// API 0.5 `services.call`.
+    Service,
+    /// API 0.5 `lsp.request`.
+    Lsp,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -1958,7 +1990,14 @@ impl State {
                 self.picker_items.remove(&id);
                 self.picker_generations.remove(&id);
             }
-            Some(PendingKind::Prompt | PendingKind::Background) => {}
+            Some(
+                PendingKind::Prompt
+                | PendingKind::Background
+                | PendingKind::Command
+                | PendingKind::Batch
+                | PendingKind::Service
+                | PendingKind::Lsp,
+            ) => {}
             None => return,
         }
         self.pending.remove(&id);
@@ -2630,6 +2669,9 @@ impl PluginHost {
     /// list). Applies to plugins loaded afterwards.
     pub fn set_editor_fns(&mut self, fns: v05::EditorFns) {
         self.editor_fns = fns;
+        for plugin in &mut self.plugins {
+            plugin.store.data_mut().v05.editor = fns;
+        }
     }
 
     /// The workspace plugins with `allow-files` were given (see `set_dirs`).
@@ -2895,6 +2937,7 @@ impl PluginHost {
         plugin.events = events;
         plugin.events.dedup();
         self.plugins.push(plugin);
+        self.refresh_command_lists();
         Ok(actions)
     }
 

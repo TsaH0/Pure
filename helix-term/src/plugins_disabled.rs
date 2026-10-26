@@ -75,6 +75,10 @@ pub fn pre_save(
 
 pub fn check_focus(_editor: &Editor) {}
 
+pub fn set_ui_layers(_layers: impl Iterator<Item = &'static str>) {}
+
+pub fn set_pending_keys(_keys: &[helix_view::input::KeyEvent]) {}
+
 pub fn shutdown(_editor: &mut Editor) {}
 
 pub fn key(

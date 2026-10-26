@@ -5059,6 +5059,31 @@ pub(super) fn execute_command(
     (cmd.fun)(cx, args, event).map_err(|err| anyhow!("'{}': {err}", cmd.name))
 }
 
+/// Run typable command `name` with `args` as they are: no command line
+/// parsing and no expansions (plugin API 0.5 `commands.execute`).
+pub fn execute_with_args(
+    cx: &mut compositor::Context,
+    name: &str,
+    args: &[String],
+) -> anyhow::Result<()> {
+    let cmd = TYPABLE_COMMAND_MAP
+        .get(name)
+        .ok_or_else(|| anyhow!("no command '{name}'"))?;
+    let mut parsed = Args::new(cmd.signature, true);
+    for arg in args {
+        parsed
+            .push(std::borrow::Cow::Owned(arg.clone()))
+            .map_err(|err| anyhow!("'{name}': {err}"))?;
+    }
+    parsed.finish().map_err(|err| anyhow!("'{name}': {err}"))?;
+    (cmd.fun)(cx, parsed, PromptEvent::Validate).map_err(|err| anyhow!("'{name}': {err}"))
+}
+
+/// Every typable command's name and doc.
+pub fn typable_commands() -> impl Iterator<Item = (&'static str, &'static str)> {
+    TYPABLE_COMMAND_LIST.iter().map(|cmd| (cmd.name, cmd.doc))
+}
+
 pub(super) fn command_mode(cx: &mut Context) {
     command_mode_with(cx, String::new());
 }

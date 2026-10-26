@@ -146,6 +146,12 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "subscribe",
                 "unsubscribe",
                 "menu-state",
+                "exec",
+                "batch",
+                "set-mode",
+                "views",
+                "ui-state",
+                "count-commands",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -468,6 +474,87 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             }
             "menu-state" => {
                 host::set_status(&menu_status());
+                Ok(())
+            }
+            "exec" => {
+                // exec [#count] name args...
+                let (count, rest) = match args.first().and_then(|arg| arg.strip_prefix('#')) {
+                    Some(count) => (Some(count.parse().map_err(|_| "a count")?), &args[1..]),
+                    None => (None, &args[..]),
+                };
+                let (name, args) = rest.split_first().ok_or("a command")?;
+                let id = helix::plugin::commands::execute(name, args, count)?;
+                host::set_status(&format!("executing:{id}"));
+                Ok(())
+            }
+            "batch" => {
+                // batch name args... ; mode:insert ; ...
+                use helix::plugin::commands::Step;
+                let steps = args
+                    .split(|arg| arg == ";")
+                    .map(|step| match step {
+                        [mode] if mode.starts_with("mode:") => Step::SetMode(match &mode[5..] {
+                            "insert" => types::Mode::Insert,
+                            "select" => types::Mode::Select,
+                            _ => types::Mode::Normal,
+                        }),
+                        [name, args @ ..] => Step::Command((name.clone(), args.to_vec(), None)),
+                        [] => Step::Command((String::new(), Vec::new(), None)),
+                    })
+                    .collect::<Vec<_>>();
+                let id = helix::plugin::commands::batch(&steps)?;
+                host::set_status(&format!("batching:{id}"));
+                Ok(())
+            }
+            "set-mode" => {
+                let mode = match args.first().map(String::as_str) {
+                    Some("insert") => types::Mode::Insert,
+                    Some("select") => types::Mode::Select,
+                    _ => types::Mode::Normal,
+                };
+                helix::plugin::commands::set_mode(mode)
+            }
+            "views" => {
+                let views = helix::plugin::state::views()
+                    .iter()
+                    .map(|view| {
+                        format!(
+                            "{}:{}:{}x{}:{}-{}{}",
+                            view.id,
+                            view.document,
+                            view.area.width,
+                            view.area.height,
+                            view.first_line,
+                            view.last_line,
+                            if view.focused { "*" } else { "" }
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                host::set_status(&format!("views:{}", views.join(",")));
+                Ok(())
+            }
+            "ui-state" => {
+                let ui = helix::plugin::state::ui();
+                host::set_status(&format!(
+                    "ui:{:?}:menu={}:prompt={}:picker={}:popup={}:panel={:?}:keys={}",
+                    ui.mode, ui.completion_menu, ui.prompt, ui.picker, ui.popup, ui.focused_panel, ui.pending_keys
+                ));
+                Ok(())
+            }
+            "count-commands" => {
+                use helix::plugin::commands::CommandKind;
+                let commands = helix::plugin::commands::list();
+                let count = |kind: CommandKind| commands.iter().filter(|command| command.kind == kind).count();
+                let has = |name: &str| commands.iter().any(|command| command.name == name);
+                host::set_status(&format!(
+                    "commands:native={}:typable={}:plugin={}:{}:{}:{}",
+                    count(CommandKind::Native) > 0,
+                    count(CommandKind::Typable) > 0,
+                    count(CommandKind::Plugin) > 0,
+                    has("move_char_left"),
+                    has("write"),
+                    has("testplugin3/exec"),
+                ));
                 Ok(())
             }
             "caps" => {

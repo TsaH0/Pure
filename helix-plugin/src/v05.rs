@@ -248,13 +248,16 @@ fn not_yet<T>(what: &str) -> Result<T, String> {
 /// Most key bindings per plugin.
 pub const MAX_KEY_BINDINGS: usize = 256;
 
+/// Checks a key sequence: `Err` says what is wrong with it.
+pub type CheckKeys = fn(&str) -> Result<(), String>;
+
 /// What the editor provides to API 0.5 calls
 /// ([`crate::PluginHost::set_editor_fns`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EditorFns {
     /// Check a key sequence ("space f", "C-k").
-    pub check_keys: Option<fn(&str) -> Result<(), String>>,
-    /// Every native, typable and plugin command.
+    pub check_keys: Option<CheckKeys>,
+    /// Every native and typable command.
     pub commands: Option<fn() -> Vec<CommandEntry>>,
 }
 
@@ -270,6 +273,8 @@ pub(crate) struct V05 {
     pub key_bindings: Vec<KeyBinding>,
     pub subscriptions: Vec<Subscription>,
     pub next_subscription: u32,
+    /// Every loaded plugin's commands ("plugin/command", doc).
+    pub plugin_commands: std::sync::Arc<Vec<(String, String)>>,
 }
 
 /// An event subscription with its filter (`subscriptions.subscribe`).
@@ -492,27 +497,110 @@ impl State {
         }
     }
     pub(crate) fn command_list(&mut self) -> Vec<CommandEntry> {
-        Vec::new()
+        let mut commands = self
+            .v05
+            .editor
+            .commands
+            .map(|list| list())
+            .unwrap_or_default();
+        commands.extend(
+            self.v05
+                .plugin_commands
+                .iter()
+                .map(|(name, doc)| CommandEntry {
+                    name: name.clone(),
+                    doc: doc.clone(),
+                    kind: CommandKind::Plugin,
+                }),
+        );
+        commands
+    }
+    /// Whether `name` is a command (native, typable, or another plugin's).
+    fn check_command(&self, name: &str) -> Result<(), String> {
+        if name.contains('/') {
+            return if self.v05.plugin_commands.iter().any(|(n, _)| n == name) {
+                Ok(())
+            } else {
+                Err(format!("no plugin command '{name}'"))
+            };
+        }
+        match self.v05.editor.commands {
+            Some(list) if !list().iter().any(|command| command.name == name) => {
+                Err(format!("no command '{name}'"))
+            }
+            _ => Ok(()),
+        }
+    }
+    /// Whether this plugin may run command `name`: `run-commands`, and
+    /// every program allowed for commands that start programs.
+    fn check_may_run(&self, name: &str) -> Result<(), String> {
+        self.need(crate::Permission::RunCommands)?;
+        let starts = self
+            .starts_program
+            .is_some_and(|starts| starts(name) || starts(&format!(":{name}")));
+        if starts && self.process != crate::ProcessGrant::Any {
+            return Err(format!(
+                "'{name}' runs programs: it needs allow-process = true in plugins.toml"
+            ));
+        }
+        Ok(())
+    }
+    fn check_args(args: &[String]) -> Result<(), String> {
+        if args.len() > 64 || args.iter().any(|arg| arg.len() > 64 << 10) {
+            return Err("at most 64 arguments of at most 64 KiB".into());
+        }
+        Ok(())
     }
     pub(crate) fn execute(
         &mut self,
-        _name: String,
-        _args: Vec<String>,
-        _count: Option<u32>,
+        name: String,
+        args: Vec<String>,
+        count: Option<u32>,
     ) -> Result<u32, String> {
-        not_yet("commands.execute")
+        self.need_ui("commands.execute")?;
+        self.check_command(&name)?;
+        self.check_may_run(&name)?;
+        Self::check_args(&args)?;
+        let id = self.request(crate::PendingKind::Command)?;
+        self.actions.push(crate::Action::Execute {
+            plugin: self.plugin.clone(),
+            id,
+            name,
+            args,
+            count,
+        });
+        Ok(id)
     }
-    pub(crate) fn batch(&mut self, _steps: Vec<Step>) -> Result<u32, String> {
-        not_yet("commands.batch")
+    pub(crate) fn batch(&mut self, steps: Vec<Step>) -> Result<u32, String> {
+        self.need_ui("commands.batch")?;
+        if steps.is_empty() || steps.len() > 100 {
+            return Err("a batch has 1 to 100 steps".into());
+        }
+        for step in &steps {
+            if let Step::Command { name, args, .. } = step {
+                self.check_command(name)?;
+                self.check_may_run(name)?;
+                Self::check_args(args)?;
+            }
+        }
+        let id = self.request(crate::PendingKind::Batch)?;
+        self.actions.push(crate::Action::Batch {
+            plugin: self.plugin.clone(),
+            id,
+            steps,
+        });
+        Ok(id)
     }
-    pub(crate) fn set_mode(&mut self, _mode: Mode) -> Result<(), String> {
-        not_yet("commands.set-mode")
+    pub(crate) fn set_mode(&mut self, mode: Mode) -> Result<(), String> {
+        self.need_ui("commands.set-mode")?;
+        self.actions.push(crate::Action::SetMode(mode));
+        Ok(())
     }
     pub(crate) fn views(&mut self) -> Vec<ViewInfo> {
-        Vec::new()
+        self.snapshot.views.clone()
     }
     pub(crate) fn ui_state(&mut self) -> UiState {
-        UiState::default()
+        self.snapshot.ui.clone()
     }
     pub(crate) fn register_service(
         &mut self,
@@ -851,5 +939,58 @@ impl crate::PluginHost {
             }
         }
         result
+    }
+}
+
+impl crate::PluginHost {
+    /// Give every plugin the list of all plugins' commands (after loading).
+    pub(crate) fn refresh_command_lists(&mut self) {
+        let commands: Vec<(String, String)> = self
+            .commands()
+            .into_iter()
+            .map(|(plugin, command)| (format!("{plugin}/{}", command.name), command.doc))
+            .collect();
+        let commands = std::sync::Arc::new(commands);
+        for plugin in &mut self.plugins {
+            plugin.store.data_mut().v05.plugin_commands = commands.clone();
+        }
+    }
+
+    /// Deliver an API 0.5 result to `plugin` (if it still waits for it) and
+    /// return what it does.
+    pub fn callback2(
+        &mut self,
+        plugin: &str,
+        callback: Callback2,
+        snapshot: &crate::Snapshot,
+    ) -> anyhow::Result<Vec<crate::Action>> {
+        let limit = self.limits.command;
+        let Some(plugin) = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.manifest.name == plugin && p.disabled.is_none())
+        else {
+            return Ok(Vec::new());
+        };
+        let (id, kind) = match &callback {
+            Callback2::CommandDone { id, .. } => (*id, crate::PendingKind::Command),
+            Callback2::BatchDone { id, .. } => (*id, crate::PendingKind::Batch),
+            Callback2::ServiceReply { id, .. } => (*id, crate::PendingKind::Service),
+            Callback2::LspReply { id, .. } => (*id, crate::PendingKind::Lsp),
+        };
+        if plugin.store.data().pending.get(&id) != Some(&kind) {
+            return Ok(Vec::new());
+        }
+        plugin.store.data_mut().pending.remove(&id);
+        plugin
+            .call(
+                snapshot.clone(),
+                crate::CallContext::Callback,
+                limit,
+                move |guest, store| {
+                    Box::pin(async move { guest.call_callback2(store, &callback).await })
+                },
+            )
+            .map(|((), actions)| actions)
     }
 }

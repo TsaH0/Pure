@@ -2080,6 +2080,7 @@ impl Component for EditorView {
 
         // Plugin panels take columns beside the views and rows below them.
         crate::plugins::check_focus(cx.editor);
+        crate::plugins::set_pending_keys(self.keymaps.pending());
         let (views_area, panel_areas) = if cx.editor.panels.is_empty() {
             (editor_area, Vec::new())
         } else {

@@ -70,6 +70,9 @@ runtime_local! {
     static WANTED2: AtomicU32 = AtomicU32::new(0);
     /// The focused view and its document, as last reported to plugins.
     static LAST_FOCUS: Mutex<Option<(ViewId, DocumentId)>> = Mutex::new(None);
+    /// What the UI shows (prompt, picker, popup) and the keys typed so far,
+    /// for `state.ui`.
+    static UI: Mutex<UiFlags> = Mutex::new(UiFlags { prompt: false, picker: false, popup: false, pending: Vec::new() });
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
     /// Whether a plugin may read registers, so snapshots include them.
@@ -1027,12 +1030,193 @@ pub fn log_lines(plugin: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Run a plugin command given as `plugin/command`.
+struct UiFlags {
+    prompt: bool,
+    picker: bool,
+    popup: bool,
+    pending: Vec<helix_view::input::KeyEvent>,
+}
+
+/// The compositor's layers, each frame.
+pub fn set_ui_layers(layers: impl Iterator<Item = &'static str>) {
+    let (mut prompt, mut picker, mut popup) = (false, false, false);
+    for layer in layers {
+        prompt |= layer.contains("ui::prompt::Prompt");
+        picker |= layer.contains("ui::picker::Picker");
+        popup |= layer.contains("ui::popup::Popup");
+    }
+    let mut ui = UI.lock();
+    (ui.prompt, ui.picker, ui.popup) = (prompt, picker, popup);
+}
+
+/// The keys typed so far of a sequence, each frame.
+pub fn set_pending_keys(keys: &[helix_view::input::KeyEvent]) {
+    let mut ui = UI.lock();
+    if ui.pending != keys {
+        ui.pending = keys.to_vec();
+    }
+}
+
+/// The views and UI, for snapshots.
+fn views_and_ui(editor: &Editor) -> (Vec<helix_plugin::v05::ViewInfo>, helix_plugin::v05::UiState) {
+    let focus = editor.tree.focus;
+    let views = editor
+        .tree
+        .views()
+        .map(|(view, focused)| {
+            let doc = &editor.documents[&view.doc];
+            let text = doc.text().slice(..);
+            let first = text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars()));
+            let last = (first + view.inner_height().saturating_sub(1))
+                .min(text.len_lines().saturating_sub(1));
+            let area = view.area;
+            helix_plugin::v05::ViewInfo {
+                id: view_number(view.id),
+                document: plugin_doc_id(view.doc),
+                area: (area.x, area.y, area.width, area.height),
+                first_line: first as u32,
+                last_line: last as u32,
+                focused: focused || view.id == focus,
+            }
+        })
+        .collect();
+    let flags = UI.lock();
+    let pending: Vec<String> = flags.pending.iter().map(|key| key.to_string()).collect();
+    let ui = helix_plugin::v05::UiState {
+        mode: plugin_mode(editor.mode()),
+        completion_menu: crate::ui::completion::menu_events::snapshot().is_some(),
+        prompt: flags.prompt,
+        picker: flags.picker,
+        popup: flags.popup,
+        focused_panel: editor
+            .panels
+            .iter()
+            .find(|panel| panel.focused)
+            .map(|panel| {
+                match panel.dock {
+                    helix_view::sidebar::Dock::Left => "left",
+                    helix_view::sidebar::Dock::Right => "right",
+                    helix_view::sidebar::Dock::Bottom => "bottom",
+                    helix_view::sidebar::Dock::Float => "float",
+                }
+                .to_string()
+            }),
+        pending_keys: pending.join(" "),
+    };
+    (views, ui)
+}
+
+/// Every native and typable command, for `commands.list`.
+fn command_entries() -> Vec<helix_plugin::v05::CommandEntry> {
+    use helix_plugin::v05::{CommandEntry, CommandKind};
+    let native = MappableCommand::STATIC_COMMAND_LIST
+        .iter()
+        .map(|command| CommandEntry {
+            name: command.name().to_string(),
+            doc: command.doc().to_string(),
+            kind: CommandKind::Native,
+        });
+    let typable = commands::typed::typable_commands().map(|(name, doc)| CommandEntry {
+        name: name.to_string(),
+        doc: doc.to_string(),
+        kind: CommandKind::Typable,
+    });
+    native.chain(typable).collect()
+}
+
 /// What the editor provides to API 0.5 calls.
 fn editor_fns() -> helix_plugin::v05::EditorFns {
     helix_plugin::v05::EditorFns {
         check_keys: Some(|keys| parse_keys(keys).map(|_| ())),
-        commands: None,
+        commands: Some(command_entries),
     }
+}
+
+/// Run command `name` for a plugin (API 0.5): a plugin's "plugin/command",
+/// a typable command with `args` as they are, or a native command `count`
+/// times.
+fn execute_named(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    name: &str,
+    args: Vec<String>,
+    count: Option<u32>,
+) -> Result<(), String> {
+    if name.contains('/') {
+        return run_command(editor, jobs, name, args).map_err(|err| err.to_string());
+    }
+    if commands::typed::typable_commands().any(|(typable, _)| typable == name) {
+        let mut cx = crate::compositor::Context {
+            editor,
+            jobs,
+            scroll: None,
+        };
+        return commands::typed::execute_with_args(&mut cx, name, &args)
+            .map_err(|err| err.to_string());
+    }
+    let command = MappableCommand::from_str(name).map_err(|err| err.to_string())?;
+    run_static(editor, jobs, &command, count);
+    Ok(())
+}
+
+/// Run a native command as its key would, reporting a mode change.
+fn run_static(editor: &mut Editor, jobs: &mut Jobs, command: &MappableCommand, count: Option<u32>) {
+    let old_mode = editor.mode();
+    let mut cx = commands::Context {
+        register: None,
+        count: count.and_then(|count| std::num::NonZeroUsize::new(count as usize)),
+        editor,
+        callback: Vec::new(),
+        on_next_key_callback: None,
+        jobs,
+    };
+    command.execute(&mut cx);
+    let new_mode = cx.editor.mode();
+    if new_mode != old_mode {
+        helix_event::dispatch(crate::events::OnModeSwitch {
+            old_mode,
+            new_mode,
+            cx: &mut cx,
+        });
+    }
+    for callback in cx.callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::Callback(callback));
+    }
+    if let Some((callback, kind)) = cx.on_next_key_callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::NextKey(callback, kind));
+    }
+}
+
+/// Switch mode like the mode keys.
+fn set_mode(editor: &mut Editor, jobs: &mut Jobs, mode: helix_plugin::Mode) {
+    let (target, command) = match mode {
+        helix_plugin::Mode::Normal => (Mode::Normal, MappableCommand::normal_mode),
+        helix_plugin::Mode::Insert => (Mode::Insert, MappableCommand::insert_mode),
+        helix_plugin::Mode::Select => (Mode::Select, MappableCommand::select_mode),
+    };
+    if editor.mode() != target {
+        run_static(editor, jobs, &command, None);
+    }
+}
+
+/// Deliver an API 0.5 result to `plugin` after this event.
+fn deliver2_later(plugin: String, callback: helix_plugin::v05::Callback2) {
+    tokio::spawn(async move {
+        job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+            move |editor, _, jobs| {
+                let snapshot = snapshot(editor);
+                match with_host(|host| host.callback2(&plugin, callback, &snapshot)) {
+                    Some(Ok(actions)) => apply(editor, Some(jobs), actions),
+                    Some(Err(err)) => {
+                        refresh_wanted(editor);
+                        editor.set_error(err.to_string());
+                    }
+                    None => {}
+                }
+            },
+        )))
+        .await;
+    });
 }
 
 /// "space f" as key events.
@@ -1199,6 +1383,7 @@ fn view_for(editor: &Editor, doc: DocumentId) -> Option<ViewId> {
 
 /// What plugins can see of the editor. Cheap: ropes are reference counted.
 pub fn snapshot(editor: &Editor) -> Snapshot {
+    let (views, ui) = views_and_ui(editor);
     let documents = editor
         .documents()
         .map(|doc| {
@@ -1237,6 +1422,8 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                 focused: panel.focused,
             })
             .collect(),
+        views,
+        ui,
         completion_menu: crate::ui::completion::menu_events::snapshot().map(|menu| {
             helix_plugin::v05::MenuState {
                 items: menu.items,
@@ -1366,6 +1553,53 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             }
             Action::Listen { plugin, id, port } => listen::start(plugin, id, port),
             Action::SubscriptionsChanged => refresh_wanted(editor),
+            Action::Execute {
+                plugin,
+                id,
+                name,
+                args,
+                count,
+            } => {
+                let result = match jobs.as_deref_mut() {
+                    Some(jobs) => execute_named(editor, jobs, &name, args, count),
+                    None => Err("commands can't run from here".to_string()),
+                };
+                deliver2_later(
+                    plugin,
+                    helix_plugin::v05::Callback2::CommandDone { id, result },
+                );
+            }
+            Action::Batch { plugin, id, steps } => {
+                let mut results = Vec::with_capacity(steps.len());
+                let mut failed = false;
+                for step in steps {
+                    if failed {
+                        results.push(Err("skipped".to_string()));
+                        continue;
+                    }
+                    let result = match (jobs.as_deref_mut(), step) {
+                        (None, _) => Err("commands can't run from here".to_string()),
+                        (Some(jobs), helix_plugin::v05::Step::Command { name, args, count }) => {
+                            execute_named(editor, jobs, &name, args, count)
+                        }
+                        (Some(jobs), helix_plugin::v05::Step::SetMode(mode)) => {
+                            set_mode(editor, jobs, mode);
+                            Ok(())
+                        }
+                    };
+                    failed = result.is_err();
+                    results.push(result);
+                }
+                deliver2_later(
+                    plugin,
+                    helix_plugin::v05::Callback2::BatchDone { id, results },
+                );
+            }
+            Action::SetMode(mode) => {
+                if let Some(jobs) = jobs.as_deref_mut() {
+                    set_mode(editor, jobs, mode);
+                }
+            }
             // The menu is the editor view's: the rest of the actions wait
             // until it is done, to keep their order.
             Action::CompletionMenu(command) => {

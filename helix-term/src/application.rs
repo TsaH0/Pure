@@ -295,6 +295,8 @@ impl Application {
 
         helix_event::start_frame();
         cx.editor.needs_redraw = false;
+        // What plugins see of the UI (API 0.5 `state.ui`).
+        crate::plugins::set_ui_layers(self.compositor.layer_names());
 
         let area = self
             .terminal
