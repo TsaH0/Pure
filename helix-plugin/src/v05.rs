@@ -1939,9 +1939,21 @@ impl crate::PluginHost {
             // Asked for but not granted: why calls fail.
             let mut missing = Vec::new();
             for (permission, granted, setting) in [
-                (crate::Permission::Process, state.process != crate::ProcessGrant::None, "allow-process"),
-                (crate::Permission::Filesystem, state.files != crate::FileGrant::None, "allow-files"),
-                (crate::Permission::Listen, !state.listen.is_empty(), "allow-listen"),
+                (
+                    crate::Permission::Process,
+                    state.process != crate::ProcessGrant::None,
+                    "allow-process",
+                ),
+                (
+                    crate::Permission::Filesystem,
+                    state.files != crate::FileGrant::None,
+                    "allow-files",
+                ),
+                (
+                    crate::Permission::Listen,
+                    !state.listen.is_empty(),
+                    "allow-listen",
+                ),
                 (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
             ] {
                 if m.permissions.contains(&permission) && !granted {
@@ -2021,6 +2033,10 @@ fn list(items: &[impl AsRef<str>]) -> String {
     if items.is_empty() {
         "none".into()
     } else {
-        items.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(", ")
+        items
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }

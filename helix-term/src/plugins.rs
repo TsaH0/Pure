@@ -2761,7 +2761,10 @@ fn refresh_wanted(editor: &mut Editor) {
         with_host(|host| host.wants_registers()).unwrap_or(false),
         Ordering::Relaxed,
     );
-    HAS_V05.store(with_host(|host| has_v05(host)).unwrap_or(false), Ordering::Relaxed);
+    HAS_V05.store(
+        with_host(|host| has_v05(host)).unwrap_or(false),
+        Ordering::Relaxed,
+    );
     for plugin in disabled {
         tear_down(editor, &plugin);
     }

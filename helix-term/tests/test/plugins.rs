@@ -3864,7 +3864,11 @@ async fn lens_example_shows_uses_and_follows_settings_changes() -> anyhow::Resul
     // A changed grant reloads the plugins.
     let settings: toml::Table = toml::from_str("[lens]\nmin-uses = 1\nallow-lsp = true\n")?;
     helix_term::plugins::settings_changed(&mut app.editor, &settings);
-    assert!(status(&app).0.contains("Plugins reloaded"), "{:?}", status(&app));
+    assert!(
+        status(&app).0.contains("Plugins reloaded"),
+        "{:?}",
+        status(&app)
+    );
     Ok(())
 }
 
@@ -3874,7 +3878,10 @@ async fn plugin_settings_schemas_are_checked_at_load() -> anyhow::Result<()> {
     let file = root.path().join("main.rs");
     std::fs::write(&file, "fn main() {}\n")?;
     let (app, _plugins) = app_with_example_on("lens", &file, "[lens]\nmin-use = 2\n");
-    assert_error(&app, "unknown setting 'min-use' (the plugin has: enabled, min-uses, scope)");
+    assert_error(
+        &app,
+        "unknown setting 'min-use' (the plugin has: enabled, min-uses, scope)",
+    );
     assert!(helix_term::plugins::plugin_names().is_empty());
     Ok(())
 }
@@ -3884,7 +3891,10 @@ async fn plugin_doctor_and_trace_report_what_plugins_do() -> anyhow::Result<()> 
     let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""process""#, "");
     let report = helix_term::plugins::doctor();
     assert!(report.contains("## testplugin3 1 (API 0.5)"), "{report}");
-    assert!(report.contains("**Not granted:** process (needs allow-process)"), "{report}");
+    assert!(
+        report.contains("**Not granted:** process (needs allow-process)"),
+        "{report}"
+    );
     keys(&mut app, ":plugin-doctor<ret>").await;
     keys(&mut app, ":plugin-trace testplugin3<ret>").await;
     assert_eq!(

@@ -2472,10 +2472,23 @@ fn api_04_capabilities_revisions_cancel_and_snippets() {
                 .unwrap(),
         )
     };
+    // testplugin3 is built for 0.5: it sees the 0.5 additions too.
+    let caps: Vec<&str> = CAPABILITIES
+        .iter()
+        .chain(CAPABILITIES_05)
+        .copied()
+        .collect();
     assert_eq!(
         status(&mut host, "caps", vec![], Snapshot::default()),
-        ["caps:cancel-request,revisions,snippet-completions,panels,listen"]
+        [format!("caps:{}", caps.join(","))]
     );
+    assert!(caps.starts_with(&[
+        "cancel-request",
+        "revisions",
+        "snippet-completions",
+        "panels",
+        "listen"
+    ]));
 
     // A document's revision; its own edits count within the call.
     let mut snap = snapshot("text", 0, 0);
@@ -5149,7 +5162,12 @@ type = "string-list"
 fn schema_host(config: &str) -> (PluginHost, anyhow::Result<Vec<Action>>, tempfile::TempDir) {
     let mut host = host();
     let root = tempfile::tempdir().unwrap();
-    let dir = plugin_dir(root.path(), "testplugin3", &fixture("tests/fixtures/testplugin3.wasm"), ALL);
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        ALL,
+    );
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
@@ -5172,11 +5190,17 @@ fn api_05_settings_are_checked_against_the_schema() {
         serde_json::json!({"flags": "", "width": 20, "mode": "fast"})
     );
     for (config, error) in [
-        (r#"{"widht": 20}"#, "unknown setting 'widht' (the plugin has: flags, mode, tags, width)"),
+        (
+            r#"{"widht": 20}"#,
+            "unknown setting 'widht' (the plugin has: flags, mode, tags, width)",
+        ),
         (r#"{"width": "wide"}"#, "width: expected integer"),
         (r#"{"width": 2.5}"#, "width: expected integer"),
         (r#"{"width": 500}"#, "width: 500 is outside 1..=100"),
-        (r#"{"mode": "medium"}"#, "mode: 'medium' is not one of fast, slow"),
+        (
+            r#"{"mode": "medium"}"#,
+            "mode: 'medium' is not one of fast, slow",
+        ),
         (r#"{"tags": ["a", 1]}"#, "tags: expected string-list"),
     ] {
         let (_, loaded, _root) = schema_host(config);
@@ -5188,12 +5212,18 @@ fn api_05_settings_are_checked_against_the_schema() {
         "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.n]\ntype = \"integer\"\ndefault = \"x\"\n",
     )
     .unwrap_err();
-    assert!(format!("{err:#}").contains("setting 'n': default: expected integer"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("setting 'n': default: expected integer"),
+        "{err:#}"
+    );
     let err = Manifest::parse(
         "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.e]\ntype = \"enum\"\n",
     )
     .unwrap_err();
-    assert!(format!("{err:#}").contains("an enum needs values"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("an enum needs values"),
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -5203,11 +5233,20 @@ fn api_05_plugins_hear_about_settings_changes() {
     let snap = snapshot("text\n", 0, 0);
     // Unchanged (after defaults): nothing.
     let same = r#"{"flags": "subscribe-config", "width": 10}"#;
-    assert!(host.set_config("testplugin3", same, &snap).unwrap().is_none());
+    assert!(host
+        .set_config("testplugin3", same, &snap)
+        .unwrap()
+        .is_none());
     let changed = r#"{"flags": "subscribe-config", "width": 30}"#;
-    assert!(host.set_config("testplugin3", changed, &snap).unwrap().is_some());
+    assert!(host
+        .set_config("testplugin3", changed, &snap)
+        .unwrap()
+        .is_some());
     let actions = v5_run(&mut host, "config", &[]).unwrap();
-    assert!(statuses(&actions)[0].contains(r#""width":30"#), "{actions:?}");
+    assert!(
+        statuses(&actions)[0].contains(r#""width":30"#),
+        "{actions:?}"
+    );
     // Invalid settings are refused and keep the old ones.
     let err = host
         .set_config("testplugin3", r#"{"width": 0}"#, &snap)
@@ -5231,7 +5270,10 @@ fn api_05_tracing_and_the_doctor_report() {
     assert_eq!(host.set_trace(Some("testplugin3"), true), 1);
     v5_run(&mut host, "bind", &["plugin", "go", "normal", "space", "g"]).unwrap();
     let log = host.log_lines("testplugin3").unwrap();
-    let trace = log.iter().find(|line| line.starts_with("trace: command call, ")).unwrap();
+    let trace = log
+        .iter()
+        .find(|line| line.starts_with("trace: command call, "))
+        .unwrap();
     assert!(trace.ends_with(" actions"), "{trace}");
     host.set_trace(None, false);
     let before = host.log_lines("testplugin3").unwrap().len();
