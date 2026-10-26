@@ -93,6 +93,15 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             subscribe(EventType::PluginChange, &filter)?;
             subscribe(EventType::Shutdown, &filter)?;
         }
+        if config.contains("provide-echo") {
+            helix::plugin::services::register("echo", "1.2.3", &[])?;
+        }
+        if config.contains("provide-private") {
+            helix::plugin::services::register("private", "1.0.0", &["testplugin3".to_string()])?;
+        }
+        if config.contains("provide-bad") {
+            helix::plugin::services::register("Bad Name", "1.0.0", &[])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -152,6 +161,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "views",
                 "ui-state",
                 "count-commands",
+                "call",
+                "discover",
+                "register-late",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -541,6 +553,23 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 ));
                 Ok(())
             }
+            "call" => {
+                let [service, version, method, payload] = &args[..] else {
+                    return Err("service version method payload".into());
+                };
+                let id = helix::plugin::services::call(service, version, method, payload)?;
+                host::set_status(&format!("calling:{id}"));
+                Ok(())
+            }
+            "discover" => {
+                let found = helix::plugin::services::discover(args.first().ok_or("a name")?)
+                    .iter()
+                    .map(|s| format!("{}.{}@{}", s.plugin, s.name, s.version))
+                    .collect::<Vec<_>>();
+                host::set_status(&format!("discovered:{}", found.join(",")));
+                Ok(())
+            }
+            "register-late" => helix::plugin::services::register("late", "1.0.0", &[]),
             "count-commands" => {
                 use helix::plugin::commands::CommandKind;
                 let commands = helix::plugin::commands::list();
@@ -872,6 +901,21 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         match method.as_str() {
             "echo" => Ok(payload),
             "fail" => Err("failed on purpose".into()),
+            "bad-json" => Ok("not json".into()),
+            "slow" => loop {
+                std::hint::black_box(());
+            },
+            // Call the first service the payload (a JSON string of
+            // space-separated services) names, passing on the rest.
+            "relay" => {
+                let mut targets = payload.trim_matches('"').split_whitespace();
+                let Some(target) = targets.next() else {
+                    return Ok("\"end\"".into());
+                };
+                let rest = format!("\"{}\"", targets.collect::<Vec<_>>().join(" "));
+                let id = helix::plugin::services::call(target, "1.0.0", "relay", &rest)?;
+                Ok(format!("\"relayed:{id}\""))
+            }
             _ => Err(format!("no method {method}")),
         }
     }

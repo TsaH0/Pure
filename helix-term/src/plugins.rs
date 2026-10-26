@@ -1199,21 +1199,52 @@ fn set_mode(editor: &mut Editor, jobs: &mut Jobs, mode: helix_plugin::Mode) {
     }
 }
 
-/// Deliver an API 0.5 result to `plugin` after this event.
-fn deliver2_later(plugin: String, callback: helix_plugin::v05::Callback2) {
+/// Serve a plugin's service call after this event, then deliver the
+/// reply to the caller.
+fn serve_later(call: helix_plugin::v05::ServiceCall) {
     tokio::spawn(async move {
         job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
             move |editor, _, jobs| {
                 let snapshot = snapshot(editor);
-                match with_host(|host| host.callback2(&plugin, callback, &snapshot)) {
-                    Some(Ok(actions)) => apply(editor, Some(jobs), actions),
-                    Some(Err(err)) => {
-                        refresh_wanted(editor);
-                        editor.set_error(err.to_string());
-                    }
-                    None => {}
-                }
+                let Some((result, actions)) = with_host(|host| host.serve(&call, &snapshot)) else {
+                    return;
+                };
+                apply(editor, Some(&mut *jobs), actions);
+                refresh_wanted(editor);
+                let callback = helix_plugin::v05::Callback2::ServiceReply {
+                    id: call.id,
+                    result,
+                };
+                deliver2(editor, jobs, call.caller, callback);
             },
+        )))
+        .await;
+    });
+}
+
+/// Deliver an API 0.5 result to `plugin` now.
+fn deliver2(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    plugin: String,
+    callback: helix_plugin::v05::Callback2,
+) {
+    let snapshot = snapshot(editor);
+    match with_host(|host| host.callback2(&plugin, callback, &snapshot)) {
+        Some(Ok(actions)) => apply(editor, Some(jobs), actions),
+        Some(Err(err)) => {
+            refresh_wanted(editor);
+            editor.set_error(err.to_string());
+        }
+        None => {}
+    }
+}
+
+/// Deliver an API 0.5 result to `plugin` after this event.
+fn deliver2_later(plugin: String, callback: helix_plugin::v05::Callback2) {
+    tokio::spawn(async move {
+        job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+            move |editor, _, jobs| deliver2(editor, jobs, plugin, callback),
         )))
         .await;
     });
@@ -1595,6 +1626,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     helix_plugin::v05::Callback2::BatchDone { id, results },
                 );
             }
+            Action::ServiceCall(call) => serve_later(call),
             Action::SetMode(mode) => {
                 if let Some(jobs) = jobs.as_deref_mut() {
                     set_mode(editor, jobs, mode);

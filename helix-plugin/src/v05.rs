@@ -2,6 +2,8 @@
 //! methods behind the 0.5 imports.
 
 use crate::{DocumentId, Mode, State};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Where a plugin key binding sits among the keymaps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -265,7 +267,7 @@ pub struct EditorFns {
 pub const MAX_SUBSCRIPTIONS: usize = 64;
 
 /// A plugin's API 0.5 state.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct V05 {
     /// The user's `allow-key-override`.
     pub key_override: bool,
@@ -275,6 +277,197 @@ pub(crate) struct V05 {
     pub next_subscription: u32,
     /// Every loaded plugin's commands ("plugin/command", doc).
     pub plugin_commands: std::sync::Arc<Vec<(String, String)>>,
+    /// Cleared when the plugin is disabled or unloaded.
+    pub alive: Arc<AtomicBool>,
+    /// The services this plugin registered.
+    pub own_services: Vec<Service>,
+    /// Every loaded plugin's services.
+    pub services: Arc<Vec<Service>>,
+    /// While serving a call: the plugins that led to it, first caller
+    /// first.
+    pub chain: Vec<String>,
+}
+
+impl Default for V05 {
+    fn default() -> Self {
+        Self {
+            key_override: false,
+            editor: EditorFns::default(),
+            key_bindings: Vec::new(),
+            subscriptions: Vec::new(),
+            next_subscription: 0,
+            plugin_commands: Default::default(),
+            alive: Arc::new(AtomicBool::new(true)),
+            own_services: Vec::new(),
+            services: Default::default(),
+            chain: Vec::new(),
+        }
+    }
+}
+
+/// Most services per plugin.
+pub const MAX_SERVICES: usize = 32;
+/// The longest chain of plugins calling each other's services.
+pub const MAX_SERVICE_CHAIN: usize = 4;
+/// Largest service payload or reply.
+pub const MAX_SERVICE_PAYLOAD: usize = 1 << 20;
+
+/// A registered service.
+#[derive(Debug, Clone)]
+pub(crate) struct Service {
+    pub plugin: String,
+    pub name: String,
+    pub version: (u64, u64, u64),
+    /// Plugins allowed to call (empty: any).
+    pub callers: Vec<String>,
+    pub alive: Arc<AtomicBool>,
+}
+
+impl Service {
+    fn info(&self) -> ServiceInfo {
+        let (major, minor, patch) = self.version;
+        ServiceInfo {
+            plugin: self.plugin.clone(),
+            name: self.name.clone(),
+            version: format!("{major}.{minor}.{patch}"),
+        }
+    }
+    fn serves(&self, caller: &str) -> bool {
+        self.alive.load(Ordering::Relaxed)
+            && (self.callers.is_empty() || self.callers.iter().any(|c| c == caller))
+    }
+}
+
+/// "major.minor.patch"
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split('.').map(|part| part.parse::<u64>().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+/// A call to a plugin's service, served after the caller's call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceCall {
+    pub caller: String,
+    pub id: u32,
+    pub provider: String,
+    pub service: String,
+    pub method: String,
+    pub payload: String,
+    /// The plugins that led to this call, ending with the caller.
+    pub chain: Vec<String>,
+}
+
+fn check_json(what: &str, json: &str) -> Result<(), String> {
+    if json.len() > MAX_SERVICE_PAYLOAD {
+        return Err(format!("{what} is larger than 1 MiB"));
+    }
+    serde_json::from_str::<serde::de::IgnoredAny>(json)
+        .map(|_| ())
+        .map_err(|err| format!("{what} is not JSON: {err}"))
+}
+
+/// Order plugins so dependencies load first. Plugins with a missing
+/// required dependency (not in `plugins` and not `loaded`) or in a cycle
+/// are left out, with an error each.
+pub(crate) fn dependency_order<T>(
+    plugins: Vec<(T, crate::Manifest, crate::PluginSettings)>,
+    loaded: impl Fn(&str) -> bool,
+) -> (
+    Vec<(T, crate::Manifest, crate::PluginSettings)>,
+    Vec<anyhow::Error>,
+) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        New,
+        Visiting,
+        Done,
+        Failed,
+    }
+    let names: Vec<String> = plugins.iter().map(|(_, m, _)| m.name.clone()).collect();
+    let index = |name: &str| names.iter().position(|n| n == name);
+    let mut marks = vec![Mark::New; plugins.len()];
+    let mut order = Vec::with_capacity(plugins.len());
+    let mut errors = Vec::new();
+    fn visit(
+        i: usize,
+        plugins: &[(impl Sized, crate::Manifest, crate::PluginSettings)],
+        index: &dyn Fn(&str) -> Option<usize>,
+        loaded: &dyn Fn(&str) -> bool,
+        marks: &mut [Mark],
+        order: &mut Vec<usize>,
+        errors: &mut Vec<anyhow::Error>,
+    ) -> bool {
+        match marks[i] {
+            Mark::Done => return true,
+            Mark::Failed => return false,
+            Mark::Visiting => {
+                errors.push(anyhow::anyhow!(
+                    "plugin '{}' is in a dependency cycle",
+                    plugins[i].1.name
+                ));
+                marks[i] = Mark::Failed;
+                return false;
+            }
+            Mark::New => {}
+        }
+        marks[i] = Mark::Visiting;
+        let manifest = &plugins[i].1;
+        let mut ok = true;
+        for (dependency, required) in manifest
+            .dependencies
+            .iter()
+            .map(|d| (d, true))
+            .chain(manifest.optional_dependencies.iter().map(|d| (d, false)))
+        {
+            match index(dependency) {
+                Some(j) => {
+                    if !visit(j, plugins, index, loaded, marks, order, errors) && required {
+                        if marks[i] != Mark::Failed {
+                            errors.push(anyhow::anyhow!(
+                                "plugin '{}' needs plugin '{dependency}', which can't load",
+                                manifest.name
+                            ));
+                        }
+                        ok = false;
+                    }
+                }
+                None if required && !loaded(dependency) => {
+                    errors.push(anyhow::anyhow!(
+                        "plugin '{}' needs plugin '{dependency}', which isn't installed or enabled",
+                        manifest.name
+                    ));
+                    ok = false;
+                }
+                None => {}
+            }
+        }
+        if marks[i] == Mark::Failed {
+            return false;
+        }
+        marks[i] = if ok { Mark::Done } else { Mark::Failed };
+        if ok {
+            order.push(i);
+        }
+        ok
+    }
+    for i in 0..plugins.len() {
+        visit(
+            i,
+            &plugins,
+            &index,
+            &loaded,
+            &mut marks,
+            &mut order,
+            &mut errors,
+        );
+    }
+    let mut plugins: Vec<Option<_>> = plugins.into_iter().map(Some).collect();
+    let ordered = order
+        .into_iter()
+        .filter_map(|i| plugins[i].take())
+        .collect();
+    (ordered, errors)
 }
 
 /// An event subscription with its filter (`subscriptions.subscribe`).
@@ -604,23 +797,124 @@ impl State {
     }
     pub(crate) fn register_service(
         &mut self,
-        _name: String,
-        _version: String,
-        _callers: Vec<String>,
+        name: String,
+        version: String,
+        callers: Vec<String>,
     ) -> Result<(), String> {
-        not_yet("services.register")
+        if self.context != crate::CallContext::Init {
+            return Err("services.register is only available from init".into());
+        }
+        if name.len() > 64 || !crate::is_valid_name(&name) {
+            return Err(format!(
+                "invalid service name '{name}': use a-z, 0-9, '-' and '_'"
+            ));
+        }
+        let parsed = parse_version(&version)
+            .ok_or_else(|| format!("invalid version '{version}': use major.minor.patch"))?;
+        if callers.len() > 64 || callers.iter().any(|caller| !crate::is_valid_name(caller)) {
+            return Err("callers: at most 64 plugin names".into());
+        }
+        if self
+            .v05
+            .own_services
+            .iter()
+            .any(|service| service.name == name)
+        {
+            return Err(format!("service '{name}' is already registered"));
+        }
+        if self.v05.own_services.len() >= MAX_SERVICES {
+            return Err(format!("at most {MAX_SERVICES} services"));
+        }
+        self.v05.own_services.push(Service {
+            plugin: self.plugin.clone(),
+            name,
+            version: parsed,
+            callers,
+            alive: self.v05.alive.clone(),
+        });
+        Ok(())
     }
-    pub(crate) fn discover_services(&mut self, _name: &str) -> Vec<ServiceInfo> {
-        Vec::new()
+    pub(crate) fn discover_services(&mut self, name: &str) -> Vec<ServiceInfo> {
+        let (plugin, name) = match name.split_once('.') {
+            Some((plugin, name)) => (Some(plugin), name),
+            None => (None, name),
+        };
+        self.v05
+            .services
+            .iter()
+            .filter(|service| {
+                service.name == name
+                    && plugin.is_none_or(|plugin| service.plugin == plugin)
+                    && service.serves(&self.plugin)
+            })
+            .map(Service::info)
+            .collect()
     }
     pub(crate) fn call_service(
         &mut self,
-        _service: String,
-        _version: String,
-        _method: String,
-        _payload: String,
+        service: String,
+        version: String,
+        method: String,
+        payload: String,
     ) -> Result<u32, String> {
-        not_yet("services.call")
+        if self.context == crate::CallContext::Init {
+            return Err("services.call isn't available from init".into());
+        }
+        let (provider, name) = service
+            .split_once('.')
+            .ok_or_else(|| format!("'{service}': name a service as plugin.name"))?;
+        let want = parse_version(&version)
+            .ok_or_else(|| format!("invalid version '{version}': use major.minor.patch"))?;
+        if method.is_empty() || method.len() > 256 {
+            return Err("a method of 1 to 256 bytes".into());
+        }
+        check_json("the payload", &payload)?;
+        let found = self
+            .v05
+            .services
+            .iter()
+            .find(|s| s.plugin == provider && s.name == name)
+            .ok_or_else(|| format!("no service '{service}'"))?;
+        if !found.alive.load(Ordering::Relaxed) {
+            return Err(format!("plugin '{provider}' is unavailable"));
+        }
+        if !found.serves(&self.plugin) {
+            return Err(format!(
+                "'{service}' doesn't accept calls from '{}'",
+                self.plugin
+            ));
+        }
+        let have = found.version;
+        if have.0 != want.0 || (have.1, have.2) < (want.1, want.2) {
+            return Err(format!(
+                "'{service}' is version {}.{}.{}, not compatible with {version}",
+                have.0, have.1, have.2
+            ));
+        }
+        let mut chain = self.v05.chain.clone();
+        chain.push(self.plugin.clone());
+        if chain.iter().any(|plugin| plugin == provider) {
+            return Err(format!(
+                "service call cycle: {} -> {provider}",
+                chain.join(" -> ")
+            ));
+        }
+        if chain.len() > MAX_SERVICE_CHAIN {
+            return Err(format!(
+                "service calls nest at most {MAX_SERVICE_CHAIN} plugins deep"
+            ));
+        }
+        let id = self.request(crate::PendingKind::Service)?;
+        self.actions.push(crate::Action::ServiceCall(ServiceCall {
+            caller: self.plugin.clone(),
+            id,
+            provider: provider.to_string(),
+            service: name.to_string(),
+            method,
+            payload,
+            chain,
+        }));
+        Ok(id)
     }
     pub(crate) fn show_float(&mut self, float: FloatSpec) -> Result<(), String> {
         let height = float.height.clamp(3, 100) as u16;
@@ -943,6 +1237,75 @@ impl crate::PluginHost {
 }
 
 impl crate::PluginHost {
+    /// Give every plugin the list of all plugins' commands and services
+    /// (after loading).
+    pub(crate) fn refresh_shared(&mut self) {
+        self.refresh_command_lists();
+        let services: Vec<Service> = self
+            .plugins
+            .iter()
+            .flat_map(|plugin| plugin.store.data().v05.own_services.iter().cloned())
+            .collect();
+        let services = Arc::new(services);
+        for plugin in &mut self.plugins {
+            plugin.store.data_mut().v05.services = services.clone();
+        }
+    }
+
+    /// Serve a service call: run the provider's `on-service-call` (with
+    /// its own permissions, told who called) and return the reply and what
+    /// the provider does.
+    pub fn serve(
+        &mut self,
+        call: &ServiceCall,
+        snapshot: &crate::Snapshot,
+    ) -> (Result<String, String>, Vec<crate::Action>) {
+        let limit = self.limits.event;
+        let Some(plugin) = self.plugins.iter_mut().find(|p| {
+            p.manifest.name == call.provider
+                && p.disabled.is_none()
+                && p.store
+                    .data()
+                    .v05
+                    .own_services
+                    .iter()
+                    .any(|s| s.name == call.service)
+        }) else {
+            return (
+                Err(format!("plugin '{}' is unavailable", call.provider)),
+                Vec::new(),
+            );
+        };
+        plugin.store.data_mut().v05.chain = call.chain.clone();
+        let (caller, service, method, payload) = (
+            call.caller.clone(),
+            format!("{}.{}", call.provider, call.service),
+            call.method.clone(),
+            call.payload.clone(),
+        );
+        let result = plugin.call(
+            snapshot.clone(),
+            crate::CallContext::Event,
+            limit,
+            move |guest, store| {
+                Box::pin(async move {
+                    guest
+                        .call_service(store, &caller, &service, &method, &payload)
+                        .await
+                })
+            },
+        );
+        plugin.store.data_mut().v05.chain.clear();
+        match result {
+            Ok((Ok(reply), actions)) => match check_json("the reply", &reply) {
+                Ok(()) => (Ok(reply), actions),
+                Err(err) => (Err(format!("'{}': {err}", call.provider)), actions),
+            },
+            Ok((Err(err), actions)) => (Err(err), actions),
+            Err(err) => (Err(format!("{err:#}")), Vec::new()),
+        }
+    }
+
     /// Give every plugin the list of all plugins' commands (after loading).
     pub(crate) fn refresh_command_lists(&mut self) {
         let commands: Vec<(String, String)> = self

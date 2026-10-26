@@ -4739,3 +4739,353 @@ fn api_05_commands_are_listed_checked_and_reported() {
         ["ui:Mode::Normal:menu=false:prompt=false:picker=false:popup=false:panel=None:keys="]
     );
 }
+
+/// Load testplugin3 under each name, with its `config` and extra
+/// `plugin.toml` lines, through `load_all`.
+fn services_host(
+    plugins: &[(&str, &str, &str)],
+) -> (PluginHost, Vec<anyhow::Error>, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    for (name, _, extra) in plugins {
+        let dir = plugin_dir(
+            root.path(),
+            name,
+            &fixture("tests/fixtures/testplugin3.wasm"),
+            ALL,
+        );
+        let path = dir.join("plugin.toml");
+        let manifest = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("api = \"0.1\"", "api = \"0.5\"");
+        std::fs::write(path, format!("{manifest}{extra}\n")).unwrap();
+    }
+    let configs: Vec<(String, String)> = plugins
+        .iter()
+        .map(|(name, config, _)| (name.to_string(), format!("{{\"flags\": \"{config}\"}}")))
+        .collect();
+    let (_, errors) = host.load_all(root.path(), |name| {
+        configs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, config)| PluginSettings::new(config))
+    });
+    (host, errors, root)
+}
+
+fn call_as(
+    host: &mut PluginHost,
+    plugin: &str,
+    command: &str,
+    args: &[&str],
+) -> anyhow::Result<Vec<Action>> {
+    host.run_command(
+        plugin,
+        command,
+        args.iter().map(|a| a.to_string()).collect(),
+        snapshot("text\n", 0, 0),
+    )
+}
+
+fn service_call(actions: &[Action]) -> Option<v05::ServiceCall> {
+    actions.iter().find_map(|action| match action {
+        Action::ServiceCall(call) => Some(call.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn api_05_services_are_registered_discovered_and_called() {
+    let (mut host, errors, _root) = services_host(&[
+        ("testplugin3", "provide-echo", ""),
+        ("svc-b", "provide-echo provide-private", ""),
+        ("svc-c", "provide-echo", ""),
+    ]);
+    assert!(errors.is_empty(), "{errors:?}");
+    let discovered = |host: &mut PluginHost, plugin: &str, name: &str| {
+        statuses(&call_as(host, plugin, "discover", &[name]).unwrap())[0].clone()
+    };
+    assert_eq!(
+        discovered(&mut host, "testplugin3", "echo"),
+        "discovered:svc-b.echo@1.2.3,svc-c.echo@1.2.3,testplugin3.echo@1.2.3"
+    );
+    // Only the callers a service accepts see it.
+    assert_eq!(
+        discovered(&mut host, "testplugin3", "svc-b.private"),
+        "discovered:svc-b.private@1.0.0"
+    );
+    assert_eq!(discovered(&mut host, "svc-c", "private"), "discovered:");
+    let err = call_as(
+        &mut host,
+        "svc-c",
+        "call",
+        &["svc-b.private", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("doesn't accept calls from 'svc-c'"),
+        "{err:#}"
+    );
+    // A call is served after the caller's call; the reply comes back by id.
+    let actions = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.2.0", "echo", r#"{"x": 1}"#],
+    )
+    .unwrap();
+    let call = service_call(&actions).unwrap();
+    assert_eq!(
+        (call.provider.as_str(), call.service.as_str()),
+        ("svc-b", "echo")
+    );
+    let snap = snapshot("text\n", 0, 0);
+    let (reply, _) = host.serve(&call, &snap);
+    assert_eq!(reply, Ok(r#"{"x": 1}"#.to_string()));
+    assert!(host
+        .log_lines("svc-b")
+        .unwrap()
+        .iter()
+        .any(|line| line == r#"event:service:testplugin3:svc-b.echo:echo:{"x": 1}"#));
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::ServiceReply {
+                id: call.id,
+                result: reply,
+            },
+            &snap,
+        )
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        [format!(r#"service-reply:{}:Ok("{{\"x\": 1}}")"#, call.id)]
+    );
+    // Versions: same major, at least the minor.patch asked for.
+    for (version, ok) in [
+        ("1.0.0", true),
+        ("1.2.3", true),
+        ("1.3.0", false),
+        ("2.0.0", false),
+        ("0.9.0", false),
+    ] {
+        let result = call_as(
+            &mut host,
+            "testplugin3",
+            "call",
+            &["svc-b.echo", version, "echo", "1"],
+        );
+        assert_eq!(result.is_ok(), ok, "{version}: {result:?}");
+    }
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("major.minor.patch"), "{err:#}");
+    // Payloads are JSON.
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "{nope"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("the payload is not JSON"),
+        "{err:#}"
+    );
+    let big = format!("\"{}\"", "x".repeat(1 << 20));
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", &big],
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("larger than 1 MiB"), "{err:#}");
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-x.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("no service 'svc-x.echo'"),
+        "{err:#}"
+    );
+    // The provider's errors and replies that aren't JSON reach the caller.
+    for (method, expected) in [
+        ("fail", "failed on purpose"),
+        ("bad-json", "the reply is not JSON"),
+    ] {
+        let actions = call_as(
+            &mut host,
+            "testplugin3",
+            "call",
+            &["svc-c.echo", "1.0.0", method, "1"],
+        )
+        .unwrap();
+        let (reply, _) = host.serve(&service_call(&actions).unwrap(), &snap);
+        assert!(reply.as_ref().unwrap_err().contains(expected), "{reply:?}");
+    }
+    // Services are registered from init only.
+    let err = call_as(&mut host, "testplugin3", "register-late", &[]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("only available from init"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn api_05_service_names_are_checked() {
+    let (host, errors, _root) = services_host(&[("svc-a", "provide-bad", "")]);
+    assert!(host.plugin("svc-a").is_none());
+    assert!(
+        format!("{:#}", errors[0]).contains("invalid service name 'Bad Name'"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn api_05_service_chains_refuse_cycles_and_depth() {
+    let names = ["testplugin3", "svc-b", "svc-c", "svc-d", "svc-e", "svc-f"];
+    let plugins: Vec<_> = names
+        .iter()
+        .map(|name| (*name, "provide-echo", ""))
+        .collect();
+    let (mut host, errors, _root) = services_host(&plugins);
+    assert!(errors.is_empty(), "{errors:?}");
+    let snap = snapshot("text\n", 0, 0);
+    // Follow the chain of calls until one fails.
+    let follow = |host: &mut PluginHost, payload: &str| {
+        let actions = call_as(
+            host,
+            "testplugin3",
+            "call",
+            &["svc-b.echo", "1.0.0", "relay", payload],
+        )
+        .unwrap();
+        let mut call = service_call(&actions).unwrap();
+        let mut hops = 0;
+        loop {
+            hops += 1;
+            let (reply, actions) = host.serve(&call, &snap);
+            match service_call(&actions) {
+                Some(next) => call = next,
+                None => return (hops, reply),
+            }
+        }
+    };
+    // svc-b calls back into testplugin3: a cycle.
+    let (hops, reply) = follow(&mut host, r#""testplugin3.echo""#);
+    assert_eq!(hops, 1);
+    assert_eq!(
+        reply,
+        Err("service call cycle: testplugin3 -> svc-b -> testplugin3".into())
+    );
+    // Four plugins deep is fine; the fifth fails.
+    let (hops, reply) = follow(&mut host, r#""svc-c.echo svc-d.echo""#);
+    assert_eq!((hops, reply), (3, Ok(r#""end""#.into())));
+    let (hops, reply) = follow(
+        &mut host,
+        r#""svc-c.echo svc-d.echo svc-e.echo svc-f.echo""#,
+    );
+    assert_eq!(hops, 4);
+    assert!(reply.unwrap_err().contains("nest at most 4"));
+    // Outside a call, the chain starts again.
+    assert!(call_as(
+        &mut host,
+        "svc-b",
+        "call",
+        &["testplugin3.echo", "1.0.0", "echo", "1"]
+    )
+    .is_ok());
+}
+
+#[test]
+fn api_05_unavailable_providers_fail_calls() {
+    let (mut host, errors, _root) =
+        services_host(&[("testplugin3", "", ""), ("svc-b", "provide-echo", "")]);
+    assert!(errors.is_empty(), "{errors:?}");
+    let snap = snapshot("text\n", 0, 0);
+    let actions = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "slow", "1"],
+    )
+    .unwrap();
+    let queued = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap();
+    let (reply, _) = host.serve(&service_call(&actions).unwrap(), &snap);
+    assert!(reply.unwrap_err().contains("disabled"));
+    // The call queued before it went fails; new ones fail at once.
+    let (reply, _) = host.serve(&service_call(&queued).unwrap(), &snap);
+    assert_eq!(reply, Err("plugin 'svc-b' is unavailable".into()));
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("plugin 'svc-b' is unavailable"),
+        "{err:#}"
+    );
+    assert_eq!(
+        statuses(&call_as(&mut host, "testplugin3", "discover", &["echo"]).unwrap()),
+        ["discovered:"]
+    );
+}
+
+#[test]
+fn api_05_dependencies_load_first() {
+    let (host, errors, _root) = services_host(&[
+        (
+            "aa-user",
+            "",
+            "dependencies = [\"zz-provider\"]\noptional-dependencies = [\"not-installed\"]",
+        ),
+        ("zz-provider", "provide-echo", ""),
+        ("needs-missing", "", "dependencies = [\"not-installed\"]"),
+        ("cycle-a", "", "dependencies = [\"cycle-b\"]"),
+        ("cycle-b", "", "dependencies = [\"cycle-a\"]"),
+        ("needs-cycle", "", "dependencies = [\"cycle-a\"]"),
+    ]);
+    let loaded: Vec<&str> = host
+        .plugins()
+        .iter()
+        .map(|p| p.manifest().name.as_str())
+        .collect();
+    assert_eq!(loaded, ["zz-provider", "aa-user"]);
+    let errors: Vec<String> = errors.iter().map(|err| format!("{err:#}")).collect();
+    assert!(
+        errors.iter().any(|e| e.contains(
+            "'needs-missing' needs plugin 'not-installed', which isn't installed or enabled"
+        )),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("dependency cycle")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("'needs-cycle' needs plugin 'cycle-a', which can't load")),
+        "{errors:?}"
+    );
+    assert!(!loaded
+        .iter()
+        .any(|name| name.starts_with("cycle") || name.starts_with("needs")));
+}

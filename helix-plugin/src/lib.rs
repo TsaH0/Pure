@@ -345,6 +345,13 @@ pub struct Manifest {
     /// the plugin's command names. They only bind keys nothing else binds.
     #[serde(default)]
     pub keys: Option<toml::Table>,
+    /// Plugins that must load first (API 0.5 services): a missing one is a
+    /// load error.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    /// Plugins that load first when they are there.
+    #[serde(default)]
+    pub optional_dependencies: Vec<String>,
 }
 
 fn default_wasm() -> PathBuf {
@@ -538,6 +545,9 @@ pub enum Action {
     },
     /// Switch mode like the mode keys (API 0.5).
     SetMode(Mode),
+    /// Serve a call to another plugin's service after this call, then
+    /// deliver the reply (API 0.5, [`PluginHost::serve`]).
+    ServiceCall(v05::ServiceCall),
     /// Drive the completion menu (API 0.5). Applied in order with the other
     /// actions: the ones after it wait until it is done.
     CompletionMenu(v05::MenuAction),
@@ -2423,6 +2433,7 @@ impl Plugin {
                     _ => format!("it crashed: {err:#}"),
                 };
                 log::error!("plugin '{}' disabled: {reason}", self.manifest.name);
+                state.v05.alive.store(false, Ordering::Relaxed);
                 self.disabled = Some(reason.clone());
                 Err(anyhow!(
                     "plugin '{}' was disabled because {reason}",
@@ -2647,6 +2658,14 @@ impl PluginHost {
 
     /// Remove all plugins.
     pub fn clear(&mut self) {
+        for plugin in &self.plugins {
+            plugin
+                .store
+                .data()
+                .v05
+                .alive
+                .store(false, Ordering::Relaxed);
+        }
         self.plugins.clear();
     }
 
@@ -2699,7 +2718,7 @@ impl PluginHost {
             .filter(|path| path.join("plugin.toml").is_file())
             .collect();
         dirs.sort();
-        let mut enabled = Vec::new();
+        let mut enabled: Vec<(PathBuf, Manifest, PluginSettings)> = Vec::new();
         for dir in dirs {
             let manifest = match read_manifest(&dir) {
                 Ok(manifest) => manifest,
@@ -2712,6 +2731,10 @@ impl PluginHost {
                 enabled.push((dir, manifest, settings));
             }
         }
+        // Dependencies first.
+        let (enabled, mut dependency_errors) =
+            v05::dependency_order(enabled, |name| self.plugin(name).is_some());
+        errors.append(&mut dependency_errors);
         // Compiling (on a cold cache) is the slow part: do it in parallel,
         // a few at a time, then load in order.
         let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
@@ -2825,6 +2848,15 @@ impl PluginHost {
         if self.plugin(&name).is_some() {
             bail!("plugin '{name}' is already loaded");
         }
+        for dependency in &manifest.dependencies {
+            if !self
+                .plugins
+                .iter()
+                .any(|p| &p.manifest.name == dependency && p.disabled.is_none())
+            {
+                bail!("plugin '{name}' needs plugin '{dependency}', which isn't loaded");
+            }
+        }
         let component = component.with_context(|| {
             format!(
                 "failed to load plugin '{name}' from {}",
@@ -2937,7 +2969,7 @@ impl PluginHost {
         plugin.events = events;
         plugin.events.dedup();
         self.plugins.push(plugin);
-        self.refresh_command_lists();
+        self.refresh_shared();
         Ok(actions)
     }
 

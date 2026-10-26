@@ -3416,3 +3416,43 @@ async fn plugins_switch_modes_and_see_views_and_ui() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_call_each_others_services() -> anyhow::Result<()> {
+    let (mut app, dir) = app_v5("#[o|]#ne\n", None, "[svc-b]\nprovide-echo = true\n");
+    // A second copy of the test plugin, named svc-b, that testplugin3
+    // depends on.
+    let provider = dir.path().join("svc-b");
+    std::fs::create_dir(&provider)?;
+    std::fs::copy(
+        dir.path().join("testplugin3/plugin.wasm"),
+        provider.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        provider.join("plugin.toml"),
+        format!("name = \"svc-b\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )?;
+    let manifest = dir.path().join("testplugin3/plugin.toml");
+    let text = std::fs::read_to_string(&manifest)?;
+    std::fs::write(&manifest, format!("{text}dependencies = [\"svc-b\"]\n"))?;
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[svc-b]\nprovide-echo = true\n",
+    )?;
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/call svc-b.echo 1.0.0 echo '[1, 2]'<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("service-reply:")).await;
+    assert!(status.ends_with(r#":Ok("[1, 2]")"#), "{status}");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/call svc-b.echo 1.0.0 fail 1<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("service-reply:")).await;
+    assert!(status.ends_with(r#":Err("failed on purpose")"#), "{status}");
+    Ok(())
+}
