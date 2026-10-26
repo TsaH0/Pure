@@ -216,6 +216,32 @@ impl<T: Item> Menu<T> {
     pub fn len(&self) -> usize {
         self.matches.len()
     }
+
+    /// The selected row.
+    pub fn cursor(&self) -> Option<usize> {
+        self.cursor
+    }
+
+    /// The first `max` options, in the order shown.
+    pub fn shown(&self, max: usize) -> impl Iterator<Item = &T> {
+        self.matches
+            .iter()
+            .take(max)
+            .map(|(index, _)| &self.options[*index as usize])
+    }
+
+    /// Select row `index` like moving there with the keys: the callback
+    /// gets an update (a completion previews the row). `None` only clears
+    /// the selection.
+    pub fn select(&mut self, index: Option<usize>, editor: &mut Editor) {
+        self.cursor = index
+            .filter(|_| !self.matches.is_empty())
+            .map(|i| i.min(self.matches.len() - 1));
+        self.adjust_scroll();
+        if self.cursor.is_some() {
+            (self.callback_fn)(editor, self.selection(), MenuEvent::Update);
+        }
+    }
 }
 
 impl<T: Item + PartialEq> Menu<T> {

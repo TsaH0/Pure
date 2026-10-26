@@ -70,6 +70,7 @@ async fn replace_completions(
                 // this occurs if typing a trigger char)
                 trigger_auto_completion(editor, false);
             } else {
+                editor_view.sync_menu(editor);
                 editor
                     .handlers
                     .completions
@@ -184,6 +185,7 @@ fn update_completion_filter(cx: &mut commands::Context, c: Option<char>) {
                     trigger_auto_completion(cx.editor, false);
                 }
             } else {
+                editor_view.sync_menu(cx.editor);
                 let handle = cx.editor.handlers.completions.request_controller.restart();
                 request_incomplete_completion_list(cx.editor, handle)
             }
@@ -254,6 +256,10 @@ pub(super) fn register_hooks(_handlers: &Handlers) {
                 .handlers
                 .completions
                 .event(CompletionEvent::Cancel);
+            use crate::ui::completion::menu_events;
+            if menu_events::snapshot().is_some() {
+                menu_events::set_close_reason(menu_events::Close::ModeChange);
+            }
             clear_completions(event.cx);
         } else if event.new_mode == Mode::Insert {
             trigger_auto_completion(event.cx.editor, false)

@@ -392,6 +392,10 @@ fn write_impl(
         let doc_id = doc!(cx.editor).id();
         return crate::plugins::write_buffer(cx.editor, cx.jobs, doc_id);
     }
+    // Plugins hooked to saving may edit the document, or cancel.
+    let doc_id = doc!(cx.editor).id();
+    crate::plugins::pre_save(cx.editor, cx.jobs, doc_id)
+        .map_err(|reason| anyhow!("saving cancelled by {reason}"))?;
     let config = cx.editor.config();
     let (view, doc) = current!(cx.editor);
     let doc_id = doc.id();
@@ -910,6 +914,10 @@ pub fn write_all_impl(
     }
 
     for (doc_id, target_view) in saves {
+        if let Err(reason) = crate::plugins::pre_save(cx.editor, cx.jobs, doc_id) {
+            cx.editor.set_error(format!("saving cancelled by {reason}"));
+            continue;
+        }
         let doc = doc_mut!(cx.editor, &doc_id);
         let view = view_mut!(cx.editor, target_view);
 
@@ -5043,6 +5051,11 @@ pub(super) fn execute_command(
             .expect("arg parsing cannot fail when validation is turned off")
     };
 
+    // Plugins hooked to this command may cancel it.
+    if event == PromptEvent::Validate {
+        crate::plugins::pre_command(cx.editor, cx.jobs, cmd.name)
+            .map_err(|reason| anyhow!("'{}' cancelled by {reason}", cmd.name))?;
+    }
     (cmd.fun)(cx, args, event).map_err(|err| anyhow!("'{}': {err}", cmd.name))
 }
 

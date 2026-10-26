@@ -250,6 +250,15 @@ macro_rules! static_commands {
 
 impl MappableCommand {
     pub fn execute(&self, cx: &mut Context) {
+        // Plugins hooked to this command may cancel it (typable commands
+        // ask in `typed::execute_command`).
+        if let Self::Static { name, .. } = self {
+            if let Err(reason) = crate::plugins::pre_command(cx.editor, cx.jobs, name) {
+                cx.editor
+                    .set_error(format!("'{name}' cancelled by {reason}"));
+                return;
+            }
+        }
         match &self {
             Self::Typable { name, args, doc: _ } => {
                 if let Some(command) = typed::TYPABLE_COMMAND_MAP.get(name.as_str()) {

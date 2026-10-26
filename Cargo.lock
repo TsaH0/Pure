@@ -2044,10 +2044,12 @@ name = "helix-plugin"
 version = "25.7.1"
 dependencies = [
  "anyhow",
+ "globset",
  "helix-core",
  "log",
  "quickcheck",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",
@@ -2112,6 +2114,7 @@ dependencies = [
  "sha2",
  "signal-hook 0.4.4",
  "signal-hook-tokio",
+ "slotmap",
  "smallvec",
  "tempfile",
  "termina",

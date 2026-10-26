@@ -55,6 +55,28 @@ pub fn plugin_names() -> Vec<String> {
     Vec::new()
 }
 
+pub fn completion_menu_event(
+    _editor: &Editor,
+    _event: crate::ui::completion::menu_events::MenuEvent,
+) {
+}
+
+pub fn pre_command(_editor: &mut Editor, _jobs: &mut Jobs, _command: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn pre_save(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _doc: helix_view::DocumentId,
+) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn check_focus(_editor: &Editor) {}
+
+pub fn shutdown(_editor: &mut Editor) {}
+
 pub fn key(
     _editor: &mut Editor,
     _jobs: &mut Jobs,

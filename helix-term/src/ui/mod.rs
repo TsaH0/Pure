@@ -1,4 +1,4 @@
-mod completion;
+pub(crate) mod completion;
 pub(crate) mod document;
 pub(crate) mod editor;
 mod info;

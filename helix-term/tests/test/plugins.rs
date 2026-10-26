@@ -2997,3 +2997,308 @@ async fn a_failing_key_callback_passes_the_keys_through_and_unbinds() -> anyhow:
     assert!(helix_term::keymap::plugin_layers::bindings().is_empty());
     Ok(())
 }
+
+/// testplugin3 as a completion source, with insert-mode keys driving the
+/// menu, and the menu opened on "al".
+async fn app_with_menu_keys() -> (Application, tempfile::TempDir) {
+    let (mut app, dir) = app_v5("#[\n|]#", None, "[testplugin3]\ncompletion = true\n");
+    for (name, key) in [
+        ("menu-next", "C-l"),
+        ("menu-previous", "C-b"),
+        ("menu-confirm", "C-o"),
+        ("menu-abort", "C-g"),
+        ("menu-close", "C-e"),
+        ("menu-select-1", "C-t"),
+        ("menu-select-none", "C-y"),
+        ("menu-select-9", "C-v"),
+    ] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bind plugin {name} insert {key}<ret>"),
+        )
+        .await;
+    }
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe completion-menu<ret>",
+    )
+    .await;
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    (app, dir)
+}
+
+fn log(app: &Application) -> Vec<String> {
+    let _ = app;
+    helix_term::plugins::log_lines("testplugin3").unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_navigate_and_confirm_the_completion_menu() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    // The menu as the plugin sees it, then the preview of what it selected.
+    keys(&mut app, "<C-l>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "menu:alpha,alphabet:None:false|Ok(())");
+    assert_eq!(text(&app), "alpha\n");
+    keys(&mut app, "<C-l>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "menu:alpha,alphabet:Some(0):true|Ok(())");
+    assert_eq!(text(&app), "alphabet\n");
+    // Back to the typed text; an item that isn't there is refused.
+    keys(&mut app, "<C-y>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "al\n");
+    keys(&mut app, "<C-v>").await;
+    assert!(status(&app)
+        .0
+        .contains("Err(\"no completion item 9 (the menu has 2)\")"));
+    // Select and confirm: the item is in, the menu closed, still inserting.
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-o>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    keys(&mut app, "<C-l>").await;
+    assert_eq!(status(&app).0, "menu:none|Ok(())");
+    // The events, in order.
+    let log = log(&app);
+    let events: Vec<&String> = log
+        .iter()
+        .filter(|line| line.starts_with("event:e2:Event::CompletionMenu"))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "event:e2:Event::CompletionMenu(CompletionEvent::Opened(2))",
+            "event:e2:Event::CompletionMenu(CompletionEvent::Confirmed(\"alphabet\"))",
+            "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Confirmed))",
+        ],
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aborting_drops_the_preview_and_closing_keeps_it() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    keys(&mut app, "<C-g>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "al\n");
+    // Undo history is intact: one undo removes the typed text.
+    keys(&mut app, "<esc>u").await;
+    assert_eq!(text(&app), "\n");
+    // Close with a preview keeps the previewed text (as typing would).
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-e>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    let log = log(&app);
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Aborted))"),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Dismissed))"),
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaving_insert_mode_reports_why_the_menu_closed() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    keys(&mut app, "<esc>").await;
+    deliver_events(&mut app).await;
+    let log = log(&app);
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::ModeChange))"),
+        "{log:?}"
+    );
+    // ctrl-c aborts (and leaves insert mode in the same press).
+    keys(&mut app, "oal").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-c>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert_eq!(
+        log.iter()
+            .filter(|l| *l
+                == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Aborted))")
+            .count(),
+        1,
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_keys_drive_the_menu() -> anyhow::Result<()> {
+    use helix_view::editor::CompletionKeyAction;
+    use helix_view::input::KeyEvent;
+    let mut config = helpers::test_config();
+    config.editor.completion_keys = [
+        ("C-y".parse::<KeyEvent>()?, CompletionKeyAction::Confirm),
+        ("C-e".parse::<KeyEvent>()?, CompletionKeyAction::NormalMode),
+    ]
+    .into_iter()
+    .collect();
+    let (mut app, _dir) = app_v5(
+        "#[\n|]#",
+        Some(config),
+        "[testplugin3]\ncompletion = true\n",
+    );
+    // Abort and leave insert mode in one key: the preview goes.
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-n>").await;
+    assert_eq!(text(&app), "alpha\n");
+    keys(&mut app, "<C-e>").await;
+    assert_eq!(text(&app), "al\n");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    // Confirm without selecting: the first item.
+    keys(&mut app, "oal").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-y><esc>").await;
+    assert_eq!(text(&app), "al\nalpha\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pre_command_hooks_see_and_may_cancel_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-command @cmd move_char_right @cmd echo<ret>",
+    )
+    .await;
+    // Asked, and it goes ahead.
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 1);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|l| l == "event:pre-command:move_char_right"),
+        "{log:?}"
+    );
+    // Other commands don't ask the plugin.
+    keys(&mut app, "h").await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        !log.iter().any(|l| l == "event:pre-command:move_char_left"),
+        "{log:?}"
+    );
+    // Cancelled: the motion doesn't happen, nor the typable command.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-command @cmd move_char_right @cancel-commands<ret>",
+    )
+    .await;
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 0);
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert_eq!(
+        message,
+        "'move_char_right' cancelled by testplugin3: no move_char_right"
+    );
+    keys(&mut app, ":echo hello<ret>").await;
+    let (message, _) = status(&app);
+    assert!(
+        message.contains("'echo' cancelled by testplugin3: no echo"),
+        "{message}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pre_save_hooks_edit_or_cancel_the_write() -> anyhow::Result<()> {
+    let file = tempfile::NamedTempFile::new()?;
+    std::fs::write(file.path(), "mark-on-save\n")?;
+    let mut app = AppBuilder::new().with_file(file.path(), None).build()?;
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, ":plugin-run testplugin3/subscribe pre-save<ret>").await;
+    keys(&mut app, ":w<ret>").await;
+    // The plugin's edit is saved with the document.
+    assert_eq!(
+        std::fs::read_to_string(file.path())?,
+        "mark-on-save\n// saved\n"
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-save @cancel-saves<ret>",
+    )
+    .await;
+    keys(&mut app, "ix<esc>:w<ret>").await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(
+        message.contains("saving cancelled by testplugin3: not now"),
+        "{message}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(file.path())?,
+        "mark-on-save\n// saved\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_about_focus_plugins_and_shutdown() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne\n",
+        None,
+        "[testplugin3]\nsubscribe-plugins = true\n",
+    );
+    for event in ["buffer-enter", "buffer-leave", "view-enter", "view-leave"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/subscribe {event}<ret>"),
+        )
+        .await;
+    }
+    keys(&mut app, ":vnew<ret>").await;
+    deliver_events(&mut app).await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    for event in ["ViewLeave", "ViewEnter", "BufferLeave", "BufferEnter"] {
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(&format!("event:e2:Event::{event}"))),
+            "{event}: {log:?}"
+        );
+    }
+    // Loaded with the plugin itself, then told about it.
+    assert!(
+        log.iter()
+            .any(|l| l == "event:e2:Event::PluginChange((\"testplugin3\", PluginState::Loaded))"),
+        "{log:?}"
+    );
+    helix_term::plugins::shutdown(&mut app.editor);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|l| l == "event:e2:Event::Shutdown"),
+        "{log:?}"
+    );
+    Ok(())
+}

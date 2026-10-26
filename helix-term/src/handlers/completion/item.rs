@@ -75,6 +75,14 @@ pub enum CompletionItem {
 }
 
 impl CompletionItem {
+    /// What the menu shows.
+    pub fn label(&self) -> &str {
+        match self {
+            CompletionItem::Lsp(item) => &item.item.label,
+            CompletionItem::Other(item) => &item.label,
+        }
+    }
+
     #[inline]
     pub fn filter_text(&self) -> &str {
         match self {

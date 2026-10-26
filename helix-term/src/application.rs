@@ -1504,6 +1504,9 @@ impl Application {
         //        errors along the way
         let mut errs = Vec::new();
 
+        // Plugins that asked to hear about it save their state now.
+        crate::plugins::shutdown(&mut self.editor);
+
         if let Err(err) = self
             .jobs
             .finish(&mut self.editor, Some(&mut self.compositor))

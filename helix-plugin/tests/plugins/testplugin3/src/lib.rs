@@ -28,6 +28,17 @@ fn record(event: String) {
     host::log(&format!("event:{event}"));
     EVENTS.with_borrow_mut(|events| events.push(event));
 }
+fn menu_status() -> String {
+    match helix::plugin::completion_menu::state() {
+        Some(menu) => format!(
+            "menu:{}:{:?}:{}",
+            menu.items.join(","),
+            menu.selected,
+            menu.previewing
+        ),
+        None => "menu:none".into(),
+    }
+}
 fn mode_arg(mode: &str) -> Result<types::Mode, String> {
     Ok(match mode {
         "normal" => types::Mode::Normal,
@@ -71,6 +82,17 @@ fn bind(args: &[String]) -> Result<(), String> {
 struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn init(config: String) -> Result<types::Registration, String> {
+        if config.contains("subscribe-plugins") {
+            use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+            let filter = Filter {
+                language: None,
+                path_glob: None,
+                document: None,
+                commands: Vec::new(),
+            };
+            subscribe(EventType::PluginChange, &filter)?;
+            subscribe(EventType::Shutdown, &filter)?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -121,6 +143,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "unbind",
                 "list-keys",
                 "fail-after-bind",
+                "subscribe",
+                "unsubscribe",
+                "menu-state",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -395,6 +420,56 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 bind(&["plugin".into(), "doomed".into(), "normal".into(), "C-y".into()])?;
                 Err("failing on purpose".into())
             }
+            // subscribe <event> [@lang l] [@glob g] [@doc] [@cmd c]...
+            "subscribe" => {
+                use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+                let event = match args.first().map(String::as_str) {
+                    Some("document-change") => EventType::DocumentChange,
+                    Some("document-save") => EventType::DocumentSave,
+                    Some("post-command") => EventType::PostCommand,
+                    Some("buffer-enter") => EventType::BufferEnter,
+                    Some("buffer-leave") => EventType::BufferLeave,
+                    Some("view-enter") => EventType::ViewEnter,
+                    Some("view-leave") => EventType::ViewLeave,
+                    Some("completion-menu") => EventType::CompletionMenu,
+                    Some("config-change") => EventType::ConfigChange,
+                    Some("plugin-change") => EventType::PluginChange,
+                    Some("shutdown") => EventType::Shutdown,
+                    Some("pre-command") => EventType::PreCommand,
+                    Some("pre-save") => EventType::PreSave,
+                    other => return Err(format!("no event {other:?}")),
+                };
+                let mut filter = Filter {
+                    language: None,
+                    path_glob: None,
+                    document: None,
+                    commands: Vec::new(),
+                };
+                let mut rest = args[1..].iter();
+                while let Some(arg) = rest.next() {
+                    match arg.as_str() {
+                        "@lang" => filter.language = rest.next().cloned(),
+                        "@glob" => filter.path_glob = rest.next().cloned(),
+                        "@doc" => filter.document = host::current_document(),
+                        "@cmd" => filter.commands.extend(rest.next().cloned()),
+                        "@cancel-commands" => CANCEL_COMMANDS.set(true),
+                        "@cancel-saves" => CANCEL_SAVES.set(true),
+                        other => return Err(format!("unknown filter {other}")),
+                    }
+                }
+                let id = subscribe(event, &filter)?;
+                host::set_status(&format!("subscribed:{id}"));
+                Ok(())
+            }
+            "unsubscribe" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::subscriptions::unsubscribe(id);
+                Ok(())
+            }
+            "menu-state" => {
+                host::set_status(&menu_status());
+                Ok(())
+            }
             "caps" => {
                 host::set_status(&format!("caps:{}", helix::plugin::requests::capabilities().join(",")));
                 Ok(())
@@ -475,7 +550,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             host::set_status(&format!("v3-open:{doc}"));
         }
     }
-    fn on_document_change(_doc: u32) {}
+    fn on_document_change(doc: u32) {
+        record(format!("change:{doc}"));
+    }
     fn on_mode_switch(_old: types::Mode, _new: types::Mode) {}
 }
 impl exports::helix::plugin::callbacks::Guest for TestPlugin {
@@ -621,6 +698,26 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         use exports::helix::plugin::hooks::KeyOutcome;
         record(format!("key:{name}:{keys}:{count:?}"));
         host::set_status(&format!("key:{name}:{keys}:{count:?}"));
+        // Keys driving the completion menu.
+        if let Some(action) = name.strip_prefix("menu-") {
+            use helix::plugin::completion_menu as menu;
+            let before = menu_status();
+            let result = match action {
+                "next" => menu::next(),
+                "previous" => menu::previous(),
+                "confirm" => menu::confirm(),
+                "abort" => menu::abort(),
+                "close" => menu::close(),
+                "select-1" => menu::select(Some(1)),
+                "select-none" => menu::select(None),
+                "select-9" => menu::select(Some(9)),
+                _ => Ok(()),
+            };
+            let status = format!("{before}|{result:?}");
+            record(status.clone());
+            host::set_status(&status);
+            return KeyOutcome::Handled;
+        }
         // Keys may edit and open UI, like a command.
         if name.starts_with("edit") {
             if let Some(doc) = host::current_document() {

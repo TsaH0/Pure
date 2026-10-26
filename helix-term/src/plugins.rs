@@ -56,7 +56,7 @@ const EVENT_DELAY: Duration = Duration::from_millis(50);
 
 runtime_local! {
     static HOST: Mutex<Option<PluginHost>> = Mutex::new(None);
-    static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), scheduled: false });
+    static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), events2: Vec::new(), scheduled: false });
     /// Set while plugin actions are applied, so a plugin's own edits don't
     /// produce change events (which could loop forever).
     static APPLYING: AtomicUsize = AtomicUsize::new(0);
@@ -66,6 +66,10 @@ runtime_local! {
     /// The events some plugin subscribed to (bits of `event_bit`), so editor
     /// hooks cost nothing when no plugin listens.
     static WANTED: AtomicU32 = AtomicU32::new(0);
+    /// The same for API 0.5's events and hooks (bits of `event2_bit`).
+    static WANTED2: AtomicU32 = AtomicU32::new(0);
+    /// The focused view and its document, as last reported to plugins.
+    static LAST_FOCUS: Mutex<Option<(ViewId, DocumentId)>> = Mutex::new(None);
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
     /// Whether a plugin may read registers, so snapshots include them.
@@ -106,6 +110,7 @@ fn abort_timers(plugin: Option<&str>) {
 /// Remove what a disabled plugin left behind: processes, timers, completion
 /// requests, decorations, diagnostics, statusline text and its sidebar.
 fn tear_down(editor: &mut Editor, plugin: &str) {
+    plugin_changed(plugin, helix_plugin::v05::PluginState::Disabled);
     process::kill_plugin(plugin);
     abort_timers(Some(plugin));
     listen::stop_plugin(Some(plugin));
@@ -172,7 +177,226 @@ fn workspace() -> PathBuf {
 
 struct Pending {
     events: Vec<Event>,
+    /// API 0.5 events, with the document they are about.
+    events2: Vec<(helix_plugin::v05::Event2, Option<u32>)>,
     scheduled: bool,
+}
+
+/// The API 0.5 events and hooks, as bits of [`WANTED2`].
+const EVENT2_KINDS: [helix_plugin::v05::SubscriptionEvent; 10] = {
+    use helix_plugin::v05::SubscriptionEvent as S;
+    [
+        S::BufferEnter,
+        S::BufferLeave,
+        S::ViewEnter,
+        S::ViewLeave,
+        S::CompletionMenu,
+        S::ConfigChange,
+        S::PluginChange,
+        S::Shutdown,
+        S::PreCommand,
+        S::PreSave,
+    ]
+};
+
+fn event2_bit(kind: helix_plugin::v05::SubscriptionEvent) -> u32 {
+    EVENT2_KINDS
+        .iter()
+        .position(|k| *k == kind)
+        .map_or(0, |i| 1 << i)
+}
+
+/// Whether some plugin subscribed to `kind` (one atomic load).
+fn wants2(kind: helix_plugin::v05::SubscriptionEvent) -> bool {
+    WANTED2.load(Ordering::Relaxed) & event2_bit(kind) != 0
+}
+
+fn wanted2_mask(host: &PluginHost) -> u32 {
+    EVENT2_KINDS
+        .into_iter()
+        .filter(|kind| host.wants2(*kind))
+        .map(event2_bit)
+        .fold(0, |mask, bit| mask | bit)
+}
+
+/// Queue an API 0.5 event about `doc` for the plugins that subscribed.
+fn queue2(event: helix_plugin::v05::Event2, doc: Option<u32>) {
+    if !wants2(helix_plugin::v05::SubscriptionEvent::of(&event)) {
+        return;
+    }
+    let mut pending = PENDING.lock();
+    pending.events2.push((event, doc));
+    if !pending.scheduled {
+        pending.scheduled = true;
+        tokio::spawn(async {
+            tokio::time::sleep(EVENT_DELAY).await;
+            job::dispatch(|editor, _| deliver_events(editor)).await;
+        });
+    }
+}
+
+/// The completion menu opened, changed or closed: tell the plugins that
+/// subscribed.
+pub fn completion_menu_event(
+    editor: &Editor,
+    event: crate::ui::completion::menu_events::MenuEvent,
+) {
+    use crate::ui::completion::menu_events::{Close, MenuEvent};
+    use helix_plugin::v05::{CloseReason, CompletionEvent, Event2, SubscriptionEvent};
+    if !wants2(SubscriptionEvent::CompletionMenu) {
+        return;
+    }
+    let event = match event {
+        MenuEvent::Opened(n) => CompletionEvent::Opened(n),
+        MenuEvent::Updated(n) => CompletionEvent::Updated(n),
+        MenuEvent::Confirmed(label) => CompletionEvent::Confirmed(label),
+        MenuEvent::Closed(reason) => CompletionEvent::Closed(match reason {
+            Close::Aborted => CloseReason::Aborted,
+            Close::Confirmed => CloseReason::Confirmed,
+            Close::Dismissed => CloseReason::Dismissed,
+            Close::ModeChange => CloseReason::ModeChange,
+            Close::Replaced => CloseReason::Replaced,
+        }),
+    };
+    let doc = plugin_doc_id(editor.tree.get(editor.tree.focus).doc);
+    queue2(Event2::CompletionMenu(event), Some(doc));
+}
+
+/// Apply what the plugins a hook asked did; `Err(plugin: reason)` if one
+/// cancelled.
+fn finish_hook(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    result: helix_plugin::v05::HookResult,
+) -> Result<(), String> {
+    for (plugin, actions) in result.results {
+        report_with(editor, Some(&mut *jobs), &plugin, actions);
+    }
+    match result.cancelled {
+        Some((plugin, reason)) => Err(format!("{plugin}: {reason}")),
+        None => Ok(()),
+    }
+}
+
+/// Before `command` runs (a native command's or a typable command's name):
+/// the plugins hooked to it may cancel it (`Err`). Commands plugins run
+/// themselves aren't hooked.
+pub fn pre_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) -> Result<(), String> {
+    use helix_plugin::v05::SubscriptionEvent;
+    if !wants2(SubscriptionEvent::PreCommand) || APPLYING.load(Ordering::Relaxed) > 0 {
+        return Ok(());
+    }
+    let snapshot = snapshot(editor);
+    let Some(result) = with_host(|host| host.pre_command(command, &snapshot)) else {
+        return Ok(());
+    };
+    finish_hook(editor, jobs, result)
+}
+
+/// Before `doc` is written: the plugins hooked to saving may edit it (saved
+/// with it) or cancel (`Err`).
+pub fn pre_save(editor: &mut Editor, jobs: &mut Jobs, doc: DocumentId) -> Result<(), String> {
+    use helix_plugin::v05::SubscriptionEvent;
+    if !wants2(SubscriptionEvent::PreSave) || APPLYING.load(Ordering::Relaxed) > 0 {
+        return Ok(());
+    }
+    let snapshot = snapshot(editor);
+    let Some(result) = with_host(|host| host.pre_save(plugin_doc_id(doc), &snapshot)) else {
+        return Ok(());
+    };
+    finish_hook(editor, jobs, result)
+}
+
+fn view_number(view: ViewId) -> u64 {
+    use slotmap::Key;
+    view.data().as_ffi()
+}
+
+/// Called each frame: tell plugins that subscribed when the focused view,
+/// or the document it shows, changed.
+pub fn check_focus(editor: &Editor) {
+    use helix_plugin::v05::{Event2, SubscriptionEvent as S};
+    let wanted = [S::BufferEnter, S::BufferLeave, S::ViewEnter, S::ViewLeave];
+    if !wanted.into_iter().any(wants2) {
+        return;
+    }
+    let view = editor.tree.focus;
+    let Some(doc) = editor.tree.try_get(view).map(|view| view.doc) else {
+        return;
+    };
+    let previous = LAST_FOCUS.lock().replace((view, doc));
+    if previous == Some((view, doc)) {
+        return;
+    }
+    if let Some((old_view, old_doc)) = previous {
+        if editor.documents.contains_key(&old_doc) {
+            queue2(
+                Event2::BufferLeave(plugin_doc_id(old_doc), view_number(old_view)),
+                Some(plugin_doc_id(old_doc)),
+            );
+        }
+        if old_view != view {
+            queue2(Event2::ViewLeave(view_number(old_view)), None);
+        }
+    }
+    if previous.is_none_or(|(old_view, _)| old_view != view) {
+        queue2(Event2::ViewEnter(view_number(view)), None);
+    }
+    queue2(
+        Event2::BufferEnter(plugin_doc_id(doc), view_number(view)),
+        Some(plugin_doc_id(doc)),
+    );
+}
+
+/// The editor is quitting: tell the plugins that subscribed, now.
+pub fn shutdown(editor: &mut Editor) {
+    use helix_plugin::v05::{Event2, SubscriptionEvent};
+    if !wants2(SubscriptionEvent::Shutdown) {
+        return;
+    }
+    let snapshot = snapshot(editor);
+    let Some(results) = with_host(|host| host.dispatch2(&Event2::Shutdown, None, &snapshot)) else {
+        return;
+    };
+    for (plugin, result) in results {
+        report(editor, &plugin, result);
+    }
+}
+
+/// Tell the plugins that subscribed that `plugin` changed state.
+fn plugin_changed(plugin: &str, state: helix_plugin::v05::PluginState) {
+    queue2(
+        helix_plugin::v05::Event2::PluginChange(plugin.to_string(), state),
+        None,
+    );
+}
+
+/// Run a plugin's completion menu command on the editor view.
+fn menu_command(
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+    command: helix_plugin::v05::MenuAction,
+) {
+    use crate::ui::completion::menu_events::MenuCommand as C;
+    use helix_plugin::v05::MenuAction as A;
+    let command = match command {
+        A::Select(index) => C::Select(index),
+        A::Next => C::Next,
+        A::Previous => C::Previous,
+        A::Confirm => C::Confirm,
+        A::Abort => C::Abort,
+        A::Close => C::Close,
+    };
+    let Some(view) = compositor.find::<crate::ui::EditorView>() else {
+        return;
+    };
+    let mut jobs = Jobs::new();
+    let mut cx = crate::compositor::Context {
+        editor,
+        jobs: &mut jobs,
+        scroll: None,
+    };
+    view.completion_command(command, &mut cx);
 }
 
 /// The directory plugins with `allow-files` may use: the workspace, but only
@@ -472,6 +696,14 @@ fn install(
             .fold(0, |mask, bit| mask | bit)
     });
     WANTED.store(wanted, Ordering::Relaxed);
+    WANTED2.store(host.as_ref().map_or(0, wanted2_mask), Ordering::Relaxed);
+    if let Some(host) = &host {
+        for plugin in host.plugins() {
+            if plugin.disabled().is_none() {
+                plugin_changed(plugin.name(), helix_plugin::v05::PluginState::Loaded);
+            }
+        }
+    }
     WANTS_REGISTERS.store(
         host.as_ref().is_some_and(|host| host.wants_registers()),
         Ordering::Relaxed,
@@ -1005,6 +1237,13 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                 focused: panel.focused,
             })
             .collect(),
+        completion_menu: crate::ui::completion::menu_events::snapshot().map(|menu| {
+            helix_plugin::v05::MenuState {
+                items: menu.items,
+                selected: menu.selected,
+                previewing: menu.previewing,
+            }
+        }),
         registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
             editor.registers.stored().collect()
         } else {
@@ -1022,7 +1261,8 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
     let mut edited: HashMap<DocumentId, ViewId> = HashMap::new();
     // UI changes need the compositor: run them later, together, in order.
     let mut ui: Vec<UiJob> = Vec::new();
-    for action in actions {
+    let mut actions = actions.into_iter();
+    while let Some(action) = actions.next() {
         match action {
             Action::Edit { doc, transaction } => {
                 let Some(doc_id) = editor_doc_id(editor, doc) else {
@@ -1125,6 +1365,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
             }
             Action::Listen { plugin, id, port } => listen::start(plugin, id, port),
+            Action::SubscriptionsChanged => refresh_wanted(editor),
+            // The menu is the editor view's: the rest of the actions wait
+            // until it is done, to keep their order.
+            Action::CompletionMenu(command) => {
+                let rest: Vec<Action> = actions.by_ref().collect();
+                ui.push(Box::new(move |editor, compositor| {
+                    menu_command(editor, compositor, command);
+                    apply(editor, None, rest);
+                }));
+            }
             Action::KeyBindings { plugin, bindings } => {
                 set_key_bindings(editor, &plugin, bindings);
                 helix_event::request_redraw();
@@ -2025,6 +2275,10 @@ pub fn editor_idle(editor: &mut Editor) {
 }
 
 fn refresh_wanted(editor: &mut Editor) {
+    WANTED2.store(
+        with_host(|host| wanted2_mask(host)).unwrap_or(0),
+        Ordering::Relaxed,
+    );
     let (mask, disabled) = with_host(|host| {
         let mask = EVENT_KINDS
             .into_iter()
@@ -2078,13 +2332,41 @@ fn queue(event: Event) {
 
 /// Send the queued events to the plugins and apply what they do.
 pub fn deliver_events(editor: &mut Editor) {
-    let events = {
+    let (events, events2) = {
         let mut pending = PENDING.lock();
         pending.scheduled = false;
-        std::mem::take(&mut pending.events)
+        (
+            std::mem::take(&mut pending.events),
+            std::mem::take(&mut pending.events2),
+        )
     };
     for event in events {
         deliver_event(editor, event);
+    }
+    for (event, doc) in events2 {
+        let snapshot = snapshot(editor);
+        let Some(results) = with_host(|host| host.dispatch2(&event, doc, &snapshot)) else {
+            continue;
+        };
+        for (plugin, result) in results {
+            report(editor, &plugin, result);
+        }
+    }
+}
+
+/// [`report`] with jobs, for actions that need them.
+fn report_with(
+    editor: &mut Editor,
+    jobs: Option<&mut Jobs>,
+    _plugin: &str,
+    result: anyhow::Result<Vec<Action>>,
+) {
+    match result {
+        Ok(actions) => apply(editor, jobs, actions),
+        Err(error) => {
+            refresh_wanted(editor);
+            editor.set_error(error.to_string());
+        }
     }
 }
 

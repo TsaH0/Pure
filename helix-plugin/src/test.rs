@@ -83,6 +83,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         config_dir: PathBuf::from("/config"),
         registers: BTreeMap::new(),
         panels: Vec::new(),
+        completion_menu: None,
     }
 }
 
@@ -4555,4 +4556,73 @@ fn api_04_plugins_have_no_key_callbacks() {
         .key("testplugin3", "x", "w", None, Snapshot::default())
         .unwrap_err();
     assert!(err.to_string().contains("require API 0.5"), "{err}");
+}
+
+#[test]
+fn api_05_subscriptions_are_validated_and_filter_events() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let err = v5_run(&mut host, "subscribe", &["pre-command"]).unwrap_err();
+    assert!(format!("{err:#}").contains("filter.commands"), "{err:#}");
+    let err = v5_run(&mut host, "subscribe", &["document-change", "@glob", "a{"]).unwrap_err();
+    assert!(format!("{err:#}").contains("invalid path glob"), "{err:#}");
+    // Language and path filters, checked against the document.
+    let actions = v5_run(
+        &mut host,
+        "subscribe",
+        &["document-change", "@lang", "python"],
+    )
+    .unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::SubscriptionsChanged)));
+    assert!(host.wants(EventKind::DocumentChange));
+    let rust = snapshot("fn main() {}", 0, 0);
+    assert!(host.dispatch(Event::DocumentChange(1), &rust).is_empty());
+    let actions = v5_run(
+        &mut host,
+        "subscribe",
+        &["document-change", "@glob", "*.rs"],
+    )
+    .unwrap();
+    let id: u32 = statuses(&actions)[0]
+        .strip_prefix("subscribed:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let results = host.dispatch(Event::DocumentChange(1), &rust);
+    assert_eq!(results.len(), 1);
+    assert!(host
+        .log_lines("testplugin3")
+        .unwrap()
+        .iter()
+        .any(|line| line == "event:change:1"));
+    // Unsubscribed: no more.
+    v5_run(&mut host, "unsubscribe", &[&id.to_string()]).unwrap();
+    assert!(host.dispatch(Event::DocumentChange(1), &rust).is_empty());
+    // At most 64.
+    for _ in 1..v05::MAX_SUBSCRIPTIONS {
+        v5_run(&mut host, "subscribe", &["view-enter"]).unwrap();
+    }
+    let err = v5_run(&mut host, "subscribe", &["view-enter"]).unwrap_err();
+    assert!(format!("{err:#}").contains("at most 64"), "{err:#}");
+    assert!(host.wants2(v05::SubscriptionEvent::ViewEnter));
+    assert!(!host.wants2(v05::SubscriptionEvent::Shutdown));
+}
+
+#[test]
+fn api_05_hooks_run_in_order_until_one_cancels() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    v5_run(&mut host, "subscribe", &["pre-command", "@cmd", "write"]).unwrap();
+    let result = host.pre_command("write", &snapshot("x", 0, 0));
+    assert!(result.cancelled.is_none());
+    assert_eq!(result.results.len(), 1);
+    // Other commands don't ask the plugin.
+    let result = host.pre_command("quit", &snapshot("x", 0, 0));
+    assert!(result.results.is_empty());
+    v5_run(&mut host, "subscribe", &["pre-save", "@cancel-saves"]).unwrap();
+    let result = host.pre_save(1, &snapshot("x", 0, 0));
+    assert_eq!(
+        result.cancelled,
+        Some(("testplugin3".to_string(), "not now".to_string()))
+    );
 }

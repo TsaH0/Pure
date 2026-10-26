@@ -1333,12 +1333,157 @@ impl EditorView {
         editor.last_completion = Some(CompleteAction::Triggered);
         self.last_insert.1.push(InsertEvent::TriggerCompletion);
 
+        {
+            use crate::ui::completion::menu_events::{self, Close, MenuEvent};
+            if self.completion.is_some() {
+                crate::plugins::completion_menu_event(editor, MenuEvent::Closed(Close::Replaced));
+            }
+            let menu = completion.menu_state(editor);
+            crate::plugins::completion_menu_event(editor, MenuEvent::Opened(menu.count));
+            menu_events::set(Some(menu));
+        }
         // TODO : propagate required size on resize to completion too
         self.completion = Some(completion);
         Some(area)
     }
 
+    /// The completion menu changed (selection, filter, items): update what
+    /// plugins see, and tell them if the items did.
+    pub fn sync_menu(&mut self, editor: &mut Editor) {
+        use crate::ui::completion::menu_events::{self, MenuEvent};
+        let Some(completion) = &self.completion else {
+            return;
+        };
+        let menu = completion.menu_state(editor);
+        let before = menu_events::snapshot().map(|menu| menu.count);
+        if before != Some(menu.count) {
+            crate::plugins::completion_menu_event(editor, MenuEvent::Updated(menu.count));
+        }
+        menu_events::set(Some(menu));
+    }
+
+    /// A key of `completion-keys` while the menu is open.
+    fn completion_key(
+        &mut self,
+        action: helix_view::editor::CompletionKeyAction,
+        cx: &mut commands::Context,
+    ) {
+        use crate::ui::completion::menu_events::MenuCommand;
+        use helix_view::editor::CompletionKeyAction as A;
+        let mut compositor_cx = crate::compositor::Context {
+            editor: cx.editor,
+            jobs: cx.jobs,
+            scroll: None,
+        };
+        let command = match action {
+            A::Confirm => MenuCommand::Confirm,
+            A::Abort | A::NormalMode => MenuCommand::Abort,
+            A::Close => MenuCommand::Close,
+            A::Next => MenuCommand::Next,
+            A::Previous => MenuCommand::Previous,
+            A::PageUp | A::PageDown => {
+                if let Some(completion) = &mut self.completion {
+                    let key = if action == A::PageUp {
+                        key!(PageUp)
+                    } else {
+                        key!(PageDown)
+                    };
+                    completion.handle_event(&Event::Key(key), &mut compositor_cx);
+                }
+                self.sync_menu(cx.editor);
+                return;
+            }
+        };
+        self.completion_command(command, &mut compositor_cx);
+        if action == A::NormalMode {
+            let old_mode = cx.editor.mode();
+            commands::MappableCommand::normal_mode.execute(cx);
+            let new_mode = cx.editor.mode();
+            if new_mode != old_mode {
+                helix_event::dispatch(OnModeSwitch {
+                    old_mode,
+                    new_mode,
+                    cx,
+                });
+            }
+        }
+    }
+
+    /// A plugin drives the completion menu (API 0.5), through the menu's
+    /// own code: previews, undo and language server sync work as with the
+    /// keys.
+    pub fn completion_command(
+        &mut self,
+        command: crate::ui::completion::menu_events::MenuCommand,
+        cx: &mut crate::compositor::Context,
+    ) {
+        use crate::ui::completion::menu_events::{set_close_reason, Close, MenuCommand, MenuEvent};
+        let Some(completion) = &mut self.completion else {
+            return;
+        };
+        let accept = |view: &mut Self, cx: &mut crate::compositor::Context, close: Close| {
+            let Some(completion) = &mut view.completion else {
+                return;
+            };
+            let label = completion.selected_label();
+            if let EventResult::Consumed(Some(_)) =
+                completion.handle_event(&Event::Key(key!(Enter)), cx)
+            {
+                if let (Close::Confirmed, Some(label)) = (close, label) {
+                    crate::plugins::completion_menu_event(cx.editor, MenuEvent::Confirmed(label));
+                }
+                set_close_reason(close);
+                if let Some(cb) = view.clear_completion(cx.editor) {
+                    view.on_next_key = Some((cb, OnKeyCallbackKind::Fallback));
+                }
+            }
+        };
+        match command {
+            MenuCommand::Select(index) => {
+                completion.select(index.map(|i| i as usize), cx.editor);
+                self.sync_menu(cx.editor);
+            }
+            MenuCommand::Next | MenuCommand::Previous => {
+                let key = if command == MenuCommand::Next {
+                    crate::ctrl!('n')
+                } else {
+                    crate::ctrl!('p')
+                };
+                completion.handle_event(&Event::Key(key), cx);
+                self.sync_menu(cx.editor);
+            }
+            MenuCommand::Confirm => {
+                if completion.selected_label().is_none() {
+                    completion.select(Some(0), cx.editor);
+                }
+                accept(self, cx, Close::Confirmed);
+            }
+            MenuCommand::Abort => {
+                set_close_reason(Close::Aborted);
+                self.clear_completion(cx.editor);
+            }
+            // A previewed item is accepted (as typing a character would);
+            // without one the text stays as it is.
+            MenuCommand::Close => {
+                if completion.selected_label().is_some() {
+                    accept(self, cx, Close::Dismissed);
+                } else {
+                    set_close_reason(Close::Dismissed);
+                    self.clear_completion(cx.editor);
+                }
+            }
+        }
+    }
+
     pub fn clear_completion(&mut self, editor: &mut Editor) -> Option<OnKeyCallback> {
+        {
+            use crate::ui::completion::menu_events::{self, MenuEvent};
+            let reason = menu_events::take_close_reason();
+            if self.completion.is_some() {
+                crate::plugins::completion_menu_event(editor, MenuEvent::Closed(reason));
+                menu_events::set(None);
+            }
+        }
         self.completion = None;
         let mut on_next_key: Option<OnKeyCallback> = None;
         editor.handlers.completions.request_controller.restart();
@@ -1740,7 +1885,36 @@ impl Component for EditorView {
                         Mode::Insert => {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
-                            if let Some(completion) = &mut self.completion {
+                            // Keys bound to a plugin aren't typing: they go to
+                            // the plugin, which may drive the menu itself.
+                            let plugin_key = crate::keymap::plugin_layers::has_bindings() && {
+                                let doc = doc!(cx.editor);
+                                let language = doc.language_name().map(str::to_string);
+                                let scope = crate::keymap::plugin_layers::KeyScope {
+                                    owner: doc.plugin_owner.as_deref(),
+                                    document: Some(doc.id()),
+                                    language: language.as_deref(),
+                                };
+                                self.keymaps.is_plugin_binding(Mode::Insert, key, &scope)
+                            };
+                            // `completion-keys`: what the user bound for the open menu.
+                            let menu_key = self
+                                .completion
+                                .as_ref()
+                                .filter(|_| !plugin_key)
+                                .and_then(|_| {
+                                    cx.editor.config().completion_keys.get(&key).copied()
+                                });
+                            if let Some(action) = menu_key {
+                                self.completion_key(action, &mut cx);
+                                consumed = true;
+                            }
+                            if let Some(completion) = self
+                                .completion
+                                .as_mut()
+                                .filter(|_| !plugin_key && menu_key.is_none())
+                            {
+                                let label = completion.selected_label();
                                 let res = {
                                     // use a fake context here
                                     let mut cx = Context {
@@ -1765,7 +1939,24 @@ impl Component for EditorView {
 
                                 if let Some(callback) = res {
                                     if callback.is_some() {
-                                        // assume close_fn
+                                        // assume close_fn: aborted with esc or ctrl-c,
+                                        // else an item was accepted.
+                                        use crate::ui::completion::menu_events::{
+                                            set_close_reason, Close, MenuEvent,
+                                        };
+                                        if consumed
+                                            && (key == key!(Esc) || key == crate::ctrl!('c'))
+                                        {
+                                            set_close_reason(Close::Aborted);
+                                        } else {
+                                            if let Some(label) = label {
+                                                crate::plugins::completion_menu_event(
+                                                    cx.editor,
+                                                    MenuEvent::Confirmed(label),
+                                                );
+                                            }
+                                            set_close_reason(Close::Confirmed);
+                                        }
                                         if let Some(cb) = self.clear_completion(cx.editor) {
                                             if consumed {
                                                 cx.on_next_key_callback =
@@ -1775,6 +1966,8 @@ impl Component for EditorView {
                                                     Some((cb, OnKeyCallbackKind::Fallback));
                                             }
                                         }
+                                    } else {
+                                        self.sync_menu(cx.editor);
                                     }
                                 }
                             }
@@ -1886,6 +2079,7 @@ impl Component for EditorView {
         }
 
         // Plugin panels take columns beside the views and rows below them.
+        crate::plugins::check_focus(cx.editor);
         let (views_area, panel_areas) = if cx.editor.panels.is_empty() {
             (editor_area, Vec::new())
         } else {

@@ -448,6 +448,12 @@ impl std::str::FromStr for KeyEvent {
     }
 }
 
+impl serde::Serialize for KeyEvent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
 impl<'de> Deserialize<'de> for KeyEvent {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

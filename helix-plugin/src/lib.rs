@@ -432,6 +432,8 @@ pub struct Snapshot {
     pub registers: BTreeMap<char, Vec<String>>,
     /// The panels shown (the sidebar is the left one).
     pub panels: Vec<SidebarSnapshot>,
+    /// The completion menu, if it is open (API 0.5).
+    pub completion_menu: Option<v05::MenuState>,
 }
 
 impl Default for Snapshot {
@@ -445,6 +447,7 @@ impl Default for Snapshot {
             config_dir: PathBuf::new(),
             registers: BTreeMap::new(),
             panels: Vec::new(),
+            completion_menu: None,
         }
     }
 }
@@ -511,6 +514,12 @@ pub enum Action {
         plugin: String,
         id: u32,
     },
+    /// Drive the completion menu (API 0.5). Applied in order with the other
+    /// actions: the ones after it wait until it is done.
+    CompletionMenu(v05::MenuAction),
+    /// A plugin subscribed or unsubscribed (API 0.5): what the editor asks
+    /// plugins about changed ([`PluginHost::wants`]).
+    SubscriptionsChanged,
     /// All of `plugin`'s key bindings (API 0.5), replacing the previous set.
     KeyBindings {
         plugin: String,
@@ -3171,7 +3180,7 @@ impl PluginHost {
     pub fn subscribers(&self, kind: EventKind) -> Vec<String> {
         self.plugins
             .iter()
-            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .filter(|plugin| plugin.disabled.is_none() && plugin.subscribed(kind))
             .map(|plugin| plugin.manifest.name.clone())
             .collect()
     }
@@ -3185,8 +3194,12 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Option<anyhow::Result<Vec<Action>>> {
-        let kind = event.kind();
-        self.dispatch_if(plugin, event, snapshot, |p| p.events.contains(&kind))
+        let wanted = |p: &Plugin| p.wants_event(&event, snapshot);
+        let wanted = self
+            .plugins
+            .iter()
+            .any(|p| p.manifest.name == plugin && wanted(p));
+        self.dispatch_if(plugin, event, snapshot, |_| wanted)
     }
 
     /// [`Self::dispatch_to`] whether or not the plugin subscribed (e.g. the
@@ -3295,7 +3308,7 @@ impl PluginHost {
     pub fn wants(&self, kind: EventKind) -> bool {
         self.plugins
             .iter()
-            .any(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .any(|plugin| plugin.disabled.is_none() && plugin.subscribed(kind))
     }
 }
 

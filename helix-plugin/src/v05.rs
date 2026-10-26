@@ -79,6 +79,8 @@ pub enum SubscriptionEvent {
     Shutdown,
     PreCommand,
     PreSave,
+    /// Not subscribable: a watch's changes go to the plugin that watches.
+    FileChange,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -256,6 +258,9 @@ pub struct EditorFns {
     pub commands: Option<fn() -> Vec<CommandEntry>>,
 }
 
+/// Most subscriptions per plugin.
+pub const MAX_SUBSCRIPTIONS: usize = 64;
+
 /// A plugin's API 0.5 state.
 #[derive(Debug, Default)]
 pub(crate) struct V05 {
@@ -263,6 +268,85 @@ pub(crate) struct V05 {
     pub key_override: bool,
     pub editor: EditorFns,
     pub key_bindings: Vec<KeyBinding>,
+    pub subscriptions: Vec<Subscription>,
+    pub next_subscription: u32,
+}
+
+/// An event subscription with its filter (`subscriptions.subscribe`).
+#[derive(Debug, Clone)]
+pub(crate) struct Subscription {
+    pub id: u32,
+    pub event: SubscriptionEvent,
+    pub filter: EventFilter,
+    glob: Option<globset::GlobMatcher>,
+}
+
+impl Subscription {
+    /// Whether an event about `doc` (and `command`) passes the filter. An
+    /// event without a document passes document filters only if they are
+    /// unset.
+    pub fn matches(
+        &self,
+        doc: Option<(DocumentId, &crate::DocumentSnapshot)>,
+        command: Option<&str>,
+    ) -> bool {
+        let filter = &self.filter;
+        if let Some(command) = command {
+            if !filter.commands.is_empty() && !filter.commands.iter().any(|c| c == command) {
+                return false;
+            }
+        }
+        let needs_doc =
+            filter.document.is_some() || filter.language.is_some() || self.glob.is_some();
+        let Some((id, doc)) = doc else {
+            return !needs_doc;
+        };
+        filter.document.is_none_or(|wanted| wanted == id)
+            && filter
+                .language
+                .as_deref()
+                .is_none_or(|language| doc.language.as_deref() == Some(language))
+            && self.glob.as_ref().is_none_or(|glob| {
+                doc.path.as_deref().is_some_and(|path| {
+                    glob.is_match(path) || path.file_name().is_some_and(|name| glob.is_match(name))
+                })
+            })
+    }
+}
+
+impl SubscriptionEvent {
+    /// The 0.1-0.4 event this is, if it is one.
+    pub fn old_kind(self) -> Option<crate::EventKind> {
+        use crate::EventKind as K;
+        Some(match self {
+            Self::DocumentOpen => K::DocumentOpen,
+            Self::DocumentChange => K::DocumentChange,
+            Self::DocumentSave => K::DocumentSave,
+            Self::DocumentClose => K::DocumentClose,
+            Self::SelectionChange => K::SelectionChange,
+            Self::ModeSwitch => K::ModeSwitch,
+            Self::PostCommand => K::PostCommand,
+            Self::FocusGained => K::FocusGained,
+            Self::FocusLost => K::FocusLost,
+            Self::EditorIdle => K::EditorIdle,
+            _ => return None,
+        })
+    }
+
+    /// The subscription kind of an `events2` event.
+    pub fn of(event: &Event2) -> Self {
+        match event {
+            Event2::BufferEnter(..) => Self::BufferEnter,
+            Event2::BufferLeave(..) => Self::BufferLeave,
+            Event2::ViewEnter(_) => Self::ViewEnter,
+            Event2::ViewLeave(_) => Self::ViewLeave,
+            Event2::CompletionMenu(_) => Self::CompletionMenu,
+            Event2::ConfigChange(_) => Self::ConfigChange,
+            Event2::PluginChange(..) => Self::PluginChange,
+            Event2::FileChange(..) => Self::FileChange,
+            Event2::Shutdown => Self::Shutdown,
+        }
+    }
 }
 
 /// `keys` with single spaces between keys.
@@ -339,19 +423,74 @@ impl State {
         });
     }
     pub(crate) fn menu_state(&mut self) -> Option<MenuState> {
-        None
+        self.snapshot.completion_menu.clone()
     }
-    pub(crate) fn menu_action(&mut self, _action: MenuAction) -> Result<(), String> {
-        not_yet("completion-menu")
+    pub(crate) fn menu_action(&mut self, action: MenuAction) -> Result<(), String> {
+        self.need_ui("completion-menu")?;
+        if let MenuAction::Select(Some(index)) = action {
+            let count = self
+                .snapshot
+                .completion_menu
+                .as_ref()
+                .map_or(0, |menu| menu.items.len() as u32);
+            if index >= count {
+                return Err(format!("no completion item {index} (the menu has {count})"));
+            }
+        }
+        self.actions.push(crate::Action::CompletionMenu(action));
+        Ok(())
     }
     pub(crate) fn subscribe(
         &mut self,
-        _event: SubscriptionEvent,
-        _filter: EventFilter,
+        event: SubscriptionEvent,
+        filter: EventFilter,
     ) -> Result<u32, String> {
-        not_yet("subscriptions.subscribe")
+        if event == SubscriptionEvent::PreCommand && filter.commands.is_empty() {
+            return Err("pre-command needs the commands it is about (filter.commands)".into());
+        }
+        if filter.commands.len() > 256 {
+            return Err("at most 256 commands in a filter".into());
+        }
+        if self.v05.subscriptions.len() >= MAX_SUBSCRIPTIONS {
+            return Err(format!(
+                "at most {MAX_SUBSCRIPTIONS} subscriptions per plugin"
+            ));
+        }
+        let glob = match &filter.path_glob {
+            Some(glob) => Some(
+                globset::Glob::new(glob)
+                    .map_err(|err| format!("invalid path glob '{glob}': {err}"))?
+                    .compile_matcher(),
+            ),
+            None => None,
+        };
+        self.v05.next_subscription += 1;
+        let id = self.v05.next_subscription;
+        self.v05.subscriptions.push(Subscription {
+            id,
+            event,
+            filter,
+            glob,
+        });
+        self.subscriptions_changed();
+        Ok(id)
     }
-    pub(crate) fn unsubscribe(&mut self, _id: u32) {}
+    pub(crate) fn unsubscribe(&mut self, id: u32) {
+        let before = self.v05.subscriptions.len();
+        self.v05.subscriptions.retain(|s| s.id != id);
+        if self.v05.subscriptions.len() != before {
+            self.subscriptions_changed();
+        }
+    }
+    fn subscriptions_changed(&mut self) {
+        if !self
+            .actions
+            .iter()
+            .any(|action| matches!(action, crate::Action::SubscriptionsChanged))
+        {
+            self.actions.push(crate::Action::SubscriptionsChanged);
+        }
+    }
     pub(crate) fn command_list(&mut self) -> Vec<CommandEntry> {
         Vec::new()
     }
@@ -487,5 +626,230 @@ impl State {
         _params: String,
     ) -> Result<u32, String> {
         not_yet("lsp.request")
+    }
+}
+
+impl crate::Event {
+    /// The document the event is about.
+    fn document(&self) -> Option<DocumentId> {
+        use crate::Event as E;
+        match self {
+            E::DocumentOpen(doc)
+            | E::DocumentChange(doc)
+            | E::DocumentSave(doc)
+            | E::DocumentClose(doc)
+            | E::SelectionChange(doc)
+            | E::BufferWrite(doc) => Some(*doc),
+            E::Completion { doc, .. } => Some(*doc),
+            _ => None,
+        }
+    }
+}
+
+/// `doc` with its snapshot, if the snapshot has it.
+fn with_snapshot(
+    doc: Option<DocumentId>,
+    snapshot: &crate::Snapshot,
+) -> Option<(DocumentId, &crate::DocumentSnapshot)> {
+    let doc = doc?;
+    Some((doc, snapshot.documents.get(&doc)?))
+}
+
+impl crate::Plugin {
+    fn subscriptions(&self) -> &[Subscription] {
+        &self.store.data().v05.subscriptions
+    }
+
+    /// Subscribed to events of `kind` at all (in `init` or later).
+    pub(crate) fn subscribed(&self, kind: crate::EventKind) -> bool {
+        self.events.contains(&kind)
+            || self
+                .subscriptions()
+                .iter()
+                .any(|s| s.event.old_kind() == Some(kind))
+    }
+
+    /// Whether `event` goes to this plugin: subscribed in `init`, or a
+    /// subscription's filter lets it through.
+    pub(crate) fn wants_event(&self, event: &crate::Event, snapshot: &crate::Snapshot) -> bool {
+        let kind = event.kind();
+        if self.events.contains(&kind) {
+            return true;
+        }
+        let doc = with_snapshot(event.document(), snapshot);
+        let command = match event {
+            crate::Event::PostCommand(command) => Some(command.as_str()),
+            _ => None,
+        };
+        self.subscriptions()
+            .iter()
+            .any(|s| s.event.old_kind() == Some(kind) && s.matches(doc, command))
+    }
+
+    /// Whether an `events2` event or hook of `kind` about `doc` (and
+    /// `command`) goes to this plugin.
+    fn wants2(
+        &self,
+        kind: SubscriptionEvent,
+        doc: Option<(DocumentId, &crate::DocumentSnapshot)>,
+        command: Option<&str>,
+    ) -> bool {
+        self.disabled.is_none()
+            && self.manifest.at_least_0_5()
+            && self
+                .subscriptions()
+                .iter()
+                .any(|s| s.event == kind && s.matches(doc, command))
+    }
+}
+
+/// What a hook decided, and the actions of the plugins asked.
+#[derive(Debug, Default)]
+pub struct HookResult {
+    /// `(plugin, reason)` of the plugin that cancelled.
+    pub cancelled: Option<(String, String)>,
+    /// Each asked plugin's actions (or error), in the order asked.
+    pub results: Vec<(String, anyhow::Result<Vec<crate::Action>>)>,
+}
+
+impl crate::PluginHost {
+    /// Whether an enabled API 0.5 plugin subscribed to `kind` (an `events2`
+    /// event or a hook), whatever the filter.
+    pub fn wants2(&self, kind: SubscriptionEvent) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.disabled.is_none()
+                && plugin.manifest.at_least_0_5()
+                && plugin.subscriptions().iter().any(|s| s.event == kind)
+        })
+    }
+
+    /// Send `event` (about `doc`) to the plugins whose subscriptions let it
+    /// through, in load order.
+    pub fn dispatch2(
+        &mut self,
+        event: &Event2,
+        doc: Option<DocumentId>,
+        snapshot: &crate::Snapshot,
+    ) -> Vec<(String, anyhow::Result<Vec<crate::Action>>)> {
+        let kind = SubscriptionEvent::of(event);
+        let names: Vec<String> = self
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.wants2(kind, with_snapshot(doc, snapshot), None))
+            .map(|plugin| plugin.manifest.name.clone())
+            .collect();
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let result = self.dispatch2_to(&name, event, snapshot)?;
+                Some((name, result))
+            })
+            .collect()
+    }
+
+    /// Send `event` to `plugin` (API 0.5, enabled) whether or not it
+    /// subscribed: a watch's changes, its own settings.
+    pub fn dispatch2_to(
+        &mut self,
+        plugin: &str,
+        event: &Event2,
+        snapshot: &crate::Snapshot,
+    ) -> Option<anyhow::Result<Vec<crate::Action>>> {
+        let limit = self.limits.event;
+        let plugin = self.plugins.iter_mut().find(|p| {
+            p.manifest.name == plugin && p.disabled.is_none() && p.manifest.at_least_0_5()
+        })?;
+        let event = event.clone();
+        Some(
+            plugin
+                .call(
+                    snapshot.clone(),
+                    crate::CallContext::Event,
+                    limit,
+                    move |guest, store| {
+                        Box::pin(async move { guest.call_event2(store, &event).await })
+                    },
+                )
+                .map(|((), actions)| actions),
+        )
+    }
+
+    /// Ask the plugins that subscribed to `pre-command` for `command`, in
+    /// load order, until one cancels it.
+    pub fn pre_command(&mut self, command: &str, snapshot: &crate::Snapshot) -> HookResult {
+        let names: Vec<String> = self
+            .plugins
+            .iter()
+            .filter(|p| p.wants2(SubscriptionEvent::PreCommand, None, Some(command)))
+            .map(|p| p.manifest.name.clone())
+            .collect();
+        let command = command.to_string();
+        self.run_hook(names, snapshot, move |guest, store| {
+            let command = command.clone();
+            Box::pin(async move { guest.call_pre_command(store, &command).await })
+        })
+    }
+
+    /// Ask the plugins that subscribed to `pre-save` (with a filter `doc`
+    /// passes) before writing `doc`, until one cancels. Their edits are
+    /// applied before writing.
+    pub fn pre_save(&mut self, doc: DocumentId, snapshot: &crate::Snapshot) -> HookResult {
+        let names: Vec<String> = self
+            .plugins
+            .iter()
+            .filter(|p| {
+                p.wants2(
+                    SubscriptionEvent::PreSave,
+                    with_snapshot(Some(doc), snapshot),
+                    None,
+                )
+            })
+            .map(|p| p.manifest.name.clone())
+            .collect();
+        self.run_hook(names, snapshot, move |guest, store| {
+            Box::pin(async move { guest.call_pre_save(store, doc).await })
+        })
+    }
+
+    fn run_hook(
+        &mut self,
+        names: Vec<String>,
+        snapshot: &crate::Snapshot,
+        call: impl for<'a> Fn(
+                &'a crate::api::Instance,
+                &'a mut wasmtime::Store<State>,
+            ) -> crate::CallFuture<'a, HookOutcome>
+            + Send
+            + Clone,
+    ) -> HookResult {
+        let limit = self.limits.hook;
+        let mut result = HookResult::default();
+        for name in names {
+            let Some(plugin) = self
+                .plugins
+                .iter_mut()
+                .find(|p| p.manifest.name == name && p.disabled.is_none())
+            else {
+                continue;
+            };
+            let call = call.clone();
+            match plugin.call(
+                snapshot.clone(),
+                crate::CallContext::Event,
+                limit,
+                move |guest, store| call(guest, store),
+            ) {
+                Ok((outcome, actions)) => {
+                    result.results.push((name.clone(), Ok(actions)));
+                    if let HookOutcome::Cancel(reason) = outcome {
+                        result.cancelled = Some((name, reason));
+                        break;
+                    }
+                }
+                // A failing plugin is disabled and counts as `proceed`.
+                Err(err) => result.results.push((name, Err(err))),
+            }
+        }
+        result
     }
 }

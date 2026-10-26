@@ -514,6 +514,37 @@ impl Keymaps {
         keymaps.get(&mode)?.search(keys).cloned()
     }
 
+    /// Whether `key` (after the keys pending) runs a plugin binding in
+    /// `mode` and `scope`, without consuming anything.
+    pub fn is_plugin_binding(
+        &self,
+        mode: Mode,
+        key: KeyEvent,
+        scope: &plugin_layers::KeyScope,
+    ) -> bool {
+        if !plugin_layers::has_bindings() {
+            return false;
+        }
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
+        let layered = plugin_layers::compose(&base, keymaps, scope, None);
+        let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let mut keys = self.state.clone();
+        keys.push(key);
+        let trie = match &self.sticky {
+            Some(node) => KeyTrie::Node(node.clone()),
+            None => match keymaps.get(&mode) {
+                Some(trie) => trie.clone(),
+                None => return false,
+            },
+        };
+        matches!(
+            trie.search(&keys),
+            Some(KeyTrie::MappableCommand(command)) if plugin_layers::binding_of(command).is_some()
+        )
+    }
+
     /// `:plugin-keys`: every plugin binding with its layer and conflicts.
     pub fn plugin_report(&self) -> Vec<String> {
         let base = self.map();

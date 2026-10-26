@@ -392,6 +392,71 @@ impl Instance {
         }
     }
 
+    /// `events2.on-event` (API 0.5).
+    pub async fn call_event2(
+        &self,
+        store: &mut Store<State>,
+        event: &crate::v05::Event2,
+    ) -> Result<()> {
+        match self {
+            Self::V0_5(instance) => api05::event2(instance, store, event).await,
+            _ => anyhow::bail!("these events require API 0.5"),
+        }
+    }
+
+    /// `hooks.on-pre-command` (API 0.5).
+    pub async fn call_pre_command(
+        &self,
+        store: &mut Store<State>,
+        command: &str,
+    ) -> Result<crate::v05::HookOutcome> {
+        match self {
+            Self::V0_5(instance) => api05::pre_command(instance, store, command).await,
+            _ => anyhow::bail!("hooks require API 0.5"),
+        }
+    }
+
+    /// `hooks.on-pre-save` (API 0.5).
+    pub async fn call_pre_save(
+        &self,
+        store: &mut Store<State>,
+        doc: u32,
+    ) -> Result<crate::v05::HookOutcome> {
+        match self {
+            Self::V0_5(instance) => api05::pre_save(instance, store, doc).await,
+            _ => anyhow::bail!("hooks require API 0.5"),
+        }
+    }
+
+    /// `callbacks2` (API 0.5).
+    pub async fn call_callback2(
+        &self,
+        store: &mut Store<State>,
+        callback: &crate::v05::Callback2,
+    ) -> Result<()> {
+        match self {
+            Self::V0_5(instance) => api05::callback2(instance, store, callback).await,
+            _ => anyhow::bail!("these callbacks require API 0.5"),
+        }
+    }
+
+    /// `hooks.on-service-call` (API 0.5).
+    pub async fn call_service(
+        &self,
+        store: &mut Store<State>,
+        caller: &str,
+        service: &str,
+        method: &str,
+        payload: &str,
+    ) -> Result<std::result::Result<String, String>> {
+        match self {
+            Self::V0_5(instance) => {
+                api05::service_call(instance, store, caller, service, method, payload).await
+            }
+            _ => anyhow::bail!("services require API 0.5"),
+        }
+    }
+
     /// `hooks.on-key` (API 0.5).
     pub async fn call_key(
         &self,
