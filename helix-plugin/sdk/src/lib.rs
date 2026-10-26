@@ -28,7 +28,10 @@
 #[cfg(any(
     all(feature = "api-v0-1", feature = "api-v0-2"),
     all(feature = "api-v0-1", feature = "api-v0-3"),
+    all(feature = "api-v0-1", feature = "api-v0-4"),
     all(feature = "api-v0-2", feature = "api-v0-3"),
+    all(feature = "api-v0-2", feature = "api-v0-4"),
+    all(feature = "api-v0-3", feature = "api-v0-4"),
 ))]
 compile_error!("select only one legacy plugin ABI feature");
 
@@ -68,11 +71,26 @@ pub mod bindings {
     });
 }
 
-#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")))]
+#[cfg(all(
+    not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3")),
+    feature = "api-v0-4"
+))]
 #[doc(hidden)]
 pub mod bindings {
     wit_bindgen::generate!({
         path: "../wit/v0.4",
+        world: "helix-plugin",
+        pub_export_macro: true,
+        export_macro_name: "__export_helix_plugin",
+        default_bindings_module: "helix_plugin_api::bindings",
+    });
+}
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+#[doc(hidden)]
+pub mod bindings {
+    wit_bindgen::generate!({
+        path: "../wit/v0.5",
         world: "helix-plugin",
         pub_export_macro: true,
         export_macro_name: "__export_helix_plugin",
@@ -327,6 +345,38 @@ pub trait Plugin {
     fn on_buffer_write(_doc: DocumentId) -> Result<(), String> {
         Err("this buffer can't be written".into())
     }
+    /// A key bound with `keymaps::set` (not [`keymaps::bind`], whose
+    /// closure runs instead) was pressed (API 0.5). Like a command.
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+    fn on_key(_name: &str, _keys: &str, _count: Option<u32>) -> Result<KeyOutcome, String> {
+        Ok(KeyOutcome::PassThrough)
+    }
+    /// A subscribed command is about to run (API 0.5, 100 ms).
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+    fn on_pre_command(_command: &str) -> HookOutcome {
+        HookOutcome::Proceed
+    }
+    /// `doc` is about to be saved (API 0.5, 100 ms); edits made here are
+    /// saved with it.
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+    fn on_pre_save(_doc: DocumentId) -> HookOutcome {
+        HookOutcome::Proceed
+    }
+    /// A call to one of this plugin's services that no
+    /// [`services::provide`] closure handles (API 0.5).
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+    fn on_service_call(
+        _caller: &str,
+        service: &str,
+        _method: &str,
+        _payload: &str,
+    ) -> Result<String, String> {
+        Err(format!("no service '{service}'"))
+    }
+    /// An event subscribed with `subscriptions::subscribe` (API 0.5).
+    /// File changes of [`watch::add`] closures don't come here.
+    #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+    fn on_event(_event: Event) {}
 }
 
 /// Export a type implementing [`Plugin`] as the plugin.
@@ -354,6 +404,7 @@ macro_rules! register_plugin {
         }
 
         $crate::__export_callbacks!(__HelixPluginExport, $plugin);
+        $crate::__export_v05!(__HelixPluginExport, $plugin);
         $crate::bindings::__export_helix_plugin!(__HelixPluginExport with_types_in $crate::bindings);
     };
 }
@@ -523,6 +574,87 @@ macro_rules! __export_callbacks {
         }
     };
 }
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+mod v05;
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+pub use v05::{
+    commands, completion_menu, decorations2, floats, keymaps, lsp, marks, progress, services,
+    sessions, state, subscriptions, watch, CloseReason, CompletionEvent, Event, HookOutcome,
+    KeyOutcome, PluginState,
+};
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_v05 {
+    ($export:ty, $plugin:ty) => {
+        impl $crate::bindings::exports::helix::plugin::hooks::Guest for $export {
+            fn on_key(name: String, keys: String, count: Option<u32>) -> $crate::KeyOutcome {
+                $crate::__v05_key(&name, &keys, count, || {
+                    <$plugin as $crate::Plugin>::on_key(&name, &keys, count)
+                })
+            }
+            fn on_pre_command(command: String) -> $crate::HookOutcome {
+                <$plugin as $crate::Plugin>::on_pre_command(&command)
+            }
+            fn on_pre_save(doc: $crate::DocumentId) -> $crate::HookOutcome {
+                <$plugin as $crate::Plugin>::on_pre_save(doc)
+            }
+            fn on_service_call(
+                caller: String,
+                service: String,
+                method: String,
+                payload: String,
+            ) -> Result<String, String> {
+                match $crate::services::handle(&caller, &service, &method, &payload) {
+                    Some(result) => result,
+                    None => <$plugin as $crate::Plugin>::on_service_call(
+                        &caller, &service, &method, &payload,
+                    ),
+                }
+            }
+        }
+        impl $crate::bindings::exports::helix::plugin::events2::Guest for $export {
+            fn on_event(event: $crate::Event) {
+                if let $crate::Event::FileChange((id, paths)) = &event {
+                    if $crate::__v05_file_change(*id, paths) {
+                        return;
+                    }
+                }
+                <$plugin as $crate::Plugin>::on_event(event)
+            }
+        }
+        impl $crate::bindings::exports::helix::plugin::callbacks2::Guest for $export {
+            fn on_command_done(id: $crate::RequestId, result: Result<(), String>) {
+                $crate::__v05_command_done(id, result)
+            }
+            fn on_batch_done(id: $crate::RequestId, results: Vec<Result<(), String>>) {
+                $crate::__v05_batch_done(id, results)
+            }
+            fn on_service_reply(id: $crate::RequestId, result: Result<String, String>) {
+                $crate::__v05_reply(id, result)
+            }
+            fn on_lsp_reply(id: $crate::RequestId, result: Result<String, String>) {
+                $crate::__v05_reply(id, result)
+            }
+        }
+    };
+}
+
+#[cfg(not(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4"))))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __export_v05 {
+    ($export:ty, $plugin:ty) => {};
+}
+
+#[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
+#[doc(hidden)]
+pub use v05::{
+    batch_done as __v05_batch_done, command_done as __v05_command_done,
+    file_change as __v05_file_change, key as __v05_key, reply as __v05_reply,
+};
 
 #[doc(hidden)]
 pub fn __run_command(f: impl FnOnce() -> Result<(), String>) -> Result<(), String> {

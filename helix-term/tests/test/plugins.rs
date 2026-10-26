@@ -896,7 +896,7 @@ fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, temp
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{permissions}]\n"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -2083,7 +2083,7 @@ fn app_with_v3_manifest(
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n{extra}"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{permissions}]\n{extra}"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();

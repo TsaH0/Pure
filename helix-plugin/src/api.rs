@@ -15,8 +15,12 @@ pub(crate) mod v0_3 {
 pub(crate) mod v0_4 {
     wasmtime::component::bindgen!({ path: "wit/v0.4", world: "helix-plugin", exports: { default: async } });
 }
+pub(crate) mod v0_5 {
+    wasmtime::component::bindgen!({ path: "wit/v0.5", world: "helix-plugin", exports: { default: async } });
+}
 mod api03;
 mod api04;
+pub(crate) mod api05;
 mod world;
 
 impl types::Host for State {}
@@ -237,6 +241,7 @@ pub(crate) enum Instance {
     V0_2(v0_2::HelixPlugin),
     V0_3(Box<v0_3::HelixPlugin>),
     V0_4(Box<v0_4::HelixPlugin>),
+    V0_5(Box<v0_5::HelixPlugin>),
 }
 impl Instance {
     /// `init`: the plugin's commands and the events it subscribes to.
@@ -249,6 +254,7 @@ impl Instance {
         match self {
             Self::V0_3(instance) => api03::init(instance, store, config).await,
             Self::V0_4(instance) => api04::init(instance, store, config).await,
+            Self::V0_5(instance) => api05::init(instance, store, config).await,
             Self::V0_1(instance) => instance
                 .helix_plugin_plugin()
                 .call_init(store, config)
@@ -318,6 +324,12 @@ impl Instance {
                     .call_run_command(store, name, args)
                     .await
             }
+            Self::V0_5(instance) => {
+                instance
+                    .helix_plugin_plugin()
+                    .call_run_command(store, name, args)
+                    .await
+            }
             Self::V0_1(instance) => {
                 instance
                     .helix_plugin_plugin()
@@ -342,6 +354,9 @@ impl Instance {
         }
         if let Self::V0_4(instance) = self {
             return api04::callback(instance, store, callback).await;
+        }
+        if let Self::V0_5(instance) = self {
+            return api05::callback(instance, store, callback).await;
         }
         let Self::V0_2(instance) = self else {
             anyhow::bail!("callbacks require API 0.2")
@@ -397,6 +412,12 @@ impl Instance {
                     .call_run(store, task, input)
                     .await
             }
+            Self::V0_5(instance) => {
+                instance
+                    .helix_plugin_background()
+                    .call_run(store, task, input)
+                    .await
+            }
             _ => anyhow::bail!("background tasks require API 0.3"),
         }
     }
@@ -405,6 +426,7 @@ impl Instance {
         match self {
             Self::V0_3(instance) => api03::event(instance, store, event).await,
             Self::V0_4(instance) => api04::event(instance, store, event).await,
+            Self::V0_5(instance) => api05::event(instance, store, event).await,
             Self::V0_1(instance) => {
                 let guest = instance.helix_plugin_plugin();
                 match event {

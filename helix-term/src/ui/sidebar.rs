@@ -5,7 +5,7 @@ use helix_core::unicode::width::UnicodeWidthStr;
 use helix_view::graphics::Rect;
 use helix_view::input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use helix_view::keyboard::{KeyCode, KeyModifiers};
-use helix_view::sidebar::Dock;
+use helix_view::sidebar::{Dock, FloatPosition};
 use helix_view::Editor;
 use tui::buffer::Buffer as Surface;
 
@@ -40,13 +40,54 @@ pub fn layout(editor: &Editor, area: Rect) -> (Rect, Vec<(Dock, Rect)>) {
             views = views.clip_bottom(height);
         }
     }
+    // Over everything else, so last (drawn last, hit first).
+    if let Some(float) = editor
+        .panel(Dock::Float)
+        .and_then(|panel| float_area(editor, panel, area))
+    {
+        areas.push((Dock::Float, float));
+    }
     (views, areas)
 }
 
-/// Rows of items `area` shows for a panel at `dock` (without the title).
+/// Where the float `panel` goes in `area`.
+fn float_area(editor: &Editor, panel: &helix_view::sidebar::Sidebar, area: Rect) -> Option<Rect> {
+    let (height, position) = panel.float?;
+    let width = panel.width.min(area.width.saturating_sub(2));
+    let height = height.min(area.height.saturating_sub(2));
+    if width < 4 || height < 3 {
+        return None;
+    }
+    let (x, y) = match position {
+        FloatPosition::Center => (
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+        ),
+        FloatPosition::TopRight => (area.right() - width - 1, area.y + 1),
+        FloatPosition::Cursor => {
+            let (cursor, _) = editor.cursor();
+            let (row, col) =
+                cursor.map_or((area.y, area.x), |pos| (pos.row as u16, pos.col as u16));
+            // Below the cursor if it fits, else above.
+            let y = if row + 1 + height <= area.bottom() {
+                row + 1
+            } else {
+                row.saturating_sub(height).max(area.y)
+            };
+            let x = col.min(area.right() - width).max(area.x);
+            (x, y)
+        }
+    };
+    Some(Rect::new(x, y, width, height))
+}
+
+/// Rows of items `area` shows for a panel at `dock` (without the title
+/// and borders).
 pub fn rows(dock: Dock, area: Rect) -> usize {
-    let _ = dock;
-    area.height.saturating_sub(1) as usize
+    match dock {
+        Dock::Float => area.height.saturating_sub(2) as usize,
+        _ => area.height.saturating_sub(1) as usize,
+    }
 }
 
 pub fn render(editor: &mut Editor, dock: Dock, area: Rect, surface: &mut Surface) {
@@ -88,6 +129,15 @@ pub fn render(editor: &mut Editor, dock: Dock, area: Rect, surface: &mut Surface
                     .set_style(border);
             }
             (area.clip_top(1), Some(area.y))
+        }
+        Dock::Float => {
+            use tui::widgets::{Block, Widget};
+            surface.clear_with(area, background);
+            Block::bordered().border_style(border).render(area, surface);
+            (
+                area.inner(helix_view::graphics::Margin::all(1)),
+                Some(area.y),
+            )
         }
     };
     let (title_y, list_top) = match title_at {
@@ -196,7 +246,8 @@ pub fn handle_mouse(
     event: &MouseEvent,
     areas: &[(Dock, Rect)],
 ) -> bool {
-    let Some(&(dock, area)) = areas.iter().find(|(_, area)| {
+    // Last drawn is on top: look from the end.
+    let Some(&(dock, area)) = areas.iter().rev().find(|(_, area)| {
         event.column >= area.x
             && event.column < area.right()
             && event.row >= area.y
@@ -214,6 +265,9 @@ pub fn handle_mouse(
             if row == 0 {
                 return true; // the title (or the bottom panel's border)
             }
+            if row > rows(dock, area) {
+                return true; // a float's bottom border
+            }
             let panel = editor.panel_mut(dock).unwrap();
             let index = panel.scroll + row - 1;
             if index < panel.items.len() {
@@ -229,12 +283,13 @@ pub fn handle_mouse(
     true
 }
 
-/// `left`, `right` or `bottom`.
+/// `left`, `right`, `bottom` or `float`.
 pub fn parse_dock(name: &str) -> Option<Dock> {
     match name {
         "left" => Some(Dock::Left),
         "right" => Some(Dock::Right),
         "bottom" => Some(Dock::Bottom),
+        "float" => Some(Dock::Float),
         _ => None,
     }
 }

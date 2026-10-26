@@ -1211,7 +1211,18 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 items,
                 width,
                 selected,
+                float,
             } => {
+                let float = float.map(|(height, position)| {
+                    use helix_plugin::v05::FloatPosition as P;
+                    use helix_view::sidebar::FloatPosition as V;
+                    let position = match position {
+                        P::Center => V::Center,
+                        P::Cursor => V::Cursor,
+                        P::TopRight => V::TopRight,
+                    };
+                    (height, position)
+                });
                 let items: Vec<_> = items
                     .into_iter()
                     .map(|item| helix_view::sidebar::SidebarItem {
@@ -1240,6 +1251,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     selected,
                     scroll,
                     focused,
+                    float,
                 });
                 helix_event::request_redraw();
             }
@@ -1360,6 +1372,7 @@ fn view_dock(dock: helix_plugin::Dock) -> helix_view::sidebar::Dock {
         helix_plugin::Dock::Left => helix_view::sidebar::Dock::Left,
         helix_plugin::Dock::Right => helix_view::sidebar::Dock::Right,
         helix_plugin::Dock::Bottom => helix_view::sidebar::Dock::Bottom,
+        helix_plugin::Dock::Float => helix_view::sidebar::Dock::Float,
     }
 }
 
@@ -1368,6 +1381,7 @@ fn plugin_dock(dock: helix_view::sidebar::Dock) -> helix_plugin::Dock {
         helix_view::sidebar::Dock::Left => helix_plugin::Dock::Left,
         helix_view::sidebar::Dock::Right => helix_plugin::Dock::Right,
         helix_view::sidebar::Dock::Bottom => helix_plugin::Dock::Bottom,
+        helix_view::sidebar::Dock::Float => helix_plugin::Dock::Float,
     }
 }
 

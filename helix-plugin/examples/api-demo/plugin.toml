@@ -1,6 +1,6 @@
 name = "api-demo"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Try popup callbacks, live queries, streaming, events and revision-checked edits"
 permissions = ["open-files", "process", "read-buffers", "edit-buffers"]
 wasm = "plugin.wasm"

@@ -1,6 +1,6 @@
 name = "markdown"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Render Markdown in the buffer, like render-markdown.nvim"
 permissions = ["read-buffers"]
 wasm = "plugin.wasm"

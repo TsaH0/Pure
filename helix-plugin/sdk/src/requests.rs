@@ -466,6 +466,18 @@ pub fn register_process(
     });
 }
 
+/// Route a streaming request's output and end to closures.
+#[cfg(not(feature = "api-v0-2"))]
+#[doc(hidden)]
+pub fn register_stream(
+    id: RequestId,
+    output: impl FnMut(&str) -> Result<(), String> + 'static,
+    done: impl FnOnce(Result<Output, String>) -> Result<(), String> + 'static,
+) {
+    register_process(id, done);
+    STREAMS.with_borrow_mut(|streams| streams.insert(id, Box::new(output)));
+}
+
 #[doc(hidden)]
 pub fn register_picker(
     id: RequestId,
@@ -607,6 +619,8 @@ pub fn files_done(id: RequestId, results: Vec<Result<(), String>>) {
 #[cfg(not(any(feature = "api-v0-2", feature = "api-v0-3")))]
 pub fn cancel(id: RequestId) {
     crate::bindings::helix::plugin::requests::cancel(id);
+    #[cfg(not(feature = "api-v0-4"))]
+    crate::v05::forget(id);
     PENDING.with_borrow_mut(|pending| pending.remove(&id));
     PICKER_ITEMS.with_borrow_mut(|items| items.remove(&id));
     QUERIES.with_borrow_mut(|queries| queries.remove(&id));

@@ -1,6 +1,6 @@
 name = "outline"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "The current file's symbols in a panel, following the cursor, like aerial.nvim"
 permissions = ["read-buffers", "edit-buffers"]
 wasm = "plugin.wasm"

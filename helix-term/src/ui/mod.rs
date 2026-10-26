@@ -463,7 +463,7 @@ pub mod completers {
     }
 
     pub fn panel_dock(_editor: &Editor, input: &str) -> Vec<Completion> {
-        fuzzy_match(input, ["left", "right", "bottom"], false)
+        fuzzy_match(input, ["left", "right", "bottom", "float"], false)
             .into_iter()
             .map(|(name, _)| ((0..), name.into()))
             .collect()

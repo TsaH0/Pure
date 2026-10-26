@@ -30,13 +30,14 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+pub mod v05;
 
-use api::{v0_1, v0_2, v0_3, v0_4, Instance};
+use api::{v0_1, v0_2, v0_3, v0_4, v0_5, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.4";
+pub const API_VERSION: &str = "0.5";
 
 pub type DocumentId = u32;
 
@@ -232,6 +233,16 @@ pub enum Dock {
     Left,
     Right,
     Bottom,
+    /// A floating panel over the editor (API 0.5 `floats`).
+    Float,
+}
+
+/// A whole row of virtual text below a document line (API 0.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginVirtualLine {
+    pub line: usize,
+    pub text: String,
+    pub scope: String,
 }
 
 /// One row of a plugin's sidebar.
@@ -341,7 +352,12 @@ fn default_wasm() -> PathBuf {
 impl Manifest {
     /// API 0.3 or later (plugin buffers, background tasks, popups ids, ...).
     pub fn at_least_0_3(&self) -> bool {
-        matches!(self.api.as_str(), "0.3" | "0.4")
+        matches!(self.api.as_str(), "0.3" | "0.4" | "0.5")
+    }
+
+    /// API 0.5 or later (key callbacks, hooks, services...).
+    pub fn at_least_0_5(&self) -> bool {
+        self.api == "0.5"
     }
 
     pub fn parse(source: &str) -> anyhow::Result<Self> {
@@ -352,9 +368,9 @@ impl Manifest {
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4" | "0.5") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.4",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.5",
                 manifest.name,
                 manifest.api
             );
@@ -558,6 +574,8 @@ pub enum Action {
         items: Vec<SidebarItem>,
         width: u16,
         selected: Option<usize>,
+        /// A float's height (rows) and position.
+        float: Option<(u16, v05::FloatPosition)>,
     },
     CloseSidebar {
         plugin: String,
@@ -1651,6 +1669,19 @@ impl State {
         width: u32,
         selected: Option<u32>,
     ) -> Result<(), String> {
+        self.show_panel(dock, title, items, width, selected, None)
+    }
+
+    /// Show a panel; `float` is a float's height and position.
+    fn show_panel(
+        &mut self,
+        dock: Dock,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u32,
+        selected: Option<u32>,
+        float: Option<(u16, v05::FloatPosition)>,
+    ) -> Result<(), String> {
         if self.context == CallContext::Init {
             return Err("a panel can't be shown from init".into());
         }
@@ -1675,6 +1706,7 @@ impl State {
         let width = match dock {
             Dock::Bottom => width.clamp(3, 40),
             Dock::Left | Dock::Right => width.clamp(12, 80),
+            Dock::Float => width.clamp(10, 200),
         } as u16;
         self.snapshot.panels.retain(|panel| panel.dock != dock);
         self.snapshot.panels.push(SidebarSnapshot {
@@ -1690,6 +1722,7 @@ impl State {
             items,
             width,
             selected: selected.map(|s| s as usize),
+            float,
         });
         Ok(())
     }
@@ -2204,10 +2237,14 @@ fn spawn_worker(
                             v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
                                 .await
                                 .map(|instance| Instance::V0_3(Box::new(instance)))
-                        } else {
+                        } else if api == "0.4" {
                             v0_4::HelixPlugin::instantiate_async(&mut store, &component, &linker)
                                 .await
                                 .map(|instance| Instance::V0_4(Box::new(instance)))
+                        } else {
+                            v0_5::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_5(Box::new(instance)))
                         }
                     });
                     match started {
@@ -2496,6 +2533,7 @@ impl PluginHost {
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_4::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_5::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
@@ -2775,6 +2813,9 @@ impl PluginHost {
                     "0.4" => v0_4::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
                         .map(|instance| Instance::V0_4(Box::new(instance))),
+                    "0.5" => v0_5::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(|instance| Instance::V0_5(Box::new(instance))),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -2889,7 +2930,7 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4")
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4" | "0.5")
             || plugin.disabled.is_some()
         {
             bail!("requests require an enabled API 0.2 or newer plugin");

@@ -1,6 +1,6 @@
 name = "pomodoro"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "A pomodoro timer in the statusline (timers)"
 permissions = []
 wasm = "plugin.wasm"

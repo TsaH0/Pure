@@ -676,8 +676,8 @@ fn example_text_tools() {
 }
 
 #[test]
-fn sdk_04_example_text_tools() {
-    check_text_tools("0.4");
+fn sdk_05_example_text_tools() {
+    check_text_tools("0.5");
 }
 
 #[test]
@@ -817,7 +817,7 @@ fn manifest_selects_the_component_world() {
     let err = format!("{:#}", host().load(&dir, "{}").unwrap_err());
     assert!(err.contains("built for another API version"), "{err}");
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
-    assert!(err.to_string().contains("supports 0.1 to 0.4"));
+    assert!(err.to_string().contains("supports 0.1 to 0.5"));
 }
 
 fn testplugin2() -> (PluginHost, tempfile::TempDir) {
@@ -2255,7 +2255,7 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
 }
@@ -2270,7 +2270,7 @@ fn load_v3_with(host: &mut PluginHost, root: &Path, permissions: &[&str], config
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, config).unwrap();
 }
@@ -2606,6 +2606,35 @@ fn frozen_api_04_components_still_work() {
         .run_command("testplugin3", "diagnose", vec![], snapshot("hello", 0, 0))
         .unwrap();
     assert!(matches!(&actions[..], [Action::Diagnostics { .. }]));
+}
+
+/// The last 0.4 build (with `requests`, `panels` and `listener`) keeps
+/// loading next to 0.5 plugins, and its 0.4 imports work.
+#[test]
+fn frozen_api_041_components_still_work() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.4.1.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let actions = host
+        .run_command("testplugin3", "caps", vec![], Snapshot::default())
+        .unwrap();
+    let statuses = statuses(&actions);
+    assert_eq!(statuses.len(), 1);
+    assert!(
+        statuses[0].starts_with("caps:cancel-request,"),
+        "{statuses:?}"
+    );
 }
 
 #[test]
@@ -4048,7 +4077,7 @@ fn frozen_api_03_components_still_work() {
     .unwrap();
     let manifest = std::fs::read_to_string(fixture("examples/oil/plugin.toml"))
         .unwrap()
-        .replace("api = \"0.4\"", "api = \"0.3\"");
+        .replace("api = \"0.5\"", "api = \"0.3\"");
     std::fs::write(oil.join("plugin.toml"), manifest).unwrap();
     host.load(&oil, "{}").unwrap();
     assert!(host
@@ -4072,7 +4101,7 @@ fn api_04_file_operations_are_checked_and_answered() {
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load_with(
         &dir,

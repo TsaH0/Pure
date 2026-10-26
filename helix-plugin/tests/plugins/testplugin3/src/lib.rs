@@ -1,5 +1,6 @@
-//! A direct-bindings fixture for the API 0.3 world, independent of the SDK.
-wit_bindgen::generate!({ path: "../../../wit/v0.4", world: "helix-plugin" });
+//! A direct-bindings fixture for the current API world (0.5), independent
+//! of the SDK.
+wit_bindgen::generate!({ path: "../../../wit/v0.5", world: "helix-plugin" });
 use helix::plugin::{host, types};
 use std::cell::{Cell, RefCell};
 thread_local! {
@@ -12,6 +13,9 @@ thread_local! {
     /// Counted in the instance that runs: the background one has its own.
     static RUNS: Cell<u32> = const { Cell::new(0) };
     static SNIPPETS: Cell<bool> = const { Cell::new(false) };
+    /// Hooks answer `cancel` while set.
+    static CANCEL_COMMANDS: Cell<bool> = const { Cell::new(false) };
+    static CANCEL_SAVES: Cell<bool> = const { Cell::new(false) };
 }
 fn item(text: &str) -> helix::plugin::ui::Item {
     helix::plugin::ui::Item {
@@ -537,6 +541,94 @@ impl exports::helix::plugin::background::Guest for TestPlugin {
             },
             _ => Err(format!("unknown task {task}")),
         }
+    }
+}
+
+impl exports::helix::plugin::hooks::Guest for TestPlugin {
+    fn on_key(
+        name: String,
+        keys: String,
+        count: Option<u32>,
+    ) -> exports::helix::plugin::hooks::KeyOutcome {
+        use exports::helix::plugin::hooks::KeyOutcome;
+        record(format!("key:{name}:{keys}:{count:?}"));
+        host::set_status(&format!("key:{name}:{keys}:{count:?}"));
+        if name.starts_with("pass") {
+            KeyOutcome::PassThrough
+        } else {
+            KeyOutcome::Handled
+        }
+    }
+    fn on_pre_command(command: String) -> exports::helix::plugin::hooks::HookOutcome {
+        use exports::helix::plugin::hooks::HookOutcome;
+        record(format!("pre-command:{command}"));
+        if CANCEL_COMMANDS.get() {
+            HookOutcome::Cancel(format!("no {command}"))
+        } else {
+            HookOutcome::Proceed
+        }
+    }
+    fn on_pre_save(doc: u32) -> exports::helix::plugin::hooks::HookOutcome {
+        use exports::helix::plugin::hooks::HookOutcome;
+        record(format!("pre-save:{doc}"));
+        if CANCEL_SAVES.get() {
+            return HookOutcome::Cancel("not now".into());
+        }
+        // Saved with the document: a trailing marker.
+        if let Ok(text) = host::text(doc) {
+            if !text.ends_with("// saved\n") && text.contains("mark-on-save") {
+                let end = text.chars().count() as u32;
+                let _ = host::apply_edits(
+                    doc,
+                    &[types::Edit {
+                        from: end,
+                        to: end,
+                        text: "// saved\n".into(),
+                    }],
+                );
+            }
+        }
+        HookOutcome::Proceed
+    }
+    fn on_service_call(
+        caller: String,
+        service: String,
+        method: String,
+        payload: String,
+    ) -> Result<String, String> {
+        record(format!("service:{caller}:{service}:{method}:{payload}"));
+        match method.as_str() {
+            "echo" => Ok(payload),
+            "fail" => Err("failed on purpose".into()),
+            _ => Err(format!("no method {method}")),
+        }
+    }
+}
+impl exports::helix::plugin::events2::Guest for TestPlugin {
+    fn on_event(event: exports::helix::plugin::events2::Event) {
+        record(format!("e2:{event:?}"));
+    }
+}
+impl exports::helix::plugin::callbacks2::Guest for TestPlugin {
+    fn on_command_done(id: u32, result: Result<(), String>) {
+        let status = format!("command-done:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_batch_done(id: u32, results: Vec<Result<(), String>>) {
+        let status = format!("batch-done:{id}:{results:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_service_reply(id: u32, result: Result<String, String>) {
+        let status = format!("service-reply:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_lsp_reply(id: u32, result: Result<String, String>) {
+        let status = format!("lsp-reply:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
     }
 }
 
