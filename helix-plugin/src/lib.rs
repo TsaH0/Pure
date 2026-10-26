@@ -141,6 +141,8 @@ pub struct PluginSettings {
     pub dirs: Vec<PathBuf>,
     /// Ports the plugin may listen on (`allow-listen`).
     pub listen: Vec<u16>,
+    /// Key bindings may use the `override` layer (`allow-key-override`).
+    pub key_override: bool,
 }
 
 impl PluginSettings {
@@ -509,6 +511,11 @@ pub enum Action {
         plugin: String,
         id: u32,
     },
+    /// All of `plugin`'s key bindings (API 0.5), replacing the previous set.
+    KeyBindings {
+        plugin: String,
+        bindings: Vec<v05::KeyBinding>,
+    },
     /// Show a picker and deliver [`Callback::PickerDone`].
     ShowPicker {
         plugin: String,
@@ -837,6 +844,8 @@ pub struct Limits {
     pub memory: usize,
     /// Maximum time for a background task (`run-background`).
     pub background: Duration,
+    /// Maximum time for a key callback or hook (API 0.5).
+    pub hook: Duration,
 }
 
 impl Default for Limits {
@@ -847,6 +856,7 @@ impl Default for Limits {
             event: Duration::from_millis(250),
             memory: 256 << 20,
             background: BACKGROUND_LIMIT,
+            hook: Duration::from_millis(100),
         }
     }
 }
@@ -875,6 +885,8 @@ struct State {
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
     starts_program: Option<fn(&str) -> bool>,
+    /// API 0.5 state: key bindings, subscriptions, services...
+    v05: v05::V05,
     /// The latest `log` lines, for `:plugin-log`.
     log: std::collections::VecDeque<String>,
 }
@@ -912,6 +924,7 @@ impl State {
             roots: Vec::new(),
             data_dir: None,
             starts_program: None,
+            v05: Default::default(),
             log: Default::default(),
         }
     }
@@ -2432,6 +2445,9 @@ pub struct PluginHost {
     /// Whether an editor command starts a program (see
     /// [`PluginHost::set_program_check`]).
     starts_program: Option<fn(&str) -> bool>,
+    /// What the editor provides to 0.5 calls (see
+    /// [`PluginHost::set_editor_fns`]).
+    editor_fns: v05::EditorFns,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
 }
@@ -2547,6 +2563,7 @@ impl PluginHost {
             workspace: None,
             data_root: None,
             starts_program: None,
+            editor_fns: v05::EditorFns::default(),
             ticker,
             runtime,
         })
@@ -2598,6 +2615,12 @@ impl PluginHost {
     /// Applies to plugins loaded afterwards.
     pub fn set_program_check(&mut self, starts_program: fn(&str) -> bool) {
         self.starts_program = Some(starts_program);
+    }
+
+    /// What the editor provides to API 0.5 calls (key checks, the command
+    /// list). Applies to plugins loaded afterwards.
+    pub fn set_editor_fns(&mut self, fns: v05::EditorFns) {
+        self.editor_fns = fns;
     }
 
     /// The workspace plugins with `allow-files` were given (see `set_dirs`).
@@ -2789,6 +2812,11 @@ impl PluginHost {
                 .collect(),
             data_dir,
             starts_program: self.starts_program,
+            v05: v05::V05 {
+                key_override: settings.key_override,
+                editor: self.editor_fns,
+                ..Default::default()
+            },
             log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);
@@ -2902,6 +2930,7 @@ impl PluginHost {
         let picker_items = plugin.store.data().picker_items.clone();
         let picker_generations = plugin.store.data().picker_generations.clone();
         let streaming = plugin.store.data().streaming.clone();
+        let key_bindings = plugin.store.data().v05.key_bindings.clone();
         let command_name = command.to_owned();
         let (result, actions) = plugin.call(
             snapshot,
@@ -2916,9 +2945,38 @@ impl PluginHost {
             plugin.store.data_mut().picker_items = picker_items;
             plugin.store.data_mut().picker_generations = picker_generations;
             plugin.store.data_mut().streaming = streaming;
+            plugin.store.data_mut().v05.key_bindings = key_bindings;
             bail!("{name}/{command}: {err}");
         }
         Ok(actions)
+    }
+
+    /// A key bound by `plugin` with `keymaps.set` was pressed (API 0.5): call
+    /// its `on-key` like a command, within the hook budget. A disabled
+    /// plugin, or one that fails, passes the keys through.
+    pub fn key(
+        &mut self,
+        plugin: &str,
+        name: &str,
+        keys: &str,
+        count: Option<u32>,
+        snapshot: Snapshot,
+    ) -> anyhow::Result<(v05::KeyOutcome, Vec<Action>)> {
+        let limit = self.limits.hook;
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.manifest.name == plugin)
+            .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
+        let (name, keys) = (name.to_owned(), keys.to_owned());
+        plugin.call(
+            snapshot,
+            CallContext::Command,
+            limit,
+            move |guest, store| {
+                Box::pin(async move { guest.call_key(store, &name, &keys, count).await })
+            },
+        )
     }
 
     /// Reserve a result id for an API 0.2 or newer host operation, as the host

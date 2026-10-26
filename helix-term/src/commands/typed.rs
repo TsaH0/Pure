@@ -3072,6 +3072,62 @@ fn plugin_list(
     Ok(())
 }
 
+/// A key binding of a plugin (API 0.5 `keymaps`), run from a command
+/// sequence or the palette: the plugin can't pass these keys through.
+fn plugin_key(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let (plugin, name) = (args[0].to_string(), args[1].to_string());
+    let bindings = crate::keymap::plugin_layers::bindings();
+    let keys = bindings
+        .iter()
+        .find(|binding| binding.plugin == plugin && binding.name == name)
+        .map(|binding| {
+            let keys: Vec<String> = binding.keys.iter().map(|key| key.to_string()).collect();
+            keys.join(" ")
+        })
+        .ok_or_else(|| anyhow!("plugin '{plugin}' has no key binding '{name}'"))?;
+    crate::plugins::key(cx.editor, cx.jobs, &plugin, &name, &keys, None);
+    Ok(())
+}
+
+/// `:plugin-keys`: the plugins' key bindings, their layers and what they
+/// shadow or what shadows them.
+fn plugin_keys(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let Some(view) = compositor.find::<ui::EditorView>() else {
+                    return;
+                };
+                let lines = view.keymaps.plugin_report();
+                let contents = if lines.is_empty() {
+                    "No plugin key bindings.".to_string()
+                } else {
+                    format!(
+                        "Plugin key bindings (mode, keys, layer, binding):\n\n```\n{}\n```\n\n\
+                         Layers, first to last: override (needs allow-key-override), your keys, \
+                         plugin, Pure's defaults, fallback.",
+                        lines.join("\n")
+                    )
+                };
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugin-keys", contents).auto_close(true);
+                compositor.replace_or_push("plugin-keys", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
 fn plugin_install(
     cx: &mut compositor::Context,
     args: Args,
@@ -4657,6 +4713,28 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-keys",
+        aliases: &[],
+        doc: "Show the plugins' key bindings, their layers and conflicts.",
+        fun: plugin_keys,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-key",
+        aliases: &[],
+        doc: "Run a plugin's key binding: <plugin> <binding>.",
+        fun: plugin_key,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (2, Some(2)),
             ..Signature::DEFAULT
         },
     },

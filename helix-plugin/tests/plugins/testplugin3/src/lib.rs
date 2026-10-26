@@ -28,9 +28,52 @@ fn record(event: String) {
     host::log(&format!("event:{event}"));
     EVENTS.with_borrow_mut(|events| events.push(event));
 }
+fn mode_arg(mode: &str) -> Result<types::Mode, String> {
+    Ok(match mode {
+        "normal" => types::Mode::Normal,
+        "insert" => types::Mode::Insert,
+        "select" => types::Mode::Select,
+        _ => return Err(format!("no mode {mode}")),
+    })
+}
+fn bind(args: &[String]) -> Result<(), String> {
+    use helix::plugin::keymaps::{set, Binding, Layer};
+    let [layer, name, mode, rest @ ..] = args else {
+        return Err("bind <layer> <name> <mode> <keys...>".into());
+    };
+    let layer = match layer.as_str() {
+        "override" => Layer::Override,
+        "plugin" => Layer::Plugin,
+        "fallback" => Layer::Fallback,
+        _ => return Err(format!("no layer {layer}")),
+    };
+    let mut keys = Vec::new();
+    let mut language = None;
+    let mut document = None;
+    let mut rest = rest.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "@lang" => language = rest.next().cloned(),
+            "@doc" => document = host::current_document(),
+            key => keys.push(key.to_string()),
+        }
+    }
+    set(&Binding {
+        mode: mode_arg(mode)?,
+        keys: keys.join(" "),
+        name: name.clone(),
+        description: format!("test binding {name}"),
+        layer,
+        document,
+        language,
+    })
+}
 struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn init(config: String) -> Result<types::Registration, String> {
+        if config.contains("bind-in-init") {
+            bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
+        }
         POPUP_ON_OPEN.set(config.contains("popup-on-open"));
         SNIPPETS.set(config.contains("snippets"));
         Ok(types::Registration {
@@ -74,6 +117,10 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "registers",
                 "read-clipboard",
                 "files",
+                "bind",
+                "unbind",
+                "list-keys",
+                "fail-after-bind",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -327,6 +374,27 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 helix::plugin::timers::cancel_timer(id);
                 Ok(())
             }
+            // bind <layer> <name> <mode> <keys...> [@lang <language>] [@doc]
+            "bind" => bind(&args),
+            "unbind" => {
+                let mode = mode_arg(args.first().map(String::as_str).unwrap_or("normal"))?;
+                let doc = args.iter().any(|a| a == "@doc").then(|| host::current_document()).flatten();
+                let keys: Vec<&str> = args[1..].iter().map(String::as_str).filter(|a| *a != "@doc").collect();
+                helix::plugin::keymaps::unset(mode, &keys.join(" "), doc)
+            }
+            "list-keys" => {
+                let keys: Vec<String> = helix::plugin::keymaps::list()
+                    .into_iter()
+                    .map(|b| format!("{}={}", b.keys, b.name))
+                    .collect();
+                host::set_status(&format!("keys:{}", keys.join(",")));
+                Ok(())
+            }
+            // A binding made by a command that fails is dropped.
+            "fail-after-bind" => {
+                bind(&["plugin".into(), "doomed".into(), "normal".into(), "C-y".into()])?;
+                Err("failing on purpose".into())
+            }
             "caps" => {
                 host::set_status(&format!("caps:{}", helix::plugin::requests::capabilities().join(",")));
                 Ok(())
@@ -553,6 +621,26 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         use exports::helix::plugin::hooks::KeyOutcome;
         record(format!("key:{name}:{keys}:{count:?}"));
         host::set_status(&format!("key:{name}:{keys}:{count:?}"));
+        // Keys may edit and open UI, like a command.
+        if name.starts_with("edit") {
+            if let Some(doc) = host::current_document() {
+                let _ = host::apply_edits(doc, &[types::Edit { from: 0, to: 0, text: "K".into() }]);
+            }
+        }
+        if name.starts_with("pick") {
+            let _ = helix::plugin::ui::show_picker(&helix::plugin::ui::Picker {
+                title: "keys".into(),
+                columns: vec!["Name".into()],
+                items: vec![item("one")],
+                initial: None,
+                live: false,
+            });
+        }
+        if name.starts_with("spin") {
+            loop {
+                std::hint::spin_loop();
+            }
+        }
         if name.starts_with("pass") {
             KeyOutcome::PassThrough
         } else {

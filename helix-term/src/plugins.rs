@@ -109,6 +109,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     process::kill_plugin(plugin);
     abort_timers(Some(plugin));
     listen::stop_plugin(Some(plugin));
+    clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
         if !doc.plugin_decorations.is_empty() {
@@ -399,6 +400,7 @@ fn build_host(
         Some(helix_loader::data_dir().join("plugins")),
     );
     host.set_program_check(starts_program);
+    host.set_editor_fns(editor_fns());
     let mut setting_errors = Vec::new();
     // Installed plugins whose component changed since aren't loaded.
     // An unreadable lock can't tell which plugins were installed: load none.
@@ -461,6 +463,7 @@ fn install(
     editor.panels.clear();
     abort_timers(None);
     listen::stop_plugin(None);
+    clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -530,6 +533,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-files");
     table.remove("allow-dirs");
     table.remove("allow-listen");
+    table.remove("allow-key-override");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -539,6 +543,14 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             files: file_grant(settings, name)?,
             dirs: allowed_dirs(settings, name)?,
             listen: allowed_ports(settings, name)?,
+            key_override: match settings
+                .get(name)
+                .and_then(|table| table.get("allow-key-override"))
+            {
+                None => false,
+                Some(toml::Value::Boolean(allowed)) => *allowed,
+                Some(_) => anyhow::bail!("[{name}] allow-key-override: expected true or false"),
+            },
         })
     })())
 }
@@ -783,6 +795,111 @@ pub fn log_lines(plugin: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Run a plugin command given as `plugin/command`.
+/// What the editor provides to API 0.5 calls.
+fn editor_fns() -> helix_plugin::v05::EditorFns {
+    helix_plugin::v05::EditorFns {
+        check_keys: Some(|keys| parse_keys(keys).map(|_| ())),
+        commands: None,
+    }
+}
+
+/// "space f" as key events.
+fn parse_keys(keys: &str) -> Result<Vec<helix_view::input::KeyEvent>, String> {
+    keys.split_whitespace()
+        .map(|key| {
+            key.parse::<helix_view::input::KeyEvent>()
+                .map_err(|err| format!("invalid key '{key}': {err}"))
+        })
+        .collect()
+}
+
+/// Store `plugin`'s key bindings (all of them). Bindings it still has keep
+/// their place in the order bindings were set; new ones go last.
+fn set_key_bindings(editor: &Editor, plugin: &str, bindings: Vec<helix_plugin::v05::KeyBinding>) {
+    use crate::keymap::plugin_layers::{self, Layer, PluginBinding};
+    let converted: Vec<PluginBinding> = bindings
+        .into_iter()
+        .filter_map(|binding| {
+            let keys = parse_keys(&binding.keys).ok()?;
+            let document = match binding.document {
+                Some(doc) => Some(editor_doc_id(editor, doc)?),
+                None => None,
+            };
+            Some(PluginBinding {
+                plugin: plugin.to_string(),
+                name: binding.name,
+                description: binding.description,
+                layer: match binding.layer {
+                    helix_plugin::v05::KeyLayer::Override => Layer::Override,
+                    helix_plugin::v05::KeyLayer::Plugin => Layer::Plugin,
+                    helix_plugin::v05::KeyLayer::Fallback => Layer::Fallback,
+                },
+                mode: match binding.mode {
+                    helix_plugin::Mode::Normal => Mode::Normal,
+                    helix_plugin::Mode::Insert => Mode::Insert,
+                    helix_plugin::Mode::Select => Mode::Select,
+                },
+                keys,
+                document,
+                language: binding.language,
+            })
+        })
+        .collect();
+    let same = |a: &PluginBinding, b: &PluginBinding| {
+        a.mode == b.mode && a.keys == b.keys && a.document == b.document
+    };
+    let mut all = (*plugin_layers::bindings()).clone();
+    all.retain(|old| old.plugin != plugin || converted.iter().any(|new| same(old, new)));
+    for new in converted {
+        match all
+            .iter_mut()
+            .find(|old| old.plugin == plugin && same(old, &new))
+        {
+            Some(old) => *old = new,
+            None => all.push(new),
+        }
+    }
+    plugin_layers::set_bindings(all);
+}
+
+/// Forget `plugin`'s key bindings (`None`: everyone's).
+fn clear_key_bindings(plugin: Option<&str>) {
+    use crate::keymap::plugin_layers;
+    let mut all = (*plugin_layers::bindings()).clone();
+    all.retain(|binding| plugin.is_some_and(|plugin| binding.plugin != plugin));
+    plugin_layers::set_bindings(all);
+}
+
+/// Keys bound to `plugin`'s callback `name` were pressed: ask it. `true`:
+/// handled; `false`: pass the keys through. Errors (including a disabled or
+/// missing plugin) are shown and pass the keys through.
+pub fn key(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    plugin: &str,
+    name: &str,
+    keys: &str,
+    count: Option<u32>,
+) -> bool {
+    use helix_plugin::v05::KeyOutcome;
+    let snapshot = snapshot(editor);
+    let result = with_host(|host| host.key(plugin, name, keys, count, snapshot));
+    match result {
+        Some(Ok((outcome, actions))) => {
+            DEPTH.fetch_add(1, Ordering::Relaxed);
+            apply(editor, Some(jobs), actions);
+            DEPTH.fetch_sub(1, Ordering::Relaxed);
+            outcome == KeyOutcome::Handled
+        }
+        Some(Err(err)) => {
+            refresh_wanted(editor);
+            editor.set_error(format!("{plugin}: {err}"));
+            false
+        }
+        None => false,
+    }
+}
+
 pub fn run_command(
     editor: &mut Editor,
     jobs: &mut Jobs,
@@ -1008,6 +1125,10 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
             }
             Action::Listen { plugin, id, port } => listen::start(plugin, id, port),
+            Action::KeyBindings { plugin, bindings } => {
+                set_key_bindings(editor, &plugin, bindings);
+                helix_event::request_redraw();
+            }
             Action::StopListen { plugin, id } => listen::stop(&plugin, id),
             Action::ShowPicker {
                 plugin,

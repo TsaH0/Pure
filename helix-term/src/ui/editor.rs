@@ -4,7 +4,7 @@ use crate::{
     events::{OnModeSwitch, PostCommand},
     handlers::completion::CompletionItem,
     key,
-    keymap::{KeymapResult, Keymaps},
+    keymap::{KeyTrie, KeymapResult, Keymaps},
     ui::{
         document::{render_document, DocumentHighlighter, LinePos, TextRenderer},
         statusline,
@@ -1092,14 +1092,60 @@ impl EditorView {
     ) -> Option<KeymapResult> {
         let mut last_mode = mode;
         self.pseudo_pending.extend(self.keymaps.pending());
-        let key_result = match &doc!(cxt.editor).plugin_owner {
-            None => self.keymaps.get(mode, event),
-            Some(owner) => {
-                let owner = owner.clone();
-                self.keymaps.get_in(mode, event, Some(&owner))
-            }
+        // The keys typed so far, for plugin bindings.
+        let mut sequence = self.keymaps.pending().to_vec();
+        sequence.push(event);
+        let (owner, document, language) = {
+            let doc = doc!(cxt.editor);
+            // Languages only matter to plugin bindings.
+            let language = crate::keymap::plugin_layers::has_bindings()
+                .then(|| doc.language_name().map(str::to_string))
+                .flatten();
+            (doc.plugin_owner.clone(), doc.id(), language)
         };
+        let scope = crate::keymap::plugin_layers::KeyScope {
+            owner: owner.as_deref(),
+            document: Some(document),
+            language: language.as_deref(),
+        };
+        let key_result = self.keymaps.get_scoped(mode, event, &scope);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
+
+        // Keys bound to a plugin callback: ask the plugin. If it passes them
+        // through, they do what they would without the binding.
+        let plugin_binding = match &key_result {
+            KeymapResult::Matched(command) => crate::keymap::plugin_layers::binding_of(command),
+            _ => None,
+        };
+        let mut passed_through = None;
+        if let Some((plugin, name)) = &plugin_binding {
+            let keys: Vec<String> = sequence.iter().map(|key| key.to_string()).collect();
+            let count = cxt.count.map(|count| count.get() as u32);
+            let handled =
+                crate::plugins::key(cxt.editor, cxt.jobs, plugin, name, &keys.join(" "), count);
+            if !handled {
+                match self
+                    .keymaps
+                    .without_binding(mode, &sequence, &scope, (plugin, name))
+                {
+                    Some(trie @ (KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_))) => {
+                        passed_through = Some(trie)
+                    }
+                    _ if sequence.len() == 1 => return Some(KeymapResult::NotFound),
+                    _ => return Some(KeymapResult::Cancelled(sequence)),
+                }
+            }
+            // The plugin's actions may have changed the mode.
+            let current_mode = cxt.editor.mode();
+            if current_mode != last_mode {
+                helix_event::dispatch(OnModeSwitch {
+                    old_mode: last_mode,
+                    new_mode: current_mode,
+                    cx: cxt,
+                });
+                last_mode = current_mode;
+            }
+        }
 
         let mut execute_command = |command: &commands::MappableCommand| {
             command.execute(cxt);
@@ -1127,9 +1173,20 @@ impl EditorView {
         };
 
         match &key_result {
-            KeymapResult::Matched(command) => {
-                execute_command(command);
-            }
+            KeymapResult::Matched(command) => match &plugin_binding {
+                // A plugin binding the plugin passed through: what the keys
+                // do without it.
+                Some(_) => match passed_through {
+                    Some(KeyTrie::MappableCommand(command)) => execute_command(&command),
+                    Some(KeyTrie::Sequence(commands)) => {
+                        for command in &commands {
+                            execute_command(command);
+                        }
+                    }
+                    _ => {}
+                },
+                None => execute_command(command),
+            },
             KeymapResult::Pending(node) => cxt.editor.autoinfo = Some(node.infobox()),
             KeymapResult::MatchedSequence(commands) => {
                 for command in commands {

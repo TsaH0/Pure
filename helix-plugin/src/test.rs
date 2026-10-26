@@ -4370,3 +4370,189 @@ fn a_failed_listener_reports_its_error() {
         "{actions:?}"
     );
 }
+
+/// testplugin3 (API 0.5) with `settings`, and an editor key check that
+/// refuses "bad".
+fn v5_with(settings: PluginSettings) -> (PluginHost, tempfile::TempDir) {
+    let mut host = host();
+    host.set_editor_fns(v05::EditorFns {
+        check_keys: Some(|keys| {
+            if keys.contains("bad") {
+                Err(format!("invalid key in '{keys}'"))
+            } else {
+                Ok(())
+            }
+        }),
+        commands: None,
+    });
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(&dir, settings).unwrap();
+    (host, root)
+}
+
+fn v5_run(host: &mut PluginHost, command: &str, args: &[&str]) -> anyhow::Result<Vec<Action>> {
+    host.run_command(
+        "testplugin3",
+        command,
+        args.iter().map(|a| a.to_string()).collect(),
+        snapshot("text\n", 0, 0),
+    )
+}
+
+/// The bindings the last `KeyBindings` action of `actions` sets.
+fn key_bindings(actions: &[Action]) -> Option<Vec<v05::KeyBinding>> {
+    actions.iter().rev().find_map(|action| match action {
+        Action::KeyBindings { bindings, .. } => Some(bindings.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn api_05_key_bindings_are_validated_listed_and_removed() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let actions = v5_run(
+        &mut host,
+        "bind",
+        &["plugin", "go", "normal", "space", "g", "x"],
+    )
+    .unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].keys, "space g x");
+    assert_eq!(bindings[0].layer, v05::KeyLayer::Plugin);
+    assert_eq!(bindings[0].description, "test binding go");
+    // The same keys again replace the binding.
+    let actions = v5_run(
+        &mut host,
+        "bind",
+        &["plugin", "go2", "normal", "space", "g", "x"],
+    )
+    .unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].name, "go2");
+    // Checked by the editor; the override layer needs the user's grant.
+    let err = v5_run(&mut host, "bind", &["plugin", "b", "normal", "bad"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("invalid key in 'bad'"),
+        "{err:#}"
+    );
+    let err = v5_run(&mut host, "bind", &["override", "o", "normal", "w"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("allow-key-override = true"),
+        "{err:#}"
+    );
+    // A command that fails takes its bindings with it.
+    assert!(v5_run(&mut host, "fail-after-bind", &[]).is_err());
+    let actions = v5_run(&mut host, "list-keys", &[]).unwrap();
+    assert_eq!(statuses(&actions), ["keys:space g x=go2"]);
+    let actions = v5_run(&mut host, "unbind", &["normal", "space", "g", "x"]).unwrap();
+    assert_eq!(key_bindings(&actions).unwrap(), Vec::new());
+    assert!(v5_run(&mut host, "unbind", &["normal", "space", "g", "x"]).is_err());
+    // At most 256.
+    for n in 0..v05::MAX_KEY_BINDINGS {
+        v5_run(
+            &mut host,
+            "bind",
+            &["fallback", "k", "normal", &format!("k{n}")],
+        )
+        .unwrap();
+    }
+    let err = v5_run(&mut host, "bind", &["fallback", "k", "normal", "one-more"]).unwrap_err();
+    assert!(format!("{err:#}").contains("at most 256"), "{err:#}");
+}
+
+#[test]
+fn api_05_override_layer_with_the_grant_and_bindings_from_init() {
+    let settings = PluginSettings {
+        key_override: true,
+        ..PluginSettings::new("{\"bind-in-init\": true}")
+    };
+    let (mut host, _root) = v5_with(settings);
+    let actions = v5_run(&mut host, "bind", &["override", "o", "normal", "w"]).unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    // The one from init is still there.
+    let names: Vec<_> = bindings
+        .iter()
+        .map(|b| (b.name.as_str(), b.layer))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("init-key", v05::KeyLayer::Plugin),
+            ("o", v05::KeyLayer::Override)
+        ]
+    );
+}
+
+#[test]
+fn api_05_key_callbacks_run_like_commands_within_a_budget() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let (outcome, actions) = host
+        .key(
+            "testplugin3",
+            "edit-1",
+            "C-k",
+            Some(3),
+            snapshot("ab", 0, 0),
+        )
+        .unwrap();
+    assert_eq!(outcome, v05::KeyOutcome::Handled);
+    assert_eq!(statuses(&actions), ["key:edit-1:C-k:Some(3)"]);
+    assert!(actions.iter().any(|a| matches!(a, Action::Edit { .. })));
+    let (outcome, _) = host
+        .key("testplugin3", "pass-1", "w", None, snapshot("ab", 0, 0))
+        .unwrap();
+    assert_eq!(outcome, v05::KeyOutcome::PassThrough);
+    // UI is allowed, as in a command.
+    let (_, actions) = host
+        .key("testplugin3", "pick-1", "C-p", None, snapshot("ab", 0, 0))
+        .unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::ShowPicker { .. })));
+    // Past the budget: an error (the editor passes the keys through) and
+    // the plugin is disabled.
+    let started = Instant::now();
+    assert!(host
+        .key("testplugin3", "spin", "C-s", None, snapshot("ab", 0, 0))
+        .is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let err = host
+        .key("testplugin3", "edit-2", "C-k", None, snapshot("ab", 0, 0))
+        .unwrap_err();
+    assert!(err.to_string().contains("disabled"), "{err}");
+}
+
+#[test]
+fn api_04_plugins_have_no_key_callbacks() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.4.1.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let err = host
+        .key("testplugin3", "x", "w", None, Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("require API 0.5"), "{err}");
+}

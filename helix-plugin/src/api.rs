@@ -392,6 +392,20 @@ impl Instance {
         }
     }
 
+    /// `hooks.on-key` (API 0.5).
+    pub async fn call_key(
+        &self,
+        store: &mut Store<State>,
+        name: &str,
+        keys: &str,
+        count: Option<u32>,
+    ) -> Result<crate::v05::KeyOutcome> {
+        match self {
+            Self::V0_5(instance) => api05::key(instance, store, name, keys, count).await,
+            _ => anyhow::bail!("key callbacks require API 0.5"),
+        }
+    }
+
     /// The `background.run` export (API 0.3).
     pub async fn call_background(
         &self,

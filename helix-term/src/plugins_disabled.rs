@@ -55,6 +55,17 @@ pub fn plugin_names() -> Vec<String> {
     Vec::new()
 }
 
+pub fn key(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _plugin: &str,
+    _name: &str,
+    _keys: &str,
+    _count: Option<u32>,
+) -> bool {
+    false
+}
+
 pub fn run_command(
     _editor: &mut Editor,
     _jobs: &mut Jobs,

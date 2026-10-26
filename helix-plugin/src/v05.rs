@@ -243,20 +243,100 @@ fn not_yet<T>(what: &str) -> Result<T, String> {
     Err(format!("{what} is not available yet"))
 }
 
+/// Most key bindings per plugin.
+pub const MAX_KEY_BINDINGS: usize = 256;
+
+/// What the editor provides to API 0.5 calls
+/// ([`crate::PluginHost::set_editor_fns`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EditorFns {
+    /// Check a key sequence ("space f", "C-k").
+    pub check_keys: Option<fn(&str) -> Result<(), String>>,
+    /// Every native, typable and plugin command.
+    pub commands: Option<fn() -> Vec<CommandEntry>>,
+}
+
+/// A plugin's API 0.5 state.
+#[derive(Debug, Default)]
+pub(crate) struct V05 {
+    /// The user's `allow-key-override`.
+    pub key_override: bool,
+    pub editor: EditorFns,
+    pub key_bindings: Vec<KeyBinding>,
+}
+
+/// `keys` with single spaces between keys.
+fn normalize_keys(keys: &str) -> String {
+    keys.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 impl State {
-    pub(crate) fn set_key(&mut self, _binding: KeyBinding) -> Result<(), String> {
-        not_yet("keymaps.set")
+    pub(crate) fn set_key(&mut self, mut binding: KeyBinding) -> Result<(), String> {
+        binding.keys = normalize_keys(&binding.keys);
+        if binding.keys.is_empty() || binding.keys.len() > 100 {
+            return Err("keys must be 1 to 100 characters".into());
+        }
+        if binding.name.is_empty() || binding.name.chars().count() > 64 {
+            return Err("a binding's name must be 1 to 64 characters".into());
+        }
+        if binding.description.chars().count() > 200 {
+            return Err("a binding's description must be at most 200 characters".into());
+        }
+        if binding.layer == KeyLayer::Override && !self.v05.key_override {
+            return Err(format!(
+                "the override layer needs `allow-key-override = true` under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        if let Some(check) = self.v05.editor.check_keys {
+            check(&binding.keys)?;
+        }
+        let bindings = &mut self.v05.key_bindings;
+        let same = |b: &KeyBinding| {
+            b.mode == binding.mode && b.keys == binding.keys && b.document == binding.document
+        };
+        match bindings.iter().position(same) {
+            Some(index) => bindings[index] = binding,
+            None if bindings.len() >= MAX_KEY_BINDINGS => {
+                return Err(format!(
+                    "at most {MAX_KEY_BINDINGS} key bindings per plugin"
+                ))
+            }
+            None => bindings.push(binding),
+        }
+        self.push_key_bindings();
+        Ok(())
     }
     pub(crate) fn unset_key(
         &mut self,
-        _mode: Mode,
-        _keys: String,
-        _document: Option<DocumentId>,
+        mode: Mode,
+        keys: String,
+        document: Option<DocumentId>,
     ) -> Result<(), String> {
-        not_yet("keymaps.unset")
+        let keys = normalize_keys(&keys);
+        let before = self.v05.key_bindings.len();
+        self.v05
+            .key_bindings
+            .retain(|b| !(b.mode == mode && b.keys == keys && b.document == document));
+        if self.v05.key_bindings.len() == before {
+            return Err(format!("no binding of '{keys}'"));
+        }
+        self.push_key_bindings();
+        Ok(())
     }
     pub(crate) fn list_keys(&mut self) -> Vec<KeyBinding> {
-        Vec::new()
+        self.v05.key_bindings.clone()
+    }
+    /// Tell the editor this plugin's bindings (all of them: the last action
+    /// of a call wins).
+    fn push_key_bindings(&mut self) {
+        let plugin = self.plugin.clone();
+        self.actions
+            .retain(|action| !matches!(action, crate::Action::KeyBindings { plugin: p, .. } if *p == plugin));
+        self.actions.push(crate::Action::KeyBindings {
+            plugin,
+            bindings: self.v05.key_bindings.clone(),
+        });
     }
     pub(crate) fn menu_state(&mut self) -> Option<MenuState> {
         None

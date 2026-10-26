@@ -2836,3 +2836,164 @@ async fn plugin_commands_that_start_programs_need_allow_process() -> anyhow::Res
         .is_none_or(|(message, _)| !message.contains("allow-process")));
     Ok(())
 }
+
+/// An editor on `text` (test selection syntax) with the user's `config`
+/// and testplugin3 (API 0.5) loaded with `settings`.
+fn app_v5(
+    text: &str,
+    config: Option<helix_term::config::Config>,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let mut builder = AppBuilder::new().with_input_text(text);
+    if let Some(config) = config {
+        builder = builder.with_config(config);
+    }
+    let mut app = builder.build().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_key_bindings_replace_defaults_and_get_the_count() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "3w").await;
+    assert_eq!(status(&app).0, "key:edit-w:w:Some(3)");
+    // The plugin's edit (which moves the cursor by one), not the motion.
+    assert_eq!(text(&app), "Kone two\n");
+    assert_eq!(cursor(&app), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passed_through_keys_do_what_they_would_without_the_binding() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\nthree\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    assert_eq!(status(&app).0, "key:pass-w:w:None");
+    assert!(cursor(&app) > 0, "w moved: {}", cursor(&app));
+    // A sequence: `g g` still goes to the top.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-gg normal g g<ret>",
+    )
+    .await;
+    keys(&mut app, "jgg").await;
+    assert_eq!(status(&app).0, "key:pass-gg:g g:None");
+    assert_eq!(cursor(&app), 0);
+    // In insert mode a passed-through key types itself.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-j insert j<ret>",
+    )
+    .await;
+    keys(&mut app, "ij<esc>").await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|line| line == "event:key:pass-j:j:None"),
+        "{log:?}"
+    );
+    assert!(text(&app).starts_with("jone"), "{:?}", text(&app));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_keys_beat_plugin_bindings_unless_overridden() -> anyhow::Result<()> {
+    use helix_term::keymap::{merge_keys, KeyTrie};
+    let mut config = helpers::test_config();
+    let user: std::collections::HashMap<helix_view::document::Mode, KeyTrie> =
+        toml::from_str("[normal]\nC-k = \"goto_file_end\"\n").unwrap();
+    merge_keys(&mut config.keys, user);
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\n", Some(config.clone()), "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-k normal C-k<ret>",
+    )
+    .await;
+    keys(&mut app, "<C-k>").await;
+    // The user's command ran; the plugin wasn't asked.
+    assert_eq!(text(&app), "one\ntwo\n");
+    assert!(cursor(&app) > 0);
+    // Without the grant the override layer is refused...
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind override edit-k normal C-k<ret>",
+    )
+    .await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("allow-key-override"), "{message}");
+    // ...with it, the plugin's binding wins.
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne\ntwo\n",
+        Some(config),
+        "[testplugin3]\nallow-key-override = true\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind override edit-k normal C-k<ret>",
+    )
+    .await;
+    keys(&mut app, "<C-k>").await;
+    assert_eq!(status(&app).0, "key:edit-k:C-k:None");
+    assert_eq!(text(&app), "Kone\ntwo\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_scoped_bindings_apply_only_there() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-w normal w @doc<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    assert_eq!(text(&app), "Kone two\n");
+    // Another document: `w` is the motion again.
+    keys(&mut app, ":new<ret>ione two<esc>gg").await;
+    keys(&mut app, "w").await;
+    assert_eq!(text(&app), "one two\n");
+    assert!(cursor(&app) > 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_key_callback_passes_the_keys_through_and_unbinds() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin spin-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    // Disabled for running too long; `w` still moved.
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("testplugin3"), "{message}");
+    assert!(cursor(&app) > 0);
+    // Its bindings are gone.
+    assert!(helix_term::keymap::plugin_layers::bindings().is_empty());
+    Ok(())
+}
