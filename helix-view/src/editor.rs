@@ -292,6 +292,24 @@ where
     Ok(chars)
 }
 
+/// What a key does to the open completion menu (`completion-keys`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompletionKeyAction {
+    /// Accept the selected item (or the first).
+    Confirm,
+    /// Undo the preview and close.
+    Abort,
+    /// Close; a previewed item stays.
+    Close,
+    Next,
+    Previous,
+    PageUp,
+    PageDown,
+    /// Abort, then leave insert mode: one key for both.
+    NormalMode,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Config {
@@ -356,6 +374,9 @@ pub struct Config {
     pub completion_timeout: Duration,
     /// Whether to insert the completion suggestion on hover. Defaults to true.
     pub preview_completion_insert: bool,
+    /// Keys for the completion menu while it is open, over its default keys
+    /// and insert mode's: `C-y = "confirm"`, `C-e = "abort"`...
+    pub completion_keys: HashMap<crate::input::KeyEvent, CompletionKeyAction>,
     pub completion_trigger_len: u8,
     /// Whether to instruct the LSP to replace the entire word when applying a completion
     /// or to only insert new text
@@ -710,6 +731,8 @@ impl Default for StatusLineConfig {
             ],
             center: vec![],
             right: vec![
+                // Empty unless a plugin shows something (progress).
+                E::Plugins,
                 E::Diagnostics,
                 E::Selections,
                 E::Register,
@@ -1256,6 +1279,7 @@ impl Default for Config {
             idle_timeout: Duration::from_millis(250),
             completion_timeout: Duration::from_millis(250),
             preview_completion_insert: true,
+            completion_keys: HashMap::new(),
             completion_trigger_len: 2,
             auto_info: true,
             file_picker: FilePickerConfig::default(),

@@ -236,6 +236,11 @@ impl Compositor {
         (None, CursorKind::Hidden)
     }
 
+    /// The type names of the layers, bottom first.
+    pub fn layer_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.layers.iter().map(|component| component.type_name())
+    }
+
     pub fn has_component(&self, type_name: &str) -> bool {
         self.layers
             .iter()

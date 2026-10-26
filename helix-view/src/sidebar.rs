@@ -1,5 +1,6 @@
-//! Plugin panels (Pure): lists docked left, right or below the views, e.g.
-//! a file tree, an outline, test results. One panel per dock; the plugin
+//! Plugin panels (Pure): lists docked left, right or below the views, or
+//! floating over them, e.g. a file tree, an outline, test results. One
+//! panel per dock; the plugin
 //! sets its items, and enter on an item runs the plugin command it names.
 //! The sidebar of API 0.4 is the left panel.
 
@@ -9,6 +10,17 @@ pub enum Dock {
     Left,
     Right,
     Bottom,
+    /// Floating over the editor.
+    Float,
+}
+
+/// Where a float is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FloatPosition {
+    Center,
+    /// Below (or above) the cursor.
+    Cursor,
+    TopRight,
 }
 
 /// One row of a sidebar.
@@ -37,6 +49,8 @@ pub struct Sidebar {
     pub scroll: usize,
     /// Keys go to the sidebar instead of the editor.
     pub focused: bool,
+    /// A float's height (rows, with the border) and position.
+    pub float: Option<(u16, FloatPosition)>,
 }
 
 /// Narrowest and widest side panel.
@@ -93,6 +107,7 @@ mod test {
             selected: 0,
             scroll: 0,
             focused: false,
+            float: None,
         }
     }
 

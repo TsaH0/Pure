@@ -896,7 +896,7 @@ fn app_with_v3_settings(permissions: &str, settings: &str) -> (Application, temp
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{permissions}]\n"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -2083,7 +2083,7 @@ fn app_with_v3_manifest(
     .unwrap();
     std::fs::write(
         plugin.join("plugin.toml"),
-        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.4\"\npermissions = [{permissions}]\n{extra}"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{permissions}]\n{extra}"),
     )
     .unwrap();
     helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
@@ -2229,6 +2229,28 @@ async fn plugins_can_be_completion_sources() -> anyhow::Result<()> {
         log.iter().any(|line| line.starts_with("completion:")),
         "{log:?}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_ctrl_c_leaves_insert_mode_with_the_completion_menu_open() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "[testplugin3]\ncompletion = true\n");
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    // The menu previews `alpha`; ctrl-c drops the preview and, in the same
+    // press, leaves insert mode.
+    keys(&mut app, "<C-n>").await;
+    assert!(text(&app).starts_with("alpha"), "{:?}", text(&app));
+    keys(&mut app, "<C-c>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    assert!(
+        text(&app).starts_with("al") && !text(&app).starts_with("alpha"),
+        "{:?}",
+        text(&app)
+    );
+    // Without a menu it leaves insert mode too.
+    keys(&mut app, "ix<C-c>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
     Ok(())
 }
 
@@ -2812,5 +2834,1080 @@ async fn plugin_commands_that_start_programs_need_allow_process() -> anyhow::Res
         .editor
         .get_status()
         .is_none_or(|(message, _)| !message.contains("allow-process")));
+    Ok(())
+}
+
+/// An editor on `text` (test selection syntax) with the user's `config`
+/// and testplugin3 (API 0.5) loaded with `settings`.
+fn app_v5(
+    text: &str,
+    config: Option<helix_term::config::Config>,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let mut builder = AppBuilder::new().with_input_text(text);
+    if let Some(config) = config {
+        builder = builder.with_config(config);
+    }
+    let mut app = builder.build().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin).unwrap();
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )
+    .unwrap();
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_key_bindings_replace_defaults_and_get_the_count() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "3w").await;
+    assert_eq!(status(&app).0, "key:edit-w:w:Some(3)");
+    // The plugin's edit (which moves the cursor by one), not the motion.
+    assert_eq!(text(&app), "Kone two\n");
+    assert_eq!(cursor(&app), 1);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passed_through_keys_do_what_they_would_without_the_binding() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\nthree\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    assert_eq!(status(&app).0, "key:pass-w:w:None");
+    assert!(cursor(&app) > 0, "w moved: {}", cursor(&app));
+    // A sequence: `g g` still goes to the top.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-gg normal g g<ret>",
+    )
+    .await;
+    keys(&mut app, "jgg").await;
+    assert_eq!(status(&app).0, "key:pass-gg:g g:None");
+    assert_eq!(cursor(&app), 0);
+    // In insert mode a passed-through key types itself.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin pass-j insert j<ret>",
+    )
+    .await;
+    keys(&mut app, "ij<esc>").await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|line| line == "event:key:pass-j:j:None"),
+        "{log:?}"
+    );
+    assert!(text(&app).starts_with("jone"), "{:?}", text(&app));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_keys_beat_plugin_bindings_unless_overridden() -> anyhow::Result<()> {
+    use helix_term::keymap::{merge_keys, KeyTrie};
+    let mut config = helpers::test_config();
+    let user: std::collections::HashMap<helix_view::document::Mode, KeyTrie> =
+        toml::from_str("[normal]\nC-k = \"goto_file_end\"\n").unwrap();
+    merge_keys(&mut config.keys, user);
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\n", Some(config.clone()), "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-k normal C-k<ret>",
+    )
+    .await;
+    keys(&mut app, "<C-k>").await;
+    // The user's command ran; the plugin wasn't asked.
+    assert_eq!(text(&app), "one\ntwo\n");
+    assert!(cursor(&app) > 0);
+    // Without the grant the override layer is refused...
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind override edit-k normal C-k<ret>",
+    )
+    .await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("allow-key-override"), "{message}");
+    // ...with it, the plugin's binding wins.
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne\ntwo\n",
+        Some(config),
+        "[testplugin3]\nallow-key-override = true\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind override edit-k normal C-k<ret>",
+    )
+    .await;
+    keys(&mut app, "<C-k>").await;
+    assert_eq!(status(&app).0, "key:edit-k:C-k:None");
+    assert_eq!(text(&app), "Kone\ntwo\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_scoped_bindings_apply_only_there() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin edit-w normal w @doc<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    assert_eq!(text(&app), "Kone two\n");
+    // Another document: `w` is the motion again.
+    keys(&mut app, ":new<ret>ione two<esc>gg").await;
+    keys(&mut app, "w").await;
+    assert_eq!(text(&app), "one two\n");
+    assert!(cursor(&app) > 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_key_callback_passes_the_keys_through_and_unbinds() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin spin-w normal w<ret>",
+    )
+    .await;
+    keys(&mut app, "w").await;
+    // Disabled for running too long; `w` still moved.
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("testplugin3"), "{message}");
+    assert!(cursor(&app) > 0);
+    // Its bindings are gone.
+    assert!(helix_term::keymap::plugin_layers::bindings().is_empty());
+    Ok(())
+}
+
+/// testplugin3 as a completion source, with insert-mode keys driving the
+/// menu, and the menu opened on "al".
+async fn app_with_menu_keys() -> (Application, tempfile::TempDir) {
+    let (mut app, dir) = app_v5("#[\n|]#", None, "[testplugin3]\ncompletion = true\n");
+    for (name, key) in [
+        ("menu-next", "C-l"),
+        ("menu-previous", "C-b"),
+        ("menu-confirm", "C-o"),
+        ("menu-abort", "C-g"),
+        ("menu-close", "C-e"),
+        ("menu-select-1", "C-t"),
+        ("menu-select-none", "C-y"),
+        ("menu-select-9", "C-v"),
+    ] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bind plugin {name} insert {key}<ret>"),
+        )
+        .await;
+    }
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe completion-menu<ret>",
+    )
+    .await;
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    (app, dir)
+}
+
+fn log(app: &Application) -> Vec<String> {
+    let _ = app;
+    helix_term::plugins::log_lines("testplugin3").unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_navigate_and_confirm_the_completion_menu() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    // The menu as the plugin sees it, then the preview of what it selected.
+    keys(&mut app, "<C-l>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "menu:alpha,alphabet:None:false|Ok(())");
+    assert_eq!(text(&app), "alpha\n");
+    keys(&mut app, "<C-l>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "menu:alpha,alphabet:Some(0):true|Ok(())");
+    assert_eq!(text(&app), "alphabet\n");
+    // Back to the typed text; an item that isn't there is refused.
+    keys(&mut app, "<C-y>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "al\n");
+    keys(&mut app, "<C-v>").await;
+    assert!(status(&app)
+        .0
+        .contains("Err(\"no completion item 9 (the menu has 2)\")"));
+    // Select and confirm: the item is in, the menu closed, still inserting.
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-o>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    keys(&mut app, "<C-l>").await;
+    assert_eq!(status(&app).0, "menu:none|Ok(())");
+    // The events, in order.
+    let log = log(&app);
+    let events: Vec<&String> = log
+        .iter()
+        .filter(|line| line.starts_with("event:e2:Event::CompletionMenu"))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "event:e2:Event::CompletionMenu(CompletionEvent::Opened(2))",
+            "event:e2:Event::CompletionMenu(CompletionEvent::Confirmed(\"alphabet\"))",
+            "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Confirmed))",
+        ],
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aborting_drops_the_preview_and_closing_keeps_it() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    keys(&mut app, "<C-g>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "al\n");
+    // Undo history is intact: one undo removes the typed text.
+    keys(&mut app, "<esc>u").await;
+    assert_eq!(text(&app), "\n");
+    // Close with a preview keeps the previewed text (as typing would).
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-t>").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-e>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(text(&app), "alphabet\n");
+    let log = log(&app);
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Aborted))"),
+        "{log:?}"
+    );
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Dismissed))"),
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaving_insert_mode_reports_why_the_menu_closed() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_menu_keys().await;
+    keys(&mut app, "<esc>").await;
+    deliver_events(&mut app).await;
+    let log = log(&app);
+    assert!(
+        log.iter().any(|l| l
+            == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::ModeChange))"),
+        "{log:?}"
+    );
+    // ctrl-c aborts (and leaves insert mode in the same press).
+    keys(&mut app, "oal").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-c>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert_eq!(
+        log.iter()
+            .filter(|l| *l
+                == "event:e2:Event::CompletionMenu(CompletionEvent::Closed(CloseReason::Aborted))")
+            .count(),
+        1,
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completion_keys_drive_the_menu() -> anyhow::Result<()> {
+    use helix_view::editor::CompletionKeyAction;
+    use helix_view::input::KeyEvent;
+    let mut config = helpers::test_config();
+    config.editor.completion_keys = [
+        ("C-y".parse::<KeyEvent>()?, CompletionKeyAction::Confirm),
+        ("C-e".parse::<KeyEvent>()?, CompletionKeyAction::NormalMode),
+    ]
+    .into_iter()
+    .collect();
+    let (mut app, _dir) = app_v5(
+        "#[\n|]#",
+        Some(config),
+        "[testplugin3]\ncompletion = true\n",
+    );
+    // Abort and leave insert mode in one key: the preview goes.
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-n>").await;
+    assert_eq!(text(&app), "alpha\n");
+    keys(&mut app, "<C-e>").await;
+    assert_eq!(text(&app), "al\n");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    // Confirm without selecting: the first item.
+    keys(&mut app, "oal").await;
+    deliver_events(&mut app).await;
+    keys(&mut app, "<C-y><esc>").await;
+    assert_eq!(text(&app), "al\nalpha\n");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pre_command_hooks_see_and_may_cancel_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-command @cmd move_char_right @cmd echo<ret>",
+    )
+    .await;
+    // Asked, and it goes ahead.
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 1);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|l| l == "event:pre-command:move_char_right"),
+        "{log:?}"
+    );
+    // Other commands don't ask the plugin.
+    keys(&mut app, "h").await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        !log.iter().any(|l| l == "event:pre-command:move_char_left"),
+        "{log:?}"
+    );
+    // Cancelled: the motion doesn't happen, nor the typable command.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-command @cmd move_char_right @cancel-commands<ret>",
+    )
+    .await;
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 0);
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert_eq!(
+        message,
+        "'move_char_right' cancelled by testplugin3: no move_char_right"
+    );
+    keys(&mut app, ":echo hello<ret>").await;
+    let (message, _) = status(&app);
+    assert!(
+        message.contains("'echo' cancelled by testplugin3: no echo"),
+        "{message}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pre_save_hooks_edit_or_cancel_the_write() -> anyhow::Result<()> {
+    let file = tempfile::NamedTempFile::new()?;
+    std::fs::write(file.path(), "mark-on-save\n")?;
+    let mut app = AppBuilder::new().with_file(file.path(), None).build()?;
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("testplugin3");
+    std::fs::create_dir(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )?;
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    keys(&mut app, ":plugin-run testplugin3/subscribe pre-save<ret>").await;
+    keys(&mut app, ":w<ret>").await;
+    // The plugin's edit is saved with the document.
+    assert_eq!(
+        std::fs::read_to_string(file.path())?,
+        "mark-on-save\n// saved\n"
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/subscribe pre-save @cancel-saves<ret>",
+    )
+    .await;
+    keys(&mut app, "ix<esc>:w<ret>").await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(
+        message.contains("saving cancelled by testplugin3: not now"),
+        "{message}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(file.path())?,
+        "mark-on-save\n// saved\n"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_about_focus_plugins_and_shutdown() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne\n",
+        None,
+        "[testplugin3]\nsubscribe-plugins = true\n",
+    );
+    for event in ["buffer-enter", "buffer-leave", "view-enter", "view-leave"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/subscribe {event}<ret>"),
+        )
+        .await;
+    }
+    keys(&mut app, ":vnew<ret>").await;
+    deliver_events(&mut app).await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    for event in ["ViewLeave", "ViewEnter", "BufferLeave", "BufferEnter"] {
+        assert!(
+            log.iter()
+                .any(|l| l.starts_with(&format!("event:e2:Event::{event}"))),
+            "{event}: {log:?}"
+        );
+    }
+    // Loaded with the plugin itself, then told about it.
+    assert!(
+        log.iter()
+            .any(|l| l == "event:e2:Event::PluginChange((\"testplugin3\", PluginState::Loaded))"),
+        "{log:?}"
+    );
+    helix_term::plugins::shutdown(&mut app.editor);
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter().any(|l| l == "event:e2:Event::Shutdown"),
+        "{log:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_run_native_and_typable_commands_with_results() -> anyhow::Result<()> {
+    let (mut app, dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec #3 move_char_right<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("command-done:")).await;
+    assert!(status.ends_with(":Ok(())"), "{status}");
+    assert_eq!(cursor(&app), 3);
+    // Typable commands get their arguments as they are: no expansion.
+    let path = dir.path().join("out %{cursor_line}.txt");
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/exec write '{}'<ret>",
+            path.display()
+        ),
+    )
+    .await;
+    // (The write's own message replaces the plugin's status.)
+    let done = wait_for(&mut app, |_| {
+        helix_term::plugins::log_lines("testplugin3")
+            .ok()?
+            .into_iter()
+            .filter(|line| line.starts_with("event:command-done:"))
+            .nth(1)
+    })
+    .await;
+    assert!(done.ends_with(":Ok(())"), "{done}");
+    wait_for(&mut app, |_| {
+        std::fs::read_to_string(&path)
+            .ok()
+            .filter(|text| !text.is_empty())
+    })
+    .await;
+    assert_eq!(std::fs::read_to_string(&path)?, "one two\n");
+    // A failure is reported to the plugin.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec set-option no-such-option 1<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("command-done:")).await;
+    assert!(status.contains("Err("), "{status}");
+    // Programs only with allow-process.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/exec run-shell-command true<ret>",
+    )
+    .await;
+    assert_error(&app, "allow-process");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_batches_stop_at_the_first_failure() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/batch move_char_right ; set-option no-such-option 1 ; mode:insert<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("batch-done:")).await;
+    assert!(
+        status.contains(":[Ok(()), Err(\"'set-option': "),
+        "{status}"
+    );
+    assert!(status.ends_with(r#", Err("skipped")]"#), "{status}");
+    // The first step ran; nothing is rolled back; the mode didn't change.
+    assert_eq!(cursor(&app), 1);
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/batch mode:insert ; move_char_right<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("batch-done:")).await;
+    assert!(status.ends_with(":[Ok(()), Ok(())]"), "{status}");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_switch_modes_and_see_views_and_ui() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/set-mode select<ret>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Select);
+    keys(
+        &mut app,
+        "<esc>:vsplit<ret>:plugin-run testplugin3/views<ret>",
+    )
+    .await;
+    let (views, _) = status(&app);
+    let views: Vec<&str> = views.strip_prefix("views:").unwrap().split(',').collect();
+    assert_eq!(views.len(), 2, "{views:?}");
+    assert_eq!(
+        views.iter().filter(|view| view.ends_with('*')).count(),
+        1,
+        "{views:?}"
+    );
+    keys(&mut app, ":plugin-run testplugin3/ui-state<ret>").await;
+    let (ui, _) = status(&app);
+    assert!(ui.starts_with("ui:Mode::Normal:menu=false:"), "{ui}");
+    assert!(ui.contains(":picker=false:popup=false:panel=None:"), "{ui}");
+    keys(&mut app, ":plugin-run testplugin3/count-commands<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "commands:native=true:typable=true:plugin=true:true:true:true"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_call_each_others_services() -> anyhow::Result<()> {
+    let (mut app, dir) = app_v5("#[o|]#ne\n", None, "[svc-b]\nprovide-echo = true\n");
+    // A second copy of the test plugin, named svc-b, that testplugin3
+    // depends on.
+    let provider = dir.path().join("svc-b");
+    std::fs::create_dir(&provider)?;
+    std::fs::copy(
+        dir.path().join("testplugin3/plugin.wasm"),
+        provider.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        provider.join("plugin.toml"),
+        format!("name = \"svc-b\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n"),
+    )?;
+    let manifest = dir.path().join("testplugin3/plugin.toml");
+    let text = std::fs::read_to_string(&manifest)?;
+    std::fs::write(&manifest, format!("{text}dependencies = [\"svc-b\"]\n"))?;
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir.path(),
+        "[svc-b]\nprovide-echo = true\n",
+    )?;
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/call svc-b.echo 1.0.0 echo '[1, 2]'<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("service-reply:")).await;
+    assert!(status.ends_with(r#":Ok("[1, 2]")"#), "{status}");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/call svc-b.echo 1.0.0 fail 1<ret>",
+    )
+    .await;
+    let status = wait_for_status(&mut app, |s| s.starts_with("service-reply:")).await;
+    assert!(status.ends_with(r#":Err("failed on purpose")"#), "{status}");
+    Ok(())
+}
+
+/// The current status message's text after `prefix`.
+fn status_after<'a>(status: &'a str, prefix: &str) -> &'a str {
+    status
+        .strip_prefix(prefix)
+        .unwrap_or_else(|| panic!("{status}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_marks_follow_edits() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    let mut ids = Vec::new();
+    for args in ["4", "4 after", "2"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/mark {args}<ret>"),
+        )
+        .await;
+        ids.push(status_after(&status(&app).0, "mark:").to_string());
+    }
+    let (before, after, inside) = (&ids[0], &ids[1], &ids[2]);
+    // Typing before them moves them.
+    keys(&mut app, "iXX<esc>").await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/marks {before}<ret>"),
+    )
+    .await;
+    assert_eq!(
+        status(&app).0,
+        format!("marks:{inside}@4,{before}@6,{after}@6:Some(6)")
+    );
+    // Text inserted right at them: gravity decides.
+    keys(&mut app, "gh6li!<esc>").await;
+    assert_eq!(text(&app), "XXone !two\n");
+    keys(&mut app, ":plugin-run testplugin3/marks<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        format!("marks:{inside}@4,{before}@6,{after}@7:")
+    );
+    // Deleting the text around a mark removes it.
+    keys(&mut app, "gh2lv2ld").await;
+    assert_eq!(text(&app), "XX !two\n");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/marks {inside}<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, format!("marks:{before}@3,{after}@4:None"));
+    // Removed explicitly.
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/unmark {before}<ret>"),
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin3/marks<ret>").await;
+    assert_eq!(status(&app).0, format!("marks:{after}@4:"));
+    // Out of range.
+    keys(&mut app, ":plugin-run testplugin3/mark 99<ret>").await;
+    assert_error(&app, "invalid position 99");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_virtual_lines_take_rows_below_their_lines() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\nthree\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/vlines 0 first-row 0 second-row 1 below-two<ret>",
+    )
+    .await;
+    let screen = app.terminal_buffer().clone();
+    let rows: Vec<String> = (screen.area.y..screen.area.bottom())
+        .map(|y| {
+            (screen.area.x..screen.area.right())
+                .map(|x| screen[(x, y)].symbol.to_string())
+                .collect::<String>()
+        })
+        .collect();
+    let find = |text: &str| {
+        rows.iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text} not on screen: {rows:#?}"))
+    };
+    let one = find("one");
+    assert_eq!(find("first-row"), one + 1);
+    assert_eq!(find("second-row"), one + 2);
+    assert_eq!(find("two"), one + 3);
+    assert_eq!(find("below-two"), one + 4);
+    assert_eq!(find("three"), one + 5);
+    // They move with their line.
+    keys(&mut app, "Ozero<esc>").await;
+    let screen = app.terminal_buffer().clone();
+    let row_of = |text: &str| {
+        (screen.area.y..screen.area.bottom())
+            .find(|&y| {
+                (screen.area.x..screen.area.right())
+                    .map(|x| screen[(x, y)].symbol.to_string())
+                    .collect::<String>()
+                    .contains(text)
+            })
+            .unwrap()
+    };
+    assert_eq!(row_of("first-row"), row_of("one") + 1);
+    assert_eq!(row_of("one"), row_of("zero") + 1);
+    keys(&mut app, ":plugin-run testplugin3/vlines 9 nope<ret>").await;
+    assert_error(&app, "invalid line 9");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_patch_parts_of_decoration_layers() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two three\n", None, "");
+    let ranges = |app: &Application| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .highlight_ranges("testplugin3/hl")
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/patch-hl 0 14 0 3 4 7 8 13<ret>",
+    )
+    .await;
+    assert_eq!(ranges(&app), [0..3, 4..7, 8..13]);
+    // Only the part in 4..8 changes.
+    keys(&mut app, ":plugin-run testplugin3/patch-hl 4 8 5 6<ret>").await;
+    assert_eq!(ranges(&app), [0..3, 5..6, 8..13]);
+    keys(&mut app, ":plugin-run testplugin3/patch-hl 4 8 9 10<ret>").await;
+    assert_error(&app, "doesn't start in 4..8");
+    let texts = |app: &Application| {
+        helix_view::doc!(app.editor)
+            .plugin_decorations
+            .annotation_texts("testplugin3/ann")
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/patch-ann 0 14 3 a 7 b 14 c<ret>",
+    )
+    .await;
+    assert_eq!(texts(&app), ["a", "b", "c"]);
+    keys(&mut app, ":plugin-run testplugin3/patch-ann 5 14 9 d<ret>").await;
+    assert_eq!(texts(&app), ["a", "d"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_floats_take_keys_and_run_their_commands() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/float Pick alpha beta gamma<ret>",
+    )
+    .await;
+    let screen = app.terminal_buffer().clone();
+    let shown: String = (screen.area.y..screen.area.bottom())
+        .flat_map(|y| (screen.area.x..screen.area.right()).map(move |x| (x, y)))
+        .map(|(x, y)| screen[(x, y)].symbol.to_string())
+        .collect();
+    assert!(shown.contains("Pick") && shown.contains("beta"), "{shown}");
+    // The float has the keys: j moves its selection, enter runs the item.
+    keys(&mut app, "j<ret>").await;
+    assert_eq!(status(&app).0, "float-selected:Some(1):beta");
+    assert_eq!(text(&app), "one\n");
+    keys(&mut app, ":plugin-run testplugin3/float-close<ret>").await;
+    assert!(app
+        .editor
+        .panels
+        .iter()
+        .all(|panel| panel.dock != helix_view::sidebar::Dock::Float));
+    Ok(())
+}
+
+/// `app_v5` with the test plugin asking for `permissions` too.
+fn app_v5_granted(
+    text: &str,
+    permissions: &str,
+    settings: &str,
+) -> (Application, tempfile::TempDir) {
+    let (mut app, dir) = app_v5(text, None, settings);
+    std::fs::write(
+        dir.path().join("testplugin3/plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}, {permissions}]\n"),
+    )
+    .unwrap();
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), settings).unwrap();
+    (app, dir)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_sessions_take_input_while_running() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = true\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/session cat<ret>").await;
+    let id = status_after(&status(&app).0, "session:").to_string();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} hello there<ret>"),
+    )
+    .await;
+    let chunk = wait_for_status(&mut app, |s| s.starts_with("chunk:")).await;
+    assert!(chunk.starts_with("chunk:hello there\n"), "{chunk}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} again<ret>"),
+    )
+    .await;
+    let chunk = wait_for_status(&mut app, |s| s.starts_with("chunk:again")).await;
+    assert!(chunk.starts_with("chunk:again\n"), "{chunk}");
+    // Closing the input ends `cat`.
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-close {id}<ret>"),
+    )
+    .await;
+    let done = wait_for_status(&mut app, |s| s.starts_with("done:")).await;
+    assert!(done.starts_with("done:Some(0)"), "{done}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} late<ret>"),
+    )
+    .await;
+    assert_error(&app, &format!("no running session {id}"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_session_input_is_bounded() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = true\n",
+    );
+    // `sleep` never reads its input: the pipe fills, the rest waits.
+    keys(&mut app, ":plugin-run testplugin3/session sleep 30<ret>").await;
+    let id = status_after(&status(&app).0, "session:").to_string();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1048576<ret>"),
+    )
+    .await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1000000<ret>"),
+    )
+    .await;
+    assert_error(&app, "busy");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} big:1048577<ret>"),
+    )
+    .await;
+    assert_error(&app, "at most 1 MiB per write");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-close {id}<ret>"),
+    )
+    .await;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/session-write {id} x<ret>"),
+    )
+    .await;
+    assert_error(&app, "input is closed");
+    // Programs need the grant as for spawn.
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""process""#, "");
+    keys(&mut app, ":plugin-run testplugin3/session cat<ret>").await;
+    assert_error(&app, "allow-process");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_progress_shows_in_the_statusline() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    let progress = |app: &Application| {
+        app.editor
+            .plugin_statusline
+            .iter()
+            .filter(|(key, _)| key.starts_with("testplugin3/progress-"))
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+    };
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/progress Indexing files 40<ret>",
+    )
+    .await;
+    assert_eq!(progress(&app), ["Indexing: files 40%"]);
+    // Shown by default.
+    let screen = app.terminal_buffer().clone();
+    let shown: String = (screen.area.y..screen.area.bottom())
+        .flat_map(|y| (screen.area.x..screen.area.right()).map(move |x| (x, y)))
+        .map(|(x, y)| screen[(x, y)].symbol.to_string())
+        .collect();
+    assert!(shown.contains("Indexing: files 40%"));
+    keys(&mut app, ":plugin-run testplugin3/progress end<ret>").await;
+    assert!(progress(&app).is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_watch_paths_they_may_read() -> anyhow::Result<()> {
+    let watched = tempfile::tempdir()?;
+    let dir = watched.path().canonicalize()?;
+    let settings = format!(
+        "[testplugin3]\nallow-files = \"read\"\nallow-dirs = [\"{}\"]\n",
+        dir.display()
+    );
+    let (mut app, _plugins) = app_v5_granted("#[o|]#ne\n", r#""filesystem""#, &settings);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/watch {} r<ret>", dir.display()),
+    )
+    .await;
+    let id = status_after(&status(&app).0, "watching:").to_string();
+    // (A file in a directory made just now could come before its watch.)
+    std::fs::write(dir.join("new.txt"), "hi")?;
+    let line = wait_for(&mut app, |_| {
+        helix_term::plugins::log_lines("testplugin3")
+            .ok()?
+            .into_iter()
+            .find(|line| line.contains("FileChange") && line.contains("new.txt"))
+    })
+    .await;
+    assert!(line.contains(&format!("FileChange(({id}, [")), "{line}");
+    // Outside the granted directories: refused.
+    keys(&mut app, ":plugin-run testplugin3/watch /etc<ret>").await;
+    assert_error(&app, "outside the directories");
+    keys(&mut app, ":plugin-run testplugin3/watch relative<ret>").await;
+    assert_error(&app, "absolute");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_lsp_requests_need_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""lsp""#, "");
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_error(&app, "allow-lsp = true");
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""lsp""#,
+        "[testplugin3]\nallow-lsp = true\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_eq!(status(&app).0, "servers:");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-request textDocument/hover {}<ret>",
+    )
+    .await;
+    assert_error(&app, "no language server on this document");
+    // Without the permission in plugin.toml, the grant isn't enough.
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "[testplugin3]\nallow-lsp = true\n");
+    keys(&mut app, ":plugin-run testplugin3/lsp-servers<ret>").await;
+    assert_error(&app, "\"lsp\"");
+    Ok(())
+}
+
+/// The virtual lines on the current document: `(line, text)`.
+fn virtual_rows(app: &Application) -> Vec<(usize, String)> {
+    let doc = helix_view::doc!(app.editor);
+    doc.plugin_decorations
+        .virtual_rows(doc.text().slice(..))
+        .into_iter()
+        .map(|(line, text, _)| (line, text.to_string()))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn lens_example_shows_uses_and_follows_settings_changes() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("main.rs");
+    std::fs::write(
+        &file,
+        "fn main() {\n    helper();\n    helper();\n}\n\nfn helper() {}\n",
+    )?;
+    let (mut app, _plugins) = app_with_example_on("lens", &file, "");
+    let rows = wait_for(&mut app, |app| {
+        let rows = virtual_rows(app);
+        (rows.len() == 2).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [
+            (0, "    ↳ unused in this file".to_string()),
+            (5, "    ↳ 2 uses".to_string())
+        ]
+    );
+    // The settings change: the plugin hears about it, no reload.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = 1\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert_eq!(virtual_rows(&app), [(5, "    ↳ 2 uses".to_string())]);
+    // Settings the schema refuses are reported, and change nothing.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = \"lots\"\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert_error(&app, "min-uses: expected integer");
+    assert_eq!(virtual_rows(&app).len(), 1);
+    // Its key, bound from init.
+    keys(&mut app, "<space>L").await;
+    assert!(virtual_rows(&app).is_empty());
+    keys(&mut app, "<space>L").await;
+    assert_eq!(virtual_rows(&app).len(), 1);
+    // A changed grant reloads the plugins.
+    let settings: toml::Table = toml::from_str("[lens]\nmin-uses = 1\nallow-lsp = true\n")?;
+    helix_term::plugins::settings_changed(&mut app.editor, &settings);
+    assert!(
+        status(&app).0.contains("Plugins reloaded"),
+        "{:?}",
+        status(&app)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_settings_schemas_are_checked_at_load() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let file = root.path().join("main.rs");
+    std::fs::write(&file, "fn main() {}\n")?;
+    let (app, _plugins) = app_with_example_on("lens", &file, "[lens]\nmin-use = 2\n");
+    assert_error(
+        &app,
+        "unknown setting 'min-use' (the plugin has: enabled, min-uses, scope)",
+    );
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_doctor_and_trace_report_what_plugins_do() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""process""#, "");
+    let report = helix_term::plugins::doctor();
+    assert!(report.contains("## testplugin3 1 (API 0.5)"), "{report}");
+    assert!(
+        report.contains("**Not granted:** process (needs allow-process)"),
+        "{report}"
+    );
+    keys(&mut app, ":plugin-doctor<ret>").await;
+    keys(&mut app, ":plugin-trace testplugin3<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        "Tracing 1 plugin(s): every call and its time go to :plugin-log"
+    );
+    keys(&mut app, ":plugin-run testplugin3/caps<ret>").await;
+    assert!(helix_term::plugins::log_lines("testplugin3")?
+        .iter()
+        .any(|line| line.starts_with("trace: command call, ")));
+    keys(&mut app, ":plugin-trace nope<ret>").await;
+    assert_error(&app, "no such plugin loaded");
+    keys(&mut app, ":plugin-trace off<ret>").await;
+    assert!(status(&app).0.starts_with("Stopped tracing"));
     Ok(())
 }

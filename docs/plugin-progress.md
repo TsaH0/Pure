@@ -826,3 +826,48 @@ work (`6734495`) and Pure after it (`02034a3`), all built with plain
 - **Panels and the new examples** cost nothing when unused: no panel means
   `layout` returns the editor area unchanged, and plugin key tries only
   cover the plugins that are loaded.
+
+## Speed after plugin API 0.5 (2026-10-26)
+
+Same harness (`docs/bench/vs-helix.py`), big.rs (257 KB, Rust), release
+builds, alternating runs, 4 cores. "Before" is `6324afa` (the last commit
+before 0.5), "now" the finished 0.5. Each editor gets only its own built
+Rust grammar (no injection grammars), so all highlight the same way.
+
+| Median | Helix 25.07.1 | Helix at Pure's merge base (`ba40e54`) | Pure before 0.5 | Pure now |
+| --- | --- | --- | --- | --- |
+| Startup to first frame (15 runs) | 254 ms | 330 ms | 330 ms | 314–320 ms |
+| CPU, start then quit | 268 ms | 357 ms | 353 ms | 331–334 ms |
+| CPU, editing session (3–5 runs) | 20.8 s | 20.2 s | 12.2 s | 11.8–12.4 s |
+| Idle over 5 s: CPU | 0 ms | – | 0 ms | 0 ms |
+| Peak memory | 36 MiB | 39 MiB | 41 MiB | 41–43 MiB |
+
+With plugins (separate cache directories per configuration):
+
+| Median | Before, five API 0.3 plugins | Now, the same plugins | Now, seven API 0.5 plugins |
+| --- | --- | --- | --- |
+| CPU, start then quit (10 runs) | 369 ms | 368 ms | 377 ms |
+| CPU, editing session (4 runs) | 11.78 s | 11.63 s | 11.85 s |
+| Idle over 5 s: wake-ups, CPU | 22, 0 ms | 22, 0 ms | 22, 0 ms |
+| Peak memory | 51 MiB | 52 MiB | 61 MiB |
+
+- **0.5 made nothing slower**: with no plugins, and with the same plugins,
+  before and now are within noise. Seven 0.5 plugins (outline, illuminate,
+  git-blame, harpoon, markdown, text-tools, todos) add 9 MiB and no
+  measurable editing CPU.
+- **Fixed while measuring** (they cost nothing in this benchmark, but grow
+  with use): the completion menu built up to 1,000 item labels for plugins
+  on every keystroke and copied them to read the count, even with no
+  plugins; the per-frame UI bookkeeping for `state.ui` ran without 0.5
+  plugins; and a `pre-command` hook on one command made a snapshot for every
+  command.
+- **Startup vs Helix 25.07.1** (+60–75 ms): the same as vanilla Helix at
+  Pure's merge base, so it comes from upstream changes since 25.07.1 (larger
+  Rust queries to compile), not from Pure.
+- **Three measurement traps**, now handled: vanilla Helix asks the terminal
+  for its attributes and waited 2 s in the pty (the harness answers now);
+  Pure's newer Rust grammar breaks 25.07.1's queries (each editor gets its
+  own config dir with its own grammar); and two plugin sets with plugins of
+  the same name sharing one cache directory recompile each other's plugins
+  on alternate runs (the cache keeps one build per plugin name), which first
+  looked like a 2.5x startup regression.

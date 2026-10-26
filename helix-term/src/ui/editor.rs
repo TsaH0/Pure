@@ -4,7 +4,7 @@ use crate::{
     events::{OnModeSwitch, PostCommand},
     handlers::completion::CompletionItem,
     key,
-    keymap::{KeymapResult, Keymaps},
+    keymap::{KeyTrie, KeymapResult, Keymaps},
     ui::{
         document::{render_document, DocumentHighlighter, LinePos, TextRenderer},
         statusline,
@@ -252,6 +252,11 @@ impl EditorView {
             .diagnostics_handler
             .show_cursorline_diagnostics(doc, view.id);
         let inline_diagnostic_config = config.inline_diagnostics.prepare(width, enable_cursor_line);
+        // Before the diagnostics: their rows come first (as in
+        // `View::text_annotations`).
+        if let Some(lines) = PluginVirtualLines::new(doc, theme) {
+            decorations.add_decoration(lines);
+        }
         decorations.add_decoration(InlineDiagnostics::new(
             doc,
             theme,
@@ -964,7 +969,6 @@ impl EditorView {
         );
     }
 
-    /// Apply the highlighting on the lines where a cursor is active
     /// Plugins' whole-line backgrounds for the visible lines, filling the
     /// text area of the view (not the gutter).
     fn plugin_line_backgrounds(
@@ -1092,14 +1096,60 @@ impl EditorView {
     ) -> Option<KeymapResult> {
         let mut last_mode = mode;
         self.pseudo_pending.extend(self.keymaps.pending());
-        let key_result = match &doc!(cxt.editor).plugin_owner {
-            None => self.keymaps.get(mode, event),
-            Some(owner) => {
-                let owner = owner.clone();
-                self.keymaps.get_in(mode, event, Some(&owner))
-            }
+        // The keys typed so far, for plugin bindings.
+        let mut sequence = self.keymaps.pending().to_vec();
+        sequence.push(event);
+        let (owner, document, language) = {
+            let doc = doc!(cxt.editor);
+            // Languages only matter to plugin bindings.
+            let language = crate::keymap::plugin_layers::has_bindings()
+                .then(|| doc.language_name().map(str::to_string))
+                .flatten();
+            (doc.plugin_owner.clone(), doc.id(), language)
         };
+        let scope = crate::keymap::plugin_layers::KeyScope {
+            owner: owner.as_deref(),
+            document: Some(document),
+            language: language.as_deref(),
+        };
+        let key_result = self.keymaps.get_scoped(mode, event, &scope);
         cxt.editor.autoinfo = self.keymaps.sticky().map(|node| node.infobox());
+
+        // Keys bound to a plugin callback: ask the plugin. If it passes them
+        // through, they do what they would without the binding.
+        let plugin_binding = match &key_result {
+            KeymapResult::Matched(command) => crate::keymap::plugin_layers::binding_of(command),
+            _ => None,
+        };
+        let mut passed_through = None;
+        if let Some((plugin, name)) = &plugin_binding {
+            let keys: Vec<String> = sequence.iter().map(|key| key.to_string()).collect();
+            let count = cxt.count.map(|count| count.get() as u32);
+            let handled =
+                crate::plugins::key(cxt.editor, cxt.jobs, plugin, name, &keys.join(" "), count);
+            if !handled {
+                match self
+                    .keymaps
+                    .without_binding(mode, &sequence, &scope, (plugin, name))
+                {
+                    Some(trie @ (KeyTrie::MappableCommand(_) | KeyTrie::Sequence(_))) => {
+                        passed_through = Some(trie)
+                    }
+                    _ if sequence.len() == 1 => return Some(KeymapResult::NotFound),
+                    _ => return Some(KeymapResult::Cancelled(sequence)),
+                }
+            }
+            // The plugin's actions may have changed the mode.
+            let current_mode = cxt.editor.mode();
+            if current_mode != last_mode {
+                helix_event::dispatch(OnModeSwitch {
+                    old_mode: last_mode,
+                    new_mode: current_mode,
+                    cx: cxt,
+                });
+                last_mode = current_mode;
+            }
+        }
 
         let mut execute_command = |command: &commands::MappableCommand| {
             command.execute(cxt);
@@ -1127,9 +1177,20 @@ impl EditorView {
         };
 
         match &key_result {
-            KeymapResult::Matched(command) => {
-                execute_command(command);
-            }
+            KeymapResult::Matched(command) => match &plugin_binding {
+                // A plugin binding the plugin passed through: what the keys
+                // do without it.
+                Some(_) => match passed_through {
+                    Some(KeyTrie::MappableCommand(command)) => execute_command(&command),
+                    Some(KeyTrie::Sequence(commands)) => {
+                        for command in &commands {
+                            execute_command(command);
+                        }
+                    }
+                    _ => {}
+                },
+                None => execute_command(command),
+            },
             KeymapResult::Pending(node) => cxt.editor.autoinfo = Some(node.infobox()),
             KeymapResult::MatchedSequence(commands) => {
                 for command in commands {
@@ -1276,12 +1337,157 @@ impl EditorView {
         editor.last_completion = Some(CompleteAction::Triggered);
         self.last_insert.1.push(InsertEvent::TriggerCompletion);
 
+        {
+            use crate::ui::completion::menu_events::{self, Close, MenuEvent};
+            if self.completion.is_some() {
+                crate::plugins::completion_menu_event(editor, MenuEvent::Closed(Close::Replaced));
+            }
+            let menu = completion.menu_state(editor, crate::plugins::reads_menu());
+            crate::plugins::completion_menu_event(editor, MenuEvent::Opened(menu.count));
+            menu_events::set(Some(menu));
+        }
         // TODO : propagate required size on resize to completion too
         self.completion = Some(completion);
         Some(area)
     }
 
+    /// The completion menu changed (selection, filter, items): update what
+    /// plugins see, and tell them if the items did.
+    pub fn sync_menu(&mut self, editor: &mut Editor) {
+        use crate::ui::completion::menu_events::{self, MenuEvent};
+        let Some(completion) = &self.completion else {
+            return;
+        };
+        let menu = completion.menu_state(editor, crate::plugins::reads_menu());
+        let before = menu_events::count();
+        if before != Some(menu.count) {
+            crate::plugins::completion_menu_event(editor, MenuEvent::Updated(menu.count));
+        }
+        menu_events::set(Some(menu));
+    }
+
+    /// A key of `completion-keys` while the menu is open.
+    fn completion_key(
+        &mut self,
+        action: helix_view::editor::CompletionKeyAction,
+        cx: &mut commands::Context,
+    ) {
+        use crate::ui::completion::menu_events::MenuCommand;
+        use helix_view::editor::CompletionKeyAction as A;
+        let mut compositor_cx = crate::compositor::Context {
+            editor: cx.editor,
+            jobs: cx.jobs,
+            scroll: None,
+        };
+        let command = match action {
+            A::Confirm => MenuCommand::Confirm,
+            A::Abort | A::NormalMode => MenuCommand::Abort,
+            A::Close => MenuCommand::Close,
+            A::Next => MenuCommand::Next,
+            A::Previous => MenuCommand::Previous,
+            A::PageUp | A::PageDown => {
+                if let Some(completion) = &mut self.completion {
+                    let key = if action == A::PageUp {
+                        key!(PageUp)
+                    } else {
+                        key!(PageDown)
+                    };
+                    completion.handle_event(&Event::Key(key), &mut compositor_cx);
+                }
+                self.sync_menu(cx.editor);
+                return;
+            }
+        };
+        self.completion_command(command, &mut compositor_cx);
+        if action == A::NormalMode {
+            let old_mode = cx.editor.mode();
+            commands::MappableCommand::normal_mode.execute(cx);
+            let new_mode = cx.editor.mode();
+            if new_mode != old_mode {
+                helix_event::dispatch(OnModeSwitch {
+                    old_mode,
+                    new_mode,
+                    cx,
+                });
+            }
+        }
+    }
+
+    /// A plugin drives the completion menu (API 0.5), through the menu's
+    /// own code: previews, undo and language server sync work as with the
+    /// keys.
+    pub fn completion_command(
+        &mut self,
+        command: crate::ui::completion::menu_events::MenuCommand,
+        cx: &mut crate::compositor::Context,
+    ) {
+        use crate::ui::completion::menu_events::{set_close_reason, Close, MenuCommand, MenuEvent};
+        let Some(completion) = &mut self.completion else {
+            return;
+        };
+        let accept = |view: &mut Self, cx: &mut crate::compositor::Context, close: Close| {
+            let Some(completion) = &mut view.completion else {
+                return;
+            };
+            let label = completion.selected_label();
+            if let EventResult::Consumed(Some(_)) =
+                completion.handle_event(&Event::Key(key!(Enter)), cx)
+            {
+                if let (Close::Confirmed, Some(label)) = (close, label) {
+                    crate::plugins::completion_menu_event(cx.editor, MenuEvent::Confirmed(label));
+                }
+                set_close_reason(close);
+                if let Some(cb) = view.clear_completion(cx.editor) {
+                    view.on_next_key = Some((cb, OnKeyCallbackKind::Fallback));
+                }
+            }
+        };
+        match command {
+            MenuCommand::Select(index) => {
+                completion.select(index.map(|i| i as usize), cx.editor);
+                self.sync_menu(cx.editor);
+            }
+            MenuCommand::Next | MenuCommand::Previous => {
+                let key = if command == MenuCommand::Next {
+                    crate::ctrl!('n')
+                } else {
+                    crate::ctrl!('p')
+                };
+                completion.handle_event(&Event::Key(key), cx);
+                self.sync_menu(cx.editor);
+            }
+            MenuCommand::Confirm => {
+                if completion.selected_label().is_none() {
+                    completion.select(Some(0), cx.editor);
+                }
+                accept(self, cx, Close::Confirmed);
+            }
+            MenuCommand::Abort => {
+                set_close_reason(Close::Aborted);
+                self.clear_completion(cx.editor);
+            }
+            // A previewed item is accepted (as typing a character would);
+            // without one the text stays as it is.
+            MenuCommand::Close => {
+                if completion.selected_label().is_some() {
+                    accept(self, cx, Close::Dismissed);
+                } else {
+                    set_close_reason(Close::Dismissed);
+                    self.clear_completion(cx.editor);
+                }
+            }
+        }
+    }
+
     pub fn clear_completion(&mut self, editor: &mut Editor) -> Option<OnKeyCallback> {
+        {
+            use crate::ui::completion::menu_events::{self, MenuEvent};
+            let reason = menu_events::take_close_reason();
+            if self.completion.is_some() {
+                crate::plugins::completion_menu_event(editor, MenuEvent::Closed(reason));
+                menu_events::set(None);
+            }
+        }
         self.completion = None;
         let mut on_next_key: Option<OnKeyCallback> = None;
         editor.handlers.completions.request_controller.restart();
@@ -1683,7 +1889,36 @@ impl Component for EditorView {
                         Mode::Insert => {
                             // let completion swallow the event if necessary
                             let mut consumed = false;
-                            if let Some(completion) = &mut self.completion {
+                            // Keys bound to a plugin aren't typing: they go to
+                            // the plugin, which may drive the menu itself.
+                            let plugin_key = crate::keymap::plugin_layers::has_bindings() && {
+                                let doc = doc!(cx.editor);
+                                let language = doc.language_name().map(str::to_string);
+                                let scope = crate::keymap::plugin_layers::KeyScope {
+                                    owner: doc.plugin_owner.as_deref(),
+                                    document: Some(doc.id()),
+                                    language: language.as_deref(),
+                                };
+                                self.keymaps.is_plugin_binding(Mode::Insert, key, &scope)
+                            };
+                            // `completion-keys`: what the user bound for the open menu.
+                            let menu_key = self
+                                .completion
+                                .as_ref()
+                                .filter(|_| !plugin_key)
+                                .and_then(|_| {
+                                    cx.editor.config().completion_keys.get(&key).copied()
+                                });
+                            if let Some(action) = menu_key {
+                                self.completion_key(action, &mut cx);
+                                consumed = true;
+                            }
+                            if let Some(completion) = self
+                                .completion
+                                .as_mut()
+                                .filter(|_| !plugin_key && menu_key.is_none())
+                            {
+                                let label = completion.selected_label();
                                 let res = {
                                     // use a fake context here
                                     let mut cx = Context {
@@ -1708,7 +1943,24 @@ impl Component for EditorView {
 
                                 if let Some(callback) = res {
                                     if callback.is_some() {
-                                        // assume close_fn
+                                        // assume close_fn: aborted with esc or ctrl-c,
+                                        // else an item was accepted.
+                                        use crate::ui::completion::menu_events::{
+                                            set_close_reason, Close, MenuEvent,
+                                        };
+                                        if consumed
+                                            && (key == key!(Esc) || key == crate::ctrl!('c'))
+                                        {
+                                            set_close_reason(Close::Aborted);
+                                        } else {
+                                            if let Some(label) = label {
+                                                crate::plugins::completion_menu_event(
+                                                    cx.editor,
+                                                    MenuEvent::Confirmed(label),
+                                                );
+                                            }
+                                            set_close_reason(Close::Confirmed);
+                                        }
                                         if let Some(cb) = self.clear_completion(cx.editor) {
                                             if consumed {
                                                 cx.on_next_key_callback =
@@ -1718,12 +1970,16 @@ impl Component for EditorView {
                                                     Some((cb, OnKeyCallbackKind::Fallback));
                                             }
                                         }
+                                    } else {
+                                        self.sync_menu(cx.editor);
                                     }
                                 }
                             }
 
-                            // if completion didn't take the event, we pass it onto commands
-                            if !consumed {
+                            // if completion didn't take the event, we pass it onto commands.
+                            // Ctrl-c closes the menu and still does what it is bound to
+                            // (leave insert mode), so one press is enough.
+                            if !consumed || key == crate::ctrl!('c') {
                                 self.insert_mode(&mut cx, key);
 
                                 // record last_insert key
@@ -1827,6 +2083,8 @@ impl Component for EditorView {
         }
 
         // Plugin panels take columns beside the views and rows below them.
+        crate::plugins::check_focus(cx.editor);
+        crate::plugins::set_pending_keys(self.keymaps.pending());
         let (views_area, panel_areas) = if cx.editor.panels.is_empty() {
             (editor_area, Vec::new())
         } else {
@@ -1968,5 +2226,86 @@ fn canonicalize_key(key: &mut KeyEvent) {
     } = key
     {
         key.modifiers.remove(KeyModifiers::SHIFT)
+    }
+}
+
+/// Plugins' virtual lines, drawn in the rows `PluginDecorations::virtual_line_rows`
+/// reserves below their lines.
+struct PluginVirtualLines {
+    /// `(the char index of a line's line break, its rows)`, sorted.
+    rows: Vec<(usize, Vec<(String, Style)>)>,
+    next: usize,
+    /// The line whose line break was just drawn.
+    pending: Option<usize>,
+}
+
+impl PluginVirtualLines {
+    fn new(doc: &Document, theme: &Theme) -> Option<Self> {
+        if doc.plugin_decorations.is_empty() {
+            return None;
+        }
+        let text = doc.text().slice(..);
+        let mut rows: Vec<(usize, Vec<(String, Style)>)> = Vec::new();
+        for (line, row, scope) in doc.plugin_decorations.virtual_rows(text) {
+            if line + 1 >= text.len_lines() {
+                continue;
+            }
+            let line_break = helix_core::line_ending::line_end_char_index(&text, line);
+            let style = theme.try_get(scope).unwrap_or_default();
+            match rows.last_mut() {
+                Some((last, rows)) if *last == line_break => rows.push((row.to_string(), style)),
+                _ => rows.push((line_break, vec![(row.to_string(), style)])),
+            }
+        }
+        (!rows.is_empty()).then_some(Self {
+            rows,
+            next: 0,
+            pending: None,
+        })
+    }
+
+    fn next_anchor(&self) -> usize {
+        self.rows.get(self.next).map_or(usize::MAX, |(pos, _)| *pos)
+    }
+}
+
+impl Decoration for PluginVirtualLines {
+    fn reset_pos(&mut self, pos: usize) -> usize {
+        self.next = self.rows.partition_point(|(anchor, _)| *anchor < pos);
+        self.pending = None;
+        self.next_anchor()
+    }
+
+    fn decorate_grapheme(
+        &mut self,
+        _renderer: &mut TextRenderer,
+        _grapheme: &helix_core::doc_formatter::FormattedGrapheme,
+    ) -> usize {
+        // The line break of a line with rows: they follow its last visual
+        // line.
+        self.pending = Some(self.next);
+        self.next += 1;
+        self.next_anchor()
+    }
+
+    fn render_virt_lines(
+        &mut self,
+        renderer: &mut TextRenderer,
+        pos: LinePos,
+        virt_off: helix_core::Position,
+    ) -> helix_core::Position {
+        let Some(i) = self.pending.take() else {
+            return helix_core::Position::new(0, 0);
+        };
+        let rows = &self.rows[i].1;
+        let (x, width) = (renderer.viewport.x, renderer.viewport.width as usize);
+        for (n, (row, style)) in rows.iter().enumerate() {
+            let y = pos.visual_line as usize + virt_off.row + n;
+            if y >= renderer.offset.row + renderer.viewport.height as usize {
+                break;
+            }
+            renderer.set_stringn(x, y as u16, row, width, *style);
+        }
+        helix_core::Position::new(rows.len(), 0)
     }
 }

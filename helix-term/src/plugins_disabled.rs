@@ -55,6 +55,57 @@ pub fn plugin_names() -> Vec<String> {
     Vec::new()
 }
 
+pub fn completion_menu_event(
+    _editor: &Editor,
+    _event: crate::ui::completion::menu_events::MenuEvent,
+) {
+}
+
+pub fn pre_command(_editor: &mut Editor, _jobs: &mut Jobs, _command: &str) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn pre_save(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _doc: helix_view::DocumentId,
+) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn check_focus(_editor: &Editor) {}
+
+pub fn reads_menu() -> bool {
+    false
+}
+
+pub fn set_ui_layers(_layers: impl Iterator<Item = &'static str>) {}
+
+pub fn set_pending_keys(_keys: &[helix_view::input::KeyEvent]) {}
+
+pub fn shutdown(_editor: &mut Editor) {}
+
+pub fn config_reloaded(_editor: &mut Editor) {}
+
+pub fn doctor() -> String {
+    "Plugins are not built into this Pure.".into()
+}
+
+pub fn set_trace(_plugin: Option<&str>, _on: bool) -> usize {
+    0
+}
+
+pub fn key(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _plugin: &str,
+    _name: &str,
+    _keys: &str,
+    _count: Option<u32>,
+) -> bool {
+    false
+}
+
 pub fn run_command(
     _editor: &mut Editor,
     _jobs: &mut Jobs,

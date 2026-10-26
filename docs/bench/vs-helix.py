@@ -4,16 +4,17 @@ import glob, json, os, pty, re, select, statistics, sys, threading, time
 
 SP = os.path.dirname(os.path.abspath(__file__))
 FILE = os.path.join(SP, "work", "big.rs")
-CFG = os.path.join(os.path.dirname(SP), "bench-cfg")
+# Another config dir (plugins installed, say) with BENCH_CFG.
+CFG = os.environ.get("BENCH_CFG", os.path.join(os.path.dirname(SP), "bench-cfg"))
 ESC = b"\x1b"
 
 
-def spawn(binary, runtime, data):
+def spawn(binary, runtime, data, cfg=CFG):
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(os.path.dirname(FILE))
         env = {"PATH": "/usr/bin:/bin", "TERM": "xterm-256color", "HOME": data,
-               "XDG_CONFIG_HOME": CFG, "XDG_DATA_HOME": data, "XDG_CACHE_HOME": data,
+               "XDG_CONFIG_HOME": cfg, "XDG_DATA_HOME": data, "XDG_CACHE_HOME": data,
                "HELIX_RUNTIME": runtime}
         os.execve(binary, [binary, FILE], env)
     import fcntl, struct, termios
@@ -31,6 +32,10 @@ def spawn(binary, runtime, data):
                     break
                 if not chunk:
                     break
+                # Answer the terminal's device-attributes query, or editors
+                # that ask wait for its timeout before drawing.
+                if b"\x1b[c" in chunk:
+                    os.write(fd, b"\x1b[?62;22c")
                 out.extend(chunk)
 
     threading.Thread(target=reader, daemon=True).start()
@@ -94,11 +99,11 @@ WORK = (
 )
 
 
-def run(binary, runtime, mode):
+def run(binary, runtime, mode, cfg=CFG):
     data = os.path.join(SP, "data", os.path.basename(binary))
     os.makedirs(data, exist_ok=True)
     start = time.monotonic()
-    pid, fd, out, stop = spawn(binary, runtime, data)
+    pid, fd, out, stop = spawn(binary, runtime, data, cfg)
     wait_for(out, b"big.rs")
     result = {"startup_ms": (time.monotonic() - start) * 1000}
     if mode == "idle":
@@ -124,8 +129,10 @@ mode, rounds = sys.argv[2], int(sys.argv[3])
 results = {name: [] for name in editors}
 for i in range(rounds):
     order = list(editors.items())
-    for name, (binary, runtime) in order if i % 2 == 0 else order[::-1]:
-        results[name].append(run(binary, runtime, mode))
+    # [binary, runtime] or [binary, runtime, config dir]: editors whose
+    # grammars differ need their own (each with its own built grammars).
+    for name, (binary, runtime, *cfg) in order if i % 2 == 0 else order[::-1]:
+        results[name].append(run(binary, runtime, mode, *cfg))
 for name, runs in results.items():
     print(name, "  ".join(
         f"{k}={statistics.median(r[k] for r in runs):.1f} [{min(r[k] for r in runs):.1f}-{max(r[k] for r in runs):.1f}]"

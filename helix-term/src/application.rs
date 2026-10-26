@@ -295,6 +295,8 @@ impl Application {
 
         helix_event::start_frame();
         cx.editor.needs_redraw = false;
+        // What plugins see of the UI (API 0.5 `state.ui`).
+        crate::plugins::set_ui_layers(self.compositor.layer_names());
 
         let area = self
             .terminal
@@ -520,6 +522,8 @@ impl Application {
         match refresh_config() {
             Ok(_) => {
                 self.editor.set_status("Config refreshed");
+                // Plugins' settings may have changed too.
+                crate::plugins::config_reloaded(&mut self.editor);
             }
             Err(err) => {
                 self.editor.set_error(err.to_string());
@@ -1503,6 +1507,9 @@ impl Application {
         //        want to try to run as much cleanup as we can, regardless of
         //        errors along the way
         let mut errs = Vec::new();
+
+        // Plugins that asked to hear about it save their state now.
+        crate::plugins::shutdown(&mut self.editor);
 
         if let Err(err) = self
             .jobs

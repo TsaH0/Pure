@@ -72,6 +72,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             modified: true,
             owner: None,
             revision: 0,
+            language_servers: Vec::new(),
         },
     );
     Snapshot {
@@ -83,6 +84,16 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
         config_dir: PathBuf::from("/config"),
         registers: BTreeMap::new(),
         panels: Vec::new(),
+        completion_menu: None,
+        views: vec![crate::v05::ViewInfo {
+            id: 1,
+            document: 1,
+            area: (0, 0, 80, 24),
+            first_line: 0,
+            last_line: 2,
+            focused: true,
+        }],
+        ui: crate::v05::UiState::default(),
     }
 }
 
@@ -676,8 +687,8 @@ fn example_text_tools() {
 }
 
 #[test]
-fn sdk_04_example_text_tools() {
-    check_text_tools("0.4");
+fn sdk_05_example_text_tools() {
+    check_text_tools("0.5");
 }
 
 #[test]
@@ -817,7 +828,7 @@ fn manifest_selects_the_component_world() {
     let err = format!("{:#}", host().load(&dir, "{}").unwrap_err());
     assert!(err.contains("built for another API version"), "{err}");
     let err = Manifest::parse("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").unwrap_err();
-    assert!(err.to_string().contains("supports 0.1 to 0.4"));
+    assert!(err.to_string().contains("supports 0.1 to 0.5"));
 }
 
 fn testplugin2() -> (PluginHost, tempfile::TempDir) {
@@ -1080,7 +1091,12 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Timer
         | PendingKind::Completion
         | PendingKind::Files
-        | PendingKind::Listen => unreachable!(),
+        | PendingKind::Listen
+        | PendingKind::Command
+        | PendingKind::Batch
+        | PendingKind::Service
+        | PendingKind::Lsp
+        | PendingKind::Watch => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -2255,7 +2271,7 @@ fn load_v3(host: &mut PluginHost, root: &Path, permissions: &[&str]) {
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, "{}").unwrap();
 }
@@ -2270,7 +2286,7 @@ fn load_v3_with(host: &mut PluginHost, root: &Path, permissions: &[&str], config
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load(&dir, config).unwrap();
 }
@@ -2456,10 +2472,23 @@ fn api_04_capabilities_revisions_cancel_and_snippets() {
                 .unwrap(),
         )
     };
+    // testplugin3 is built for 0.5: it sees the 0.5 additions too.
+    let caps: Vec<&str> = CAPABILITIES
+        .iter()
+        .chain(CAPABILITIES_05)
+        .copied()
+        .collect();
     assert_eq!(
         status(&mut host, "caps", vec![], Snapshot::default()),
-        ["caps:cancel-request,revisions,snippet-completions,panels,listen"]
+        [format!("caps:{}", caps.join(","))]
     );
+    assert!(caps.starts_with(&[
+        "cancel-request",
+        "revisions",
+        "snippet-completions",
+        "panels",
+        "listen"
+    ]));
 
     // A document's revision; its own edits count within the call.
     let mut snap = snapshot("text", 0, 0);
@@ -2606,6 +2635,35 @@ fn frozen_api_04_components_still_work() {
         .run_command("testplugin3", "diagnose", vec![], snapshot("hello", 0, 0))
         .unwrap();
     assert!(matches!(&actions[..], [Action::Diagnostics { .. }]));
+}
+
+/// The last 0.4 build (with `requests`, `panels` and `listener`) keeps
+/// loading next to 0.5 plugins, and its 0.4 imports work.
+#[test]
+fn frozen_api_041_components_still_work() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.4.1.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let actions = host
+        .run_command("testplugin3", "caps", vec![], Snapshot::default())
+        .unwrap();
+    let statuses = statuses(&actions);
+    assert_eq!(statuses.len(), 1);
+    assert!(
+        statuses[0].starts_with("caps:cancel-request,"),
+        "{statuses:?}"
+    );
 }
 
 #[test]
@@ -4048,7 +4106,7 @@ fn frozen_api_03_components_still_work() {
     .unwrap();
     let manifest = std::fs::read_to_string(fixture("examples/oil/plugin.toml"))
         .unwrap()
-        .replace("api = \"0.4\"", "api = \"0.3\"");
+        .replace("api = \"0.5\"", "api = \"0.3\"");
     std::fs::write(oil.join("plugin.toml"), manifest).unwrap();
     host.load(&oil, "{}").unwrap();
     assert!(host
@@ -4072,7 +4130,7 @@ fn api_04_file_operations_are_checked_and_answered() {
     let path = dir.join("plugin.toml");
     let manifest = std::fs::read_to_string(&path)
         .unwrap()
-        .replace("api = \"0.1\"", "api = \"0.4\"");
+        .replace("api = \"0.1\"", "api = \"0.5\"");
     std::fs::write(path, manifest).unwrap();
     host.load_with(
         &dir,
@@ -4187,6 +4245,7 @@ fn conceals_are_checked_against_the_text() {
             modified: false,
             owner: None,
             revision: 0,
+            language_servers: Vec::new(),
         },
     );
     state
@@ -4340,4 +4399,895 @@ fn a_failed_listener_reports_its_error() {
         matches!(&actions[..], [Action::Error(message)] if message == "CompetiTest: can't listen on 127.0.0.1:27121: Address in use"),
         "{actions:?}"
     );
+}
+
+/// testplugin3 (API 0.5) with `settings`, and an editor key check that
+/// refuses "bad".
+fn v5_with(settings: PluginSettings) -> (PluginHost, tempfile::TempDir) {
+    let mut host = host();
+    host.set_editor_fns(v05::EditorFns {
+        check_keys: Some(|keys| {
+            if keys.contains("bad") {
+                Err(format!("invalid key in '{keys}'"))
+            } else {
+                Ok(())
+            }
+        }),
+        commands: None,
+    });
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(&dir, settings).unwrap();
+    (host, root)
+}
+
+fn v5_run(host: &mut PluginHost, command: &str, args: &[&str]) -> anyhow::Result<Vec<Action>> {
+    host.run_command(
+        "testplugin3",
+        command,
+        args.iter().map(|a| a.to_string()).collect(),
+        snapshot("text\n", 0, 0),
+    )
+}
+
+/// The bindings the last `KeyBindings` action of `actions` sets.
+fn key_bindings(actions: &[Action]) -> Option<Vec<v05::KeyBinding>> {
+    actions.iter().rev().find_map(|action| match action {
+        Action::KeyBindings { bindings, .. } => Some(bindings.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn api_05_key_bindings_are_validated_listed_and_removed() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let actions = v5_run(
+        &mut host,
+        "bind",
+        &["plugin", "go", "normal", "space", "g", "x"],
+    )
+    .unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].keys, "space g x");
+    assert_eq!(bindings[0].layer, v05::KeyLayer::Plugin);
+    assert_eq!(bindings[0].description, "test binding go");
+    // The same keys again replace the binding.
+    let actions = v5_run(
+        &mut host,
+        "bind",
+        &["plugin", "go2", "normal", "space", "g", "x"],
+    )
+    .unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].name, "go2");
+    // Checked by the editor; the override layer needs the user's grant.
+    let err = v5_run(&mut host, "bind", &["plugin", "b", "normal", "bad"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("invalid key in 'bad'"),
+        "{err:#}"
+    );
+    let err = v5_run(&mut host, "bind", &["override", "o", "normal", "w"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("allow-key-override = true"),
+        "{err:#}"
+    );
+    // A command that fails takes its bindings with it.
+    assert!(v5_run(&mut host, "fail-after-bind", &[]).is_err());
+    let actions = v5_run(&mut host, "list-keys", &[]).unwrap();
+    assert_eq!(statuses(&actions), ["keys:space g x=go2"]);
+    let actions = v5_run(&mut host, "unbind", &["normal", "space", "g", "x"]).unwrap();
+    assert_eq!(key_bindings(&actions).unwrap(), Vec::new());
+    assert!(v5_run(&mut host, "unbind", &["normal", "space", "g", "x"]).is_err());
+    // At most 256.
+    for n in 0..v05::MAX_KEY_BINDINGS {
+        v5_run(
+            &mut host,
+            "bind",
+            &["fallback", "k", "normal", &format!("k{n}")],
+        )
+        .unwrap();
+    }
+    let err = v5_run(&mut host, "bind", &["fallback", "k", "normal", "one-more"]).unwrap_err();
+    assert!(format!("{err:#}").contains("at most 256"), "{err:#}");
+}
+
+#[test]
+fn api_05_override_layer_with_the_grant_and_bindings_from_init() {
+    let settings = PluginSettings {
+        key_override: true,
+        ..PluginSettings::new("{\"bind-in-init\": true}")
+    };
+    let (mut host, _root) = v5_with(settings);
+    let actions = v5_run(&mut host, "bind", &["override", "o", "normal", "w"]).unwrap();
+    let bindings = key_bindings(&actions).unwrap();
+    // The one from init is still there.
+    let names: Vec<_> = bindings
+        .iter()
+        .map(|b| (b.name.as_str(), b.layer))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("init-key", v05::KeyLayer::Plugin),
+            ("o", v05::KeyLayer::Override)
+        ]
+    );
+}
+
+#[test]
+fn api_05_key_callbacks_run_like_commands_within_a_budget() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let (outcome, actions) = host
+        .key(
+            "testplugin3",
+            "edit-1",
+            "C-k",
+            Some(3),
+            snapshot("ab", 0, 0),
+        )
+        .unwrap();
+    assert_eq!(outcome, v05::KeyOutcome::Handled);
+    assert_eq!(statuses(&actions), ["key:edit-1:C-k:Some(3)"]);
+    assert!(actions.iter().any(|a| matches!(a, Action::Edit { .. })));
+    let (outcome, _) = host
+        .key("testplugin3", "pass-1", "w", None, snapshot("ab", 0, 0))
+        .unwrap();
+    assert_eq!(outcome, v05::KeyOutcome::PassThrough);
+    // UI is allowed, as in a command.
+    let (_, actions) = host
+        .key("testplugin3", "pick-1", "C-p", None, snapshot("ab", 0, 0))
+        .unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::ShowPicker { .. })));
+    // Past the budget: an error (the editor passes the keys through) and
+    // the plugin is disabled.
+    let started = Instant::now();
+    assert!(host
+        .key("testplugin3", "spin", "C-s", None, snapshot("ab", 0, 0))
+        .is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let err = host
+        .key("testplugin3", "edit-2", "C-k", None, snapshot("ab", 0, 0))
+        .unwrap_err();
+    assert!(err.to_string().contains("disabled"), "{err}");
+}
+
+#[test]
+fn api_04_plugins_have_no_key_callbacks() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3-v0.4.1.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.4\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load(&dir, "{}").unwrap();
+    let err = host
+        .key("testplugin3", "x", "w", None, Snapshot::default())
+        .unwrap_err();
+    assert!(err.to_string().contains("require API 0.5"), "{err}");
+}
+
+#[test]
+fn api_05_subscriptions_are_validated_and_filter_events() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    let err = v5_run(&mut host, "subscribe", &["pre-command"]).unwrap_err();
+    assert!(format!("{err:#}").contains("filter.commands"), "{err:#}");
+    let err = v5_run(&mut host, "subscribe", &["document-change", "@glob", "a{"]).unwrap_err();
+    assert!(format!("{err:#}").contains("invalid path glob"), "{err:#}");
+    // Language and path filters, checked against the document.
+    let actions = v5_run(
+        &mut host,
+        "subscribe",
+        &["document-change", "@lang", "python"],
+    )
+    .unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::SubscriptionsChanged)));
+    assert!(host.wants(EventKind::DocumentChange));
+    let rust = snapshot("fn main() {}", 0, 0);
+    assert!(host.dispatch(Event::DocumentChange(1), &rust).is_empty());
+    let actions = v5_run(
+        &mut host,
+        "subscribe",
+        &["document-change", "@glob", "*.rs"],
+    )
+    .unwrap();
+    let id: u32 = statuses(&actions)[0]
+        .strip_prefix("subscribed:")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let results = host.dispatch(Event::DocumentChange(1), &rust);
+    assert_eq!(results.len(), 1);
+    assert!(host
+        .log_lines("testplugin3")
+        .unwrap()
+        .iter()
+        .any(|line| line == "event:change:1"));
+    // Unsubscribed: no more.
+    v5_run(&mut host, "unsubscribe", &[&id.to_string()]).unwrap();
+    assert!(host.dispatch(Event::DocumentChange(1), &rust).is_empty());
+    // At most 64.
+    for _ in 1..v05::MAX_SUBSCRIPTIONS {
+        v5_run(&mut host, "subscribe", &["view-enter"]).unwrap();
+    }
+    let err = v5_run(&mut host, "subscribe", &["view-enter"]).unwrap_err();
+    assert!(format!("{err:#}").contains("at most 64"), "{err:#}");
+    assert!(host.wants2(v05::SubscriptionEvent::ViewEnter));
+    assert!(!host.wants2(v05::SubscriptionEvent::Shutdown));
+}
+
+#[test]
+fn api_05_hooks_run_in_order_until_one_cancels() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    v5_run(&mut host, "subscribe", &["pre-command", "@cmd", "write"]).unwrap();
+    let result = host.pre_command("write", &snapshot("x", 0, 0));
+    assert!(result.cancelled.is_none());
+    assert_eq!(result.results.len(), 1);
+    // Other commands don't ask the plugin.
+    let result = host.pre_command("quit", &snapshot("x", 0, 0));
+    assert!(result.results.is_empty());
+    v5_run(&mut host, "subscribe", &["pre-save", "@cancel-saves"]).unwrap();
+    let result = host.pre_save(1, &snapshot("x", 0, 0));
+    assert_eq!(
+        result.cancelled,
+        Some(("testplugin3".to_string(), "not now".to_string()))
+    );
+}
+
+#[test]
+fn api_05_commands_are_listed_checked_and_reported() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    host.set_editor_fns(v05::EditorFns {
+        check_keys: None,
+        commands: Some(|| {
+            vec![
+                v05::CommandEntry {
+                    name: "move_char_left".into(),
+                    doc: "Move left".into(),
+                    kind: v05::CommandKind::Native,
+                },
+                v05::CommandEntry {
+                    name: "write".into(),
+                    doc: "Write".into(),
+                    kind: v05::CommandKind::Typable,
+                },
+            ]
+        }),
+    });
+    let actions = v5_run(&mut host, "count-commands", &[]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["commands:native=true:typable=true:plugin=true:true:true:true"]
+    );
+    // Unknown commands fail at the call.
+    let err = v5_run(&mut host, "exec", &["no_such_command"]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("no command 'no_such_command'"),
+        "{err:#}"
+    );
+    let err = v5_run(&mut host, "exec", &["other/thing"]).unwrap_err();
+    assert!(format!("{err:#}").contains("no plugin command"), "{err:#}");
+    // A known one becomes an action; its result comes back by id.
+    let actions = v5_run(&mut host, "exec", &["#3", "move_char_left"]).unwrap();
+    let execute = actions.iter().find_map(|action| match action {
+        Action::Execute {
+            id, name, count, ..
+        } => Some((*id, name.clone(), *count)),
+        _ => None,
+    });
+    let (id, name, count) = execute.unwrap();
+    assert_eq!((name.as_str(), count), ("move_char_left", Some(3)));
+    let snap = snapshot("text\n", 0, 0);
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::CommandDone {
+                id,
+                result: Err("boom".into()),
+            },
+            &snap,
+        )
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        [format!("command-done:{id}:Err(\"boom\")")]
+    );
+    // Only once.
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::CommandDone { id, result: Ok(()) },
+            &snap,
+        )
+        .unwrap();
+    assert!(actions.is_empty());
+    // Batches check every step first.
+    let err = v5_run(&mut host, "batch", &["write", ";", "nope"]).unwrap_err();
+    assert!(format!("{err:#}").contains("no command 'nope'"), "{err:#}");
+    let actions = v5_run(&mut host, "batch", &["write", "a.txt", ";", "mode:insert"]).unwrap();
+    let steps = actions.iter().find_map(|action| match action {
+        Action::Batch { steps, .. } => Some(steps.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        steps.unwrap(),
+        [
+            v05::Step::Command {
+                name: "write".into(),
+                args: vec!["a.txt".into()],
+                count: None
+            },
+            v05::Step::SetMode(Mode::Insert)
+        ]
+    );
+    let actions = v5_run(&mut host, "set-mode", &["select"]).unwrap();
+    assert!(actions
+        .iter()
+        .any(|a| matches!(a, Action::SetMode(Mode::Select))));
+    // State comes from the snapshot.
+    let actions = v5_run(&mut host, "views", &[]).unwrap();
+    assert_eq!(statuses(&actions), ["views:1:1:80x24:0-2*"]);
+    let actions = v5_run(&mut host, "ui-state", &[]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["ui:Mode::Normal:menu=false:prompt=false:picker=false:popup=false:panel=None:keys="]
+    );
+}
+
+/// Load testplugin3 under each name, with its `config` and extra
+/// `plugin.toml` lines, through `load_all`.
+fn services_host(
+    plugins: &[(&str, &str, &str)],
+) -> (PluginHost, Vec<anyhow::Error>, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    for (name, _, extra) in plugins {
+        let dir = plugin_dir(
+            root.path(),
+            name,
+            &fixture("tests/fixtures/testplugin3.wasm"),
+            ALL,
+        );
+        let path = dir.join("plugin.toml");
+        let manifest = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("api = \"0.1\"", "api = \"0.5\"");
+        std::fs::write(path, format!("{manifest}{extra}\n")).unwrap();
+    }
+    let configs: Vec<(String, String)> = plugins
+        .iter()
+        .map(|(name, config, _)| (name.to_string(), format!("{{\"flags\": \"{config}\"}}")))
+        .collect();
+    let (_, errors) = host.load_all(root.path(), |name| {
+        configs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, config)| PluginSettings::new(config))
+    });
+    (host, errors, root)
+}
+
+fn call_as(
+    host: &mut PluginHost,
+    plugin: &str,
+    command: &str,
+    args: &[&str],
+) -> anyhow::Result<Vec<Action>> {
+    host.run_command(
+        plugin,
+        command,
+        args.iter().map(|a| a.to_string()).collect(),
+        snapshot("text\n", 0, 0),
+    )
+}
+
+fn service_call(actions: &[Action]) -> Option<v05::ServiceCall> {
+    actions.iter().find_map(|action| match action {
+        Action::ServiceCall(call) => Some(call.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn api_05_services_are_registered_discovered_and_called() {
+    let (mut host, errors, _root) = services_host(&[
+        ("testplugin3", "provide-echo", ""),
+        ("svc-b", "provide-echo provide-private", ""),
+        ("svc-c", "provide-echo", ""),
+    ]);
+    assert!(errors.is_empty(), "{errors:?}");
+    let discovered = |host: &mut PluginHost, plugin: &str, name: &str| {
+        statuses(&call_as(host, plugin, "discover", &[name]).unwrap())[0].clone()
+    };
+    assert_eq!(
+        discovered(&mut host, "testplugin3", "echo"),
+        "discovered:svc-b.echo@1.2.3,svc-c.echo@1.2.3,testplugin3.echo@1.2.3"
+    );
+    // Only the callers a service accepts see it.
+    assert_eq!(
+        discovered(&mut host, "testplugin3", "svc-b.private"),
+        "discovered:svc-b.private@1.0.0"
+    );
+    assert_eq!(discovered(&mut host, "svc-c", "private"), "discovered:");
+    let err = call_as(
+        &mut host,
+        "svc-c",
+        "call",
+        &["svc-b.private", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("doesn't accept calls from 'svc-c'"),
+        "{err:#}"
+    );
+    // A call is served after the caller's call; the reply comes back by id.
+    let actions = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.2.0", "echo", r#"{"x": 1}"#],
+    )
+    .unwrap();
+    let call = service_call(&actions).unwrap();
+    assert_eq!(
+        (call.provider.as_str(), call.service.as_str()),
+        ("svc-b", "echo")
+    );
+    let snap = snapshot("text\n", 0, 0);
+    let (reply, _) = host.serve(&call, &snap);
+    assert_eq!(reply, Ok(r#"{"x": 1}"#.to_string()));
+    assert!(host
+        .log_lines("svc-b")
+        .unwrap()
+        .iter()
+        .any(|line| line == r#"event:service:testplugin3:svc-b.echo:echo:{"x": 1}"#));
+    let actions = host
+        .callback2(
+            "testplugin3",
+            v05::Callback2::ServiceReply {
+                id: call.id,
+                result: reply,
+            },
+            &snap,
+        )
+        .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        [format!(r#"service-reply:{}:Ok("{{\"x\": 1}}")"#, call.id)]
+    );
+    // Versions: same major, at least the minor.patch asked for.
+    for (version, ok) in [
+        ("1.0.0", true),
+        ("1.2.3", true),
+        ("1.3.0", false),
+        ("2.0.0", false),
+        ("0.9.0", false),
+    ] {
+        let result = call_as(
+            &mut host,
+            "testplugin3",
+            "call",
+            &["svc-b.echo", version, "echo", "1"],
+        );
+        assert_eq!(result.is_ok(), ok, "{version}: {result:?}");
+    }
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("major.minor.patch"), "{err:#}");
+    // Payloads are JSON.
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "{nope"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("the payload is not JSON"),
+        "{err:#}"
+    );
+    let big = format!("\"{}\"", "x".repeat(1 << 20));
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", &big],
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("larger than 1 MiB"), "{err:#}");
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-x.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("no service 'svc-x.echo'"),
+        "{err:#}"
+    );
+    // The provider's errors and replies that aren't JSON reach the caller.
+    for (method, expected) in [
+        ("fail", "failed on purpose"),
+        ("bad-json", "the reply is not JSON"),
+    ] {
+        let actions = call_as(
+            &mut host,
+            "testplugin3",
+            "call",
+            &["svc-c.echo", "1.0.0", method, "1"],
+        )
+        .unwrap();
+        let (reply, _) = host.serve(&service_call(&actions).unwrap(), &snap);
+        assert!(reply.as_ref().unwrap_err().contains(expected), "{reply:?}");
+    }
+    // Services are registered from init only.
+    let err = call_as(&mut host, "testplugin3", "register-late", &[]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("only available from init"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn api_05_service_names_are_checked() {
+    let (host, errors, _root) = services_host(&[("svc-a", "provide-bad", "")]);
+    assert!(host.plugin("svc-a").is_none());
+    assert!(
+        format!("{:#}", errors[0]).contains("invalid service name 'Bad Name'"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn api_05_service_chains_refuse_cycles_and_depth() {
+    let names = ["testplugin3", "svc-b", "svc-c", "svc-d", "svc-e", "svc-f"];
+    let plugins: Vec<_> = names
+        .iter()
+        .map(|name| (*name, "provide-echo", ""))
+        .collect();
+    let (mut host, errors, _root) = services_host(&plugins);
+    assert!(errors.is_empty(), "{errors:?}");
+    let snap = snapshot("text\n", 0, 0);
+    // Follow the chain of calls until one fails.
+    let follow = |host: &mut PluginHost, payload: &str| {
+        let actions = call_as(
+            host,
+            "testplugin3",
+            "call",
+            &["svc-b.echo", "1.0.0", "relay", payload],
+        )
+        .unwrap();
+        let mut call = service_call(&actions).unwrap();
+        let mut hops = 0;
+        loop {
+            hops += 1;
+            let (reply, actions) = host.serve(&call, &snap);
+            match service_call(&actions) {
+                Some(next) => call = next,
+                None => return (hops, reply),
+            }
+        }
+    };
+    // svc-b calls back into testplugin3: a cycle.
+    let (hops, reply) = follow(&mut host, r#""testplugin3.echo""#);
+    assert_eq!(hops, 1);
+    assert_eq!(
+        reply,
+        Err("service call cycle: testplugin3 -> svc-b -> testplugin3".into())
+    );
+    // Four plugins deep is fine; the fifth fails.
+    let (hops, reply) = follow(&mut host, r#""svc-c.echo svc-d.echo""#);
+    assert_eq!((hops, reply), (3, Ok(r#""end""#.into())));
+    let (hops, reply) = follow(
+        &mut host,
+        r#""svc-c.echo svc-d.echo svc-e.echo svc-f.echo""#,
+    );
+    assert_eq!(hops, 4);
+    assert!(reply.unwrap_err().contains("nest at most 4"));
+    // Outside a call, the chain starts again.
+    assert!(call_as(
+        &mut host,
+        "svc-b",
+        "call",
+        &["testplugin3.echo", "1.0.0", "echo", "1"]
+    )
+    .is_ok());
+}
+
+#[test]
+fn api_05_unavailable_providers_fail_calls() {
+    let (mut host, errors, _root) =
+        services_host(&[("testplugin3", "", ""), ("svc-b", "provide-echo", "")]);
+    assert!(errors.is_empty(), "{errors:?}");
+    let snap = snapshot("text\n", 0, 0);
+    let actions = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "slow", "1"],
+    )
+    .unwrap();
+    let queued = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap();
+    let (reply, _) = host.serve(&service_call(&actions).unwrap(), &snap);
+    assert!(reply.unwrap_err().contains("disabled"));
+    // The call queued before it went fails; new ones fail at once.
+    let (reply, _) = host.serve(&service_call(&queued).unwrap(), &snap);
+    assert_eq!(reply, Err("plugin 'svc-b' is unavailable".into()));
+    let err = call_as(
+        &mut host,
+        "testplugin3",
+        "call",
+        &["svc-b.echo", "1.0.0", "echo", "1"],
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("plugin 'svc-b' is unavailable"),
+        "{err:#}"
+    );
+    assert_eq!(
+        statuses(&call_as(&mut host, "testplugin3", "discover", &["echo"]).unwrap()),
+        ["discovered:"]
+    );
+}
+
+#[test]
+fn api_05_dependencies_load_first() {
+    let (host, errors, _root) = services_host(&[
+        (
+            "aa-user",
+            "",
+            "dependencies = [\"zz-provider\"]\noptional-dependencies = [\"not-installed\"]",
+        ),
+        ("zz-provider", "provide-echo", ""),
+        ("needs-missing", "", "dependencies = [\"not-installed\"]"),
+        ("cycle-a", "", "dependencies = [\"cycle-b\"]"),
+        ("cycle-b", "", "dependencies = [\"cycle-a\"]"),
+        ("needs-cycle", "", "dependencies = [\"cycle-a\"]"),
+    ]);
+    let loaded: Vec<&str> = host
+        .plugins()
+        .iter()
+        .map(|p| p.manifest().name.as_str())
+        .collect();
+    assert_eq!(loaded, ["zz-provider", "aa-user"]);
+    let errors: Vec<String> = errors.iter().map(|err| format!("{err:#}")).collect();
+    assert!(
+        errors.iter().any(|e| e.contains(
+            "'needs-missing' needs plugin 'not-installed', which isn't installed or enabled"
+        )),
+        "{errors:?}"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("dependency cycle")),
+        "{errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("'needs-cycle' needs plugin 'cycle-a', which can't load")),
+        "{errors:?}"
+    );
+    assert!(!loaded
+        .iter()
+        .any(|name| name.starts_with("cycle") || name.starts_with("needs")));
+}
+
+#[test]
+fn api_05_marks_move_with_edits_and_go_with_their_text() {
+    use helix_core::{Rope, Transaction};
+    let mut marks = v05::Marks::default();
+    let doc = 1;
+    let a = marks.set("p", doc, 2, v05::Gravity::Before).unwrap();
+    let b = marks.set("p", doc, 2, v05::Gravity::After).unwrap();
+    let c = marks.set("p", doc, 5, v05::Gravity::Before).unwrap();
+    let other = marks.set("q", doc, 5, v05::Gravity::Before).unwrap();
+    let text = Rope::from("abcdefgh");
+    // Insert at 2, delete 4..6 (around c).
+    let tx = Transaction::change(&text, [(2, 2, Some("XY".into())), (4, 6, None)].into_iter());
+    marks.map(doc, tx.changes());
+    assert_eq!(marks.get("p", a), Some((doc, 2)));
+    assert_eq!(marks.get("p", b), Some((doc, 4)));
+    assert_eq!(marks.get("p", c), None);
+    assert_eq!(marks.get("q", other), None);
+    // Only a plugin's own marks.
+    assert_eq!(marks.get("q", a), None);
+    assert_eq!(marks.list("p", doc), [(a, 2), (b, 4)]);
+    marks.remove("q", a);
+    assert_eq!(marks.list("p", doc).len(), 2);
+    marks.close(doc);
+    assert!(marks.list("p", doc).is_empty());
+    // Limits are per plugin, and freed marks count no more.
+    for _ in 0..v05::MAX_MARKS {
+        marks.set("p", doc, 0, v05::Gravity::Before).unwrap();
+    }
+    assert!(marks.set("p", doc, 0, v05::Gravity::Before).is_err());
+    assert!(marks.set("q", doc, 0, v05::Gravity::Before).is_ok());
+    marks.remove_plugin("p");
+    assert!(marks.set("p", doc, 0, v05::Gravity::Before).is_ok());
+}
+
+const SCHEMA: &str = r#"
+[settings.flags]
+type = "string"
+default = ""
+[settings.width]
+type = "integer"
+default = 10
+min = 1
+max = 100
+description = "Columns"
+[settings.mode]
+type = "enum"
+values = ["fast", "slow"]
+default = "fast"
+[settings.tags]
+type = "string-list"
+"#;
+
+/// testplugin3 with `SCHEMA`, loaded with `config` (JSON).
+fn schema_host(config: &str) -> (PluginHost, anyhow::Result<Vec<Action>>, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        ALL,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(&path, format!("{manifest}{SCHEMA}")).unwrap();
+    let loaded = host.load_with(&dir, PluginSettings::new(config));
+    (host, loaded, root)
+}
+
+#[test]
+fn api_05_settings_are_checked_against_the_schema() {
+    // Defaults fill in what the user didn't set.
+    let (mut host, loaded, _root) = schema_host(r#"{"width": 20}"#);
+    loaded.unwrap();
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    let config: serde_json::Value =
+        serde_json::from_str(statuses(&actions)[0].strip_prefix("config:").unwrap()).unwrap();
+    assert_eq!(
+        config,
+        serde_json::json!({"flags": "", "width": 20, "mode": "fast"})
+    );
+    for (config, error) in [
+        (
+            r#"{"widht": 20}"#,
+            "unknown setting 'widht' (the plugin has: flags, mode, tags, width)",
+        ),
+        (r#"{"width": "wide"}"#, "width: expected integer"),
+        (r#"{"width": 2.5}"#, "width: expected integer"),
+        (r#"{"width": 500}"#, "width: 500 is outside 1..=100"),
+        (
+            r#"{"mode": "medium"}"#,
+            "mode: 'medium' is not one of fast, slow",
+        ),
+        (r#"{"tags": ["a", 1]}"#, "tags: expected string-list"),
+    ] {
+        let (_, loaded, _root) = schema_host(config);
+        let err = format!("{:#}", loaded.unwrap_err());
+        assert!(err.contains(error), "{config}: {err}");
+    }
+    // A schema whose default doesn't fit is the plugin's error.
+    let err = Manifest::parse(
+        "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.n]\ntype = \"integer\"\ndefault = \"x\"\n",
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("setting 'n': default: expected integer"),
+        "{err:#}"
+    );
+    let err = Manifest::parse(
+        "name = \"p\"\nversion = \"1\"\napi = \"0.5\"\n[settings.e]\ntype = \"enum\"\n",
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("an enum needs values"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn api_05_plugins_hear_about_settings_changes() {
+    let (mut host, loaded, _root) = schema_host(r#"{"flags": "subscribe-config"}"#);
+    loaded.unwrap();
+    let snap = snapshot("text\n", 0, 0);
+    // Unchanged (after defaults): nothing.
+    let same = r#"{"flags": "subscribe-config", "width": 10}"#;
+    assert!(host
+        .set_config("testplugin3", same, &snap)
+        .unwrap()
+        .is_none());
+    let changed = r#"{"flags": "subscribe-config", "width": 30}"#;
+    assert!(host
+        .set_config("testplugin3", changed, &snap)
+        .unwrap()
+        .is_some());
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    assert!(
+        statuses(&actions)[0].contains(r#""width":30"#),
+        "{actions:?}"
+    );
+    // Invalid settings are refused and keep the old ones.
+    let err = host
+        .set_config("testplugin3", r#"{"width": 0}"#, &snap)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("outside 1..=100"));
+    let actions = v5_run(&mut host, "config", &[]).unwrap();
+    assert!(statuses(&actions)[0].contains(r#""width":30"#));
+    // A plugin that doesn't listen isn't called.
+    let (mut host, loaded, _root) = schema_host("{}");
+    loaded.unwrap();
+    assert!(host
+        .set_config("testplugin3", r#"{"width": 30}"#, &snap)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn api_05_tracing_and_the_doctor_report() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    assert_eq!(host.set_trace(Some("nope"), true), 0);
+    assert_eq!(host.set_trace(Some("testplugin3"), true), 1);
+    v5_run(&mut host, "bind", &["plugin", "go", "normal", "space", "g"]).unwrap();
+    let log = host.log_lines("testplugin3").unwrap();
+    let trace = log
+        .iter()
+        .find(|line| line.starts_with("trace: command call, "))
+        .unwrap();
+    assert!(trace.ends_with(" actions"), "{trace}");
+    host.set_trace(None, false);
+    let before = host.log_lines("testplugin3").unwrap().len();
+    v5_run(&mut host, "caps", &[]).unwrap();
+    assert_eq!(host.log_lines("testplugin3").unwrap().len(), before);
+    let report = host.doctor();
+    for part in [
+        "## testplugin3 1.0.0 (API 0.5)",
+        "Running.",
+        "- Permissions: read-buffers, edit-buffers, open-files, run-commands",
+        "- Granted in plugins.toml: none",
+        "`space g` → go (Plugin)",
+        "- Calls: ",
+    ] {
+        assert!(report.contains(part), "{part} not in:\n{report}");
+    }
 }

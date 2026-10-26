@@ -1,6 +1,6 @@
 name = "oil"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Edit directories like buffers (like oil.nvim): rename, move, copy, create and delete by editing text"
 permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands", "filesystem", "registers", "process"]
 wasm = "plugin.wasm"

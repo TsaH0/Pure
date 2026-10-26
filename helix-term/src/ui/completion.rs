@@ -471,6 +471,135 @@ impl Completion {
     pub fn area(&mut self, viewport: Rect, editor: &Editor) -> Rect {
         self.popup.area(viewport, editor)
     }
+
+    /// The menu as plugins see it.
+    /// The menu as plugins see it; the item labels only when a plugin
+    /// can read them (`with_items`).
+    pub fn menu_state(&self, editor: &Editor, with_items: bool) -> menu_events::MenuSnapshot {
+        let menu = self.popup.contents();
+        let selected = menu.cursor();
+        menu_events::MenuSnapshot {
+            items: if with_items {
+                menu.shown(menu_events::MAX_ITEMS)
+                    .map(|item| item.label().to_string())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            count: menu.len() as u32,
+            selected: selected.map(|i| i as u32),
+            previewing: selected.is_some()
+                && matches!(
+                    editor.last_completion,
+                    Some(CompleteAction::Selected { .. })
+                ),
+        }
+    }
+
+    /// The selected item's label.
+    pub fn selected_label(&self) -> Option<String> {
+        self.popup
+            .contents()
+            .selection()
+            .map(|item| item.label().to_string())
+    }
+
+    /// Select (and preview) row `index`; `None` goes back to the typed text.
+    pub fn select(&mut self, index: Option<usize>, editor: &mut Editor) {
+        match index {
+            Some(_) => self.popup.contents_mut().select(index, editor),
+            None => {
+                self.popup.contents_mut().select(None, editor);
+                if let Some(CompleteAction::Selected { savepoint }) = editor.last_completion.take()
+                {
+                    let (view, doc) = current!(editor);
+                    doc.restore(view, &savepoint, false);
+                }
+                editor.last_completion = Some(CompleteAction::Triggered);
+            }
+        }
+    }
+}
+
+/// The completion menu for plugins (API 0.5): its state, close reasons and
+/// lifecycle events.
+pub mod menu_events {
+    use helix_event::runtime_local;
+    use parking_lot::Mutex;
+
+    /// Items reported to plugins.
+    pub const MAX_ITEMS: usize = 1000;
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct MenuSnapshot {
+        pub items: Vec<String>,
+        /// All items (`items` has at most [`MAX_ITEMS`]).
+        pub count: u32,
+        pub selected: Option<u32>,
+        pub previewing: bool,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Close {
+        Aborted,
+        Confirmed,
+        Dismissed,
+        ModeChange,
+        Replaced,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum MenuEvent {
+        Opened(u32),
+        Updated(u32),
+        Confirmed(String),
+        Closed(Close),
+    }
+
+    /// What plugins ask the menu to do.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MenuCommand {
+        Select(Option<u32>),
+        Next,
+        Previous,
+        Confirm,
+        Abort,
+        Close,
+    }
+
+    runtime_local! {
+        static MENU: Mutex<Option<MenuSnapshot>> = Mutex::new(None);
+        static CLOSE_REASON: Mutex<Option<Close>> = Mutex::new(None);
+    }
+
+    /// The open menu, as of the last change.
+    pub fn snapshot() -> Option<MenuSnapshot> {
+        MENU.lock().clone()
+    }
+
+    /// Whether the menu is open (without copying it).
+    pub fn is_open() -> bool {
+        MENU.lock().is_some()
+    }
+
+    /// How many items the open menu has.
+    pub fn count() -> Option<u32> {
+        MENU.lock().as_ref().map(|menu| menu.count)
+    }
+
+    pub(crate) fn set(menu: Option<MenuSnapshot>) {
+        *MENU.lock() = menu;
+    }
+
+    /// Why the menu is about to close (the next close takes it; default:
+    /// dismissed).
+    pub fn set_close_reason(reason: Close) {
+        *CLOSE_REASON.lock() = Some(reason);
+    }
+
+    pub(crate) fn take_close_reason() -> Close {
+        CLOSE_REASON.lock().take().unwrap_or(Close::Dismissed)
+    }
 }
 
 impl Component for Completion {

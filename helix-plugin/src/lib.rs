@@ -30,13 +30,15 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+pub mod settings;
+pub mod v05;
 
-use api::{v0_1, v0_2, v0_3, v0_4, Instance};
+use api::{v0_1, v0_2, v0_3, v0_4, v0_5, Instance};
 pub use types::{CommandInfo, Mode};
 use v0_1::helix::plugin::types;
 
 /// The newest supported plugin API. API 0.1 remains supported unchanged.
-pub const API_VERSION: &str = "0.4";
+pub const API_VERSION: &str = "0.5";
 
 pub type DocumentId = u32;
 
@@ -67,6 +69,9 @@ pub enum Permission {
     /// Receive HTTP requests on 127.0.0.1 (API 0.4 `listener`). The user
     /// must also list the port in `allow-listen`.
     Listen,
+    /// Send requests to language servers (API 0.5 `lsp`). The user must
+    /// also grant it with `allow-lsp`.
+    Lsp,
 }
 
 impl Permission {
@@ -80,6 +85,7 @@ impl Permission {
             Permission::Filesystem => "filesystem",
             Permission::Registers => "registers",
             Permission::Listen => "listen",
+            Permission::Lsp => "lsp",
         }
     }
 }
@@ -140,6 +146,10 @@ pub struct PluginSettings {
     pub dirs: Vec<PathBuf>,
     /// Ports the plugin may listen on (`allow-listen`).
     pub listen: Vec<u16>,
+    /// Key bindings may use the `override` layer (`allow-key-override`).
+    pub key_override: bool,
+    /// Requests to language servers (`allow-lsp`).
+    pub lsp: bool,
 }
 
 impl PluginSettings {
@@ -193,6 +203,18 @@ pub enum Decorations {
     RawOnCursorLine(bool),
     /// Not a replacement: the modes the layer is drawn in (empty: all).
     RenderModes(Vec<Mode>),
+    /// `(char position of the line break, text, theme scope)`: rows below
+    /// lines (API 0.5).
+    VirtualLines(Vec<(usize, String, String)>),
+    /// Not a replacement: the highlights starting in the range are replaced
+    /// (API 0.5).
+    PatchHighlights(
+        std::ops::Range<usize>,
+        Vec<(std::ops::Range<usize>, String)>,
+    ),
+    /// Not a replacement: the virtual text in the range is replaced (API
+    /// 0.5).
+    PatchAnnotations(std::ops::Range<usize>, Vec<(usize, String, String)>),
 }
 
 /// Most background tasks a plugin may have at once, and their default time
@@ -232,6 +254,16 @@ pub enum Dock {
     Left,
     Right,
     Bottom,
+    /// A floating panel over the editor (API 0.5 `floats`).
+    Float,
+}
+
+/// A whole row of virtual text below a document line (API 0.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginVirtualLine {
+    pub line: usize,
+    pub text: String,
+    pub scope: String,
 }
 
 /// One row of a plugin's sidebar.
@@ -294,6 +326,26 @@ pub const CAPABILITIES: &[&str] = &[
     "listen",
 ];
 
+/// What API 0.5 adds, for plugins built for it (also in `capabilities`).
+pub const CAPABILITIES_05: &[&str] = &[
+    "keymaps",
+    "completion-menu",
+    "subscriptions",
+    "hooks",
+    "commands",
+    "state",
+    "services",
+    "floats",
+    "marks",
+    "virtual-lines",
+    "patch-decorations",
+    "sessions",
+    "progress",
+    "watch",
+    "lsp",
+    "settings-schema",
+];
+
 /// Most decorations in one layer.
 pub const MAX_DECORATIONS: usize = 100_000;
 /// Longest statusline segment, in chars.
@@ -308,6 +360,8 @@ pub const MAX_LISTEN_BODY: usize = 4 << 20;
 /// Default and largest time limits of a background program.
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
+/// Longest a session (API 0.5 `sessions`) may run.
+pub const MAX_SESSION_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 /// Most items in a plugin picker.
 pub const MAX_PICKER_ITEMS: usize = 1_000_000;
 /// Most columns in a plugin picker.
@@ -332,6 +386,17 @@ pub struct Manifest {
     /// the plugin's command names. They only bind keys nothing else binds.
     #[serde(default)]
     pub keys: Option<toml::Table>,
+    /// Plugins that must load first (API 0.5 services): a missing one is a
+    /// load error.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    /// Plugins that load first when they are there.
+    #[serde(default)]
+    pub optional_dependencies: Vec<String>,
+    /// The settings the plugin takes (`[settings.<name>]`): the user's are
+    /// checked against them.
+    #[serde(default)]
+    pub settings: settings::Schema,
 }
 
 fn default_wasm() -> PathBuf {
@@ -341,20 +406,27 @@ fn default_wasm() -> PathBuf {
 impl Manifest {
     /// API 0.3 or later (plugin buffers, background tasks, popups ids, ...).
     pub fn at_least_0_3(&self) -> bool {
-        matches!(self.api.as_str(), "0.3" | "0.4")
+        matches!(self.api.as_str(), "0.3" | "0.4" | "0.5")
+    }
+
+    /// API 0.5 or later (key callbacks, hooks, services...).
+    pub fn at_least_0_5(&self) -> bool {
+        self.api == "0.5"
     }
 
     pub fn parse(source: &str) -> anyhow::Result<Self> {
         let manifest: Manifest = toml::from_str(source)?;
+        settings::check_schema(&manifest.settings)
+            .with_context(|| format!("plugin '{}'", manifest.name))?;
         if !is_valid_name(&manifest.name) {
             bail!(
                 "invalid plugin name '{}': use lowercase letters, digits, '-' and '_'",
                 manifest.name
             );
         }
-        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4") {
+        if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4" | "0.5") {
             bail!(
-                "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.4",
+                "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.5",
                 manifest.name,
                 manifest.api
             );
@@ -398,6 +470,8 @@ pub struct DocumentSnapshot {
     pub owner: Option<(String, String)>,
     /// Changes with every change to the text.
     pub revision: u64,
+    /// The language servers attached to it (API 0.5 `lsp.servers`).
+    pub language_servers: Vec<String>,
 }
 
 /// The editor state a plugin call can read.
@@ -414,6 +488,12 @@ pub struct Snapshot {
     pub registers: BTreeMap<char, Vec<String>>,
     /// The panels shown (the sidebar is the left one).
     pub panels: Vec<SidebarSnapshot>,
+    /// The completion menu, if it is open (API 0.5).
+    pub completion_menu: Option<v05::MenuState>,
+    /// The views (API 0.5).
+    pub views: Vec<v05::ViewInfo>,
+    /// What the UI shows (API 0.5).
+    pub ui: v05::UiState,
 }
 
 impl Default for Snapshot {
@@ -427,6 +507,9 @@ impl Default for Snapshot {
             config_dir: PathBuf::new(),
             registers: BTreeMap::new(),
             panels: Vec::new(),
+            completion_menu: None,
+            views: Vec::new(),
+            ui: v05::UiState::default(),
         }
     }
 }
@@ -465,6 +548,8 @@ pub enum Action {
         stdin: Option<String>,
         timeout: Duration,
         stream: bool,
+        /// A session's input, written while it runs (API 0.5 `sessions`).
+        session: Option<v05::SessionInput>,
     },
     /// Hand the terminal to a program, then deliver
     /// [`Callback::ProcessDone`].
@@ -475,6 +560,27 @@ pub enum Action {
         cwd: Option<PathBuf>,
         chooser_file: bool,
         wait_for_key: bool,
+    },
+    /// Watch `path` and deliver `events2` file changes (API 0.5).
+    Watch {
+        plugin: String,
+        id: u32,
+        path: PathBuf,
+        recursive: bool,
+    },
+    /// Stop a `Watch`.
+    Unwatch {
+        plugin: String,
+        id: u32,
+    },
+    /// Send an LSP request and deliver its reply (API 0.5).
+    LspRequest {
+        plugin: String,
+        id: u32,
+        doc: DocumentId,
+        server: Option<String>,
+        method: String,
+        params: String,
     },
     /// Kill a program started with `Spawn`.
     Kill {
@@ -492,6 +598,38 @@ pub enum Action {
     StopListen {
         plugin: String,
         id: u32,
+    },
+    /// Run command `name` (native, typable without expansion, or
+    /// "plugin/command") and deliver [`v05::Callback2::CommandDone`].
+    Execute {
+        plugin: String,
+        id: u32,
+        name: String,
+        args: Vec<String>,
+        count: Option<u32>,
+    },
+    /// Run `steps` in order, stopping at the first failure, and deliver
+    /// [`v05::Callback2::BatchDone`].
+    Batch {
+        plugin: String,
+        id: u32,
+        steps: Vec<v05::Step>,
+    },
+    /// Switch mode like the mode keys (API 0.5).
+    SetMode(Mode),
+    /// Serve a call to another plugin's service after this call, then
+    /// deliver the reply (API 0.5, [`PluginHost::serve`]).
+    ServiceCall(v05::ServiceCall),
+    /// Drive the completion menu (API 0.5). Applied in order with the other
+    /// actions: the ones after it wait until it is done.
+    CompletionMenu(v05::MenuAction),
+    /// A plugin subscribed or unsubscribed (API 0.5): what the editor asks
+    /// plugins about changed ([`PluginHost::wants`]).
+    SubscriptionsChanged,
+    /// All of `plugin`'s key bindings (API 0.5), replacing the previous set.
+    KeyBindings {
+        plugin: String,
+        bindings: Vec<v05::KeyBinding>,
     },
     /// Show a picker and deliver [`Callback::PickerDone`].
     ShowPicker {
@@ -558,6 +696,8 @@ pub enum Action {
         items: Vec<SidebarItem>,
         width: u16,
         selected: Option<usize>,
+        /// A float's height (rows) and position.
+        float: Option<(u16, v05::FloatPosition)>,
     },
     CloseSidebar {
         plugin: String,
@@ -656,6 +796,16 @@ pub enum PendingKind {
     Completion,
     Files,
     Listen,
+    /// API 0.5 `commands.execute`.
+    Command,
+    /// API 0.5 `commands.batch`.
+    Batch,
+    /// API 0.5 `services.call`.
+    Service,
+    /// API 0.5 `lsp.request`.
+    Lsp,
+    /// A watched path (API 0.5 `watch`).
+    Watch,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -752,6 +902,15 @@ enum CallContext {
 }
 
 impl CallContext {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Command => "command",
+            Self::Event => "event",
+            Self::Callback => "callback",
+        }
+    }
+
     fn allows_ui(self) -> bool {
         matches!(self, Self::Command | Self::Callback)
     }
@@ -819,6 +978,8 @@ pub struct Limits {
     pub memory: usize,
     /// Maximum time for a background task (`run-background`).
     pub background: Duration,
+    /// Maximum time for a key callback or hook (API 0.5).
+    pub hook: Duration,
 }
 
 impl Default for Limits {
@@ -829,6 +990,7 @@ impl Default for Limits {
             event: Duration::from_millis(250),
             memory: 256 << 20,
             background: BACKGROUND_LIMIT,
+            hook: Duration::from_millis(100),
         }
     }
 }
@@ -857,6 +1019,8 @@ struct State {
     /// The plugin's own directory (`data-dir`), preopened read-write.
     data_dir: Option<PathBuf>,
     starts_program: Option<fn(&str) -> bool>,
+    /// API 0.5 state: key bindings, subscriptions, services...
+    v05: v05::V05,
     /// The latest `log` lines, for `:plugin-log`.
     log: std::collections::VecDeque<String>,
 }
@@ -894,6 +1058,7 @@ impl State {
             roots: Vec::new(),
             data_dir: None,
             starts_program: None,
+            v05: Default::default(),
             log: Default::default(),
         }
     }
@@ -1192,6 +1357,7 @@ impl State {
             stdin,
             timeout,
             stream,
+            session: None,
         });
         Ok(id)
     }
@@ -1651,6 +1817,19 @@ impl State {
         width: u32,
         selected: Option<u32>,
     ) -> Result<(), String> {
+        self.show_panel(dock, title, items, width, selected, None)
+    }
+
+    /// Show a panel; `float` is a float's height and position.
+    fn show_panel(
+        &mut self,
+        dock: Dock,
+        title: String,
+        items: Vec<SidebarItem>,
+        width: u32,
+        selected: Option<u32>,
+        float: Option<(u16, v05::FloatPosition)>,
+    ) -> Result<(), String> {
         if self.context == CallContext::Init {
             return Err("a panel can't be shown from init".into());
         }
@@ -1675,6 +1854,7 @@ impl State {
         let width = match dock {
             Dock::Bottom => width.clamp(3, 40),
             Dock::Left | Dock::Right => width.clamp(12, 80),
+            Dock::Float => width.clamp(10, 200),
         } as u16;
         self.snapshot.panels.retain(|panel| panel.dock != dock);
         self.snapshot.panels.push(SidebarSnapshot {
@@ -1690,6 +1870,7 @@ impl State {
             items,
             width,
             selected: selected.map(|s| s as usize),
+            float,
         });
         Ok(())
     }
@@ -1893,6 +2074,7 @@ impl State {
             }
             Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
             Some(PendingKind::Listen) => self.actions.push(Action::StopListen { plugin, id }),
+            Some(PendingKind::Watch) => self.actions.push(Action::Unwatch { plugin, id }),
             Some(PendingKind::Completion) => self.actions.push(Action::Completions {
                 plugin,
                 id,
@@ -1903,7 +2085,14 @@ impl State {
                 self.picker_items.remove(&id);
                 self.picker_generations.remove(&id);
             }
-            Some(PendingKind::Prompt | PendingKind::Background) => {}
+            Some(
+                PendingKind::Prompt
+                | PendingKind::Background
+                | PendingKind::Command
+                | PendingKind::Batch
+                | PendingKind::Service
+                | PendingKind::Lsp,
+            ) => {}
             None => return,
         }
         self.pending.remove(&id);
@@ -2149,6 +2338,10 @@ pub struct Plugin {
     worker: Option<std::sync::mpsc::Sender<BackgroundTask>>,
     /// How long its calls took.
     timing: CallTiming,
+    /// Its settings as it was given them (JSON, defaults filled in).
+    config: String,
+    /// Log every call with its time (`:plugin-trace`).
+    trace: bool,
 }
 
 /// Calls to a plugin and their time, for `:plugin-list`.
@@ -2204,10 +2397,14 @@ fn spawn_worker(
                             v0_3::HelixPlugin::instantiate_async(&mut store, &component, &linker)
                                 .await
                                 .map(|instance| Instance::V0_3(Box::new(instance)))
-                        } else {
+                        } else if api == "0.4" {
                             v0_4::HelixPlugin::instantiate_async(&mut store, &component, &linker)
                                 .await
                                 .map(|instance| Instance::V0_4(Box::new(instance)))
+                        } else {
+                            v0_5::HelixPlugin::instantiate_async(&mut store, &component, &linker)
+                                .await
+                                .map(|instance| Instance::V0_5(Box::new(instance)))
                         }
                     });
                     match started {
@@ -2304,6 +2501,17 @@ impl Plugin {
         let result = outside_async_runtime(move || runtime.run(limit, f(guest, store)));
         drop(busy);
         let took = started.elapsed();
+        if self.trace {
+            let state = self.store.data_mut();
+            let message = format!(
+                "trace: {} call, {:.3} ms, {} actions{}",
+                context.as_str(),
+                took.as_secs_f64() * 1000.0,
+                state.actions.len(),
+                if result.is_err() { ", failed" } else { "" }
+            );
+            state.log(message);
+        }
         self.timing.calls += 1;
         self.timing.total += took;
         self.timing.slowest = self.timing.slowest.max(took);
@@ -2325,6 +2533,7 @@ impl Plugin {
                     _ => format!("it crashed: {err:#}"),
                 };
                 log::error!("plugin '{}' disabled: {reason}", self.manifest.name);
+                state.v05.alive.store(false, Ordering::Relaxed);
                 self.disabled = Some(reason.clone());
                 Err(anyhow!(
                     "plugin '{}' was disabled because {reason}",
@@ -2395,6 +2604,11 @@ pub struct PluginHost {
     /// Whether an editor command starts a program (see
     /// [`PluginHost::set_program_check`]).
     starts_program: Option<fn(&str) -> bool>,
+    /// What the editor provides to 0.5 calls (see
+    /// [`PluginHost::set_editor_fns`]).
+    editor_fns: v05::EditorFns,
+    /// Every plugin's marks (API 0.5), moved by the editor's edits.
+    marks: v05::SharedMarks,
     ticker: Arc<Ticker>,
     runtime: Arc<CallRuntime>,
 }
@@ -2496,6 +2710,7 @@ impl PluginHost {
         v0_2::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_3::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         v0_4::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        v0_5::HelixPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
 
         let runtime = Arc::new(CallRuntime::new()?);
         let ticker = Ticker::start(&engine)?;
@@ -2509,6 +2724,8 @@ impl PluginHost {
             workspace: None,
             data_root: None,
             starts_program: None,
+            editor_fns: v05::EditorFns::default(),
+            marks: Default::default(),
             ticker,
             runtime,
         })
@@ -2544,6 +2761,14 @@ impl PluginHost {
 
     /// Remove all plugins.
     pub fn clear(&mut self) {
+        for plugin in &self.plugins {
+            plugin
+                .store
+                .data()
+                .v05
+                .alive
+                .store(false, Ordering::Relaxed);
+        }
         self.plugins.clear();
     }
 
@@ -2560,6 +2785,21 @@ impl PluginHost {
     /// Applies to plugins loaded afterwards.
     pub fn set_program_check(&mut self, starts_program: fn(&str) -> bool) {
         self.starts_program = Some(starts_program);
+    }
+
+    /// What the editor provides to API 0.5 calls (key checks, the command
+    /// list). Applies to plugins loaded afterwards.
+    /// The marks, for the editor to move with every edit
+    /// ([`v05::Marks::map`]).
+    pub fn marks(&self) -> v05::SharedMarks {
+        self.marks.clone()
+    }
+
+    pub fn set_editor_fns(&mut self, fns: v05::EditorFns) {
+        self.editor_fns = fns;
+        for plugin in &mut self.plugins {
+            plugin.store.data_mut().v05.editor = fns;
+        }
     }
 
     /// The workspace plugins with `allow-files` were given (see `set_dirs`).
@@ -2587,7 +2827,7 @@ impl PluginHost {
             .filter(|path| path.join("plugin.toml").is_file())
             .collect();
         dirs.sort();
-        let mut enabled = Vec::new();
+        let mut enabled: Vec<(PathBuf, Manifest, PluginSettings)> = Vec::new();
         for dir in dirs {
             let manifest = match read_manifest(&dir) {
                 Ok(manifest) => manifest,
@@ -2600,6 +2840,10 @@ impl PluginHost {
                 enabled.push((dir, manifest, settings));
             }
         }
+        // Dependencies first.
+        let (enabled, mut dependency_errors) =
+            v05::dependency_order(enabled, |name| self.plugin(name).is_some());
+        errors.append(&mut dependency_errors);
         // Compiling (on a cold cache) is the slow part: do it in parallel,
         // a few at a time, then load in order.
         let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
@@ -2713,6 +2957,21 @@ impl PluginHost {
         if self.plugin(&name).is_some() {
             bail!("plugin '{name}' is already loaded");
         }
+        // A reloaded plugin starts without marks.
+        self.marks
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove_plugin(&name);
+        let config = settings::apply(&name, &manifest.settings, &settings.config)?;
+        for dependency in &manifest.dependencies {
+            if !self
+                .plugins
+                .iter()
+                .any(|p| &p.manifest.name == dependency && p.disabled.is_none())
+            {
+                bail!("plugin '{name}' needs plugin '{dependency}', which isn't loaded");
+            }
+        }
         let component = component.with_context(|| {
             format!(
                 "failed to load plugin '{name}' from {}",
@@ -2751,6 +3010,13 @@ impl PluginHost {
                 .collect(),
             data_dir,
             starts_program: self.starts_program,
+            v05: v05::V05 {
+                key_override: settings.key_override,
+                lsp: settings.lsp,
+                editor: self.editor_fns,
+                marks: self.marks.clone(),
+                ..Default::default()
+            },
             log: Default::default(),
         };
         let mut store = Store::new(&self.engine, state);
@@ -2775,6 +3041,9 @@ impl PluginHost {
                     "0.4" => v0_4::HelixPlugin::instantiate_async(&mut store, &component, linker)
                         .await
                         .map(|instance| Instance::V0_4(Box::new(instance))),
+                    "0.5" => v0_5::HelixPlugin::instantiate_async(&mut store, &component, linker)
+                        .await
+                        .map(|instance| Instance::V0_5(Box::new(instance))),
                     _ => unreachable!("manifest API was validated"),
                 }
             })
@@ -2795,8 +3064,9 @@ impl PluginHost {
             component: component.clone(),
             worker: None,
             timing: CallTiming::default(),
+            config: config.clone(),
+            trace: false,
         };
-        let config = settings.config;
         let (registration, actions) = plugin.call(
             Snapshot::default(),
             CallContext::Init,
@@ -2817,6 +3087,7 @@ impl PluginHost {
         plugin.events = events;
         plugin.events.dedup();
         self.plugins.push(plugin);
+        self.refresh_shared();
         Ok(actions)
     }
 
@@ -2861,6 +3132,7 @@ impl PluginHost {
         let picker_items = plugin.store.data().picker_items.clone();
         let picker_generations = plugin.store.data().picker_generations.clone();
         let streaming = plugin.store.data().streaming.clone();
+        let key_bindings = plugin.store.data().v05.key_bindings.clone();
         let command_name = command.to_owned();
         let (result, actions) = plugin.call(
             snapshot,
@@ -2875,9 +3147,38 @@ impl PluginHost {
             plugin.store.data_mut().picker_items = picker_items;
             plugin.store.data_mut().picker_generations = picker_generations;
             plugin.store.data_mut().streaming = streaming;
+            plugin.store.data_mut().v05.key_bindings = key_bindings;
             bail!("{name}/{command}: {err}");
         }
         Ok(actions)
+    }
+
+    /// A key bound by `plugin` with `keymaps.set` was pressed (API 0.5): call
+    /// its `on-key` like a command, within the hook budget. A disabled
+    /// plugin, or one that fails, passes the keys through.
+    pub fn key(
+        &mut self,
+        plugin: &str,
+        name: &str,
+        keys: &str,
+        count: Option<u32>,
+        snapshot: Snapshot,
+    ) -> anyhow::Result<(v05::KeyOutcome, Vec<Action>)> {
+        let limit = self.limits.hook;
+        let plugin = self
+            .plugins
+            .iter_mut()
+            .find(|p| p.manifest.name == plugin)
+            .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
+        let (name, keys) = (name.to_owned(), keys.to_owned());
+        plugin.call(
+            snapshot,
+            CallContext::Command,
+            limit,
+            move |guest, store| {
+                Box::pin(async move { guest.call_key(store, &name, &keys, count).await })
+            },
+        )
     }
 
     /// Reserve a result id for an API 0.2 or newer host operation, as the host
@@ -2889,7 +3190,7 @@ impl PluginHost {
             .iter_mut()
             .find(|p| p.name() == plugin)
             .ok_or_else(|| anyhow!("no plugin named '{plugin}'"))?;
-        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4")
+        if !matches!(plugin.manifest.api.as_str(), "0.2" | "0.3" | "0.4" | "0.5")
             || plugin.disabled.is_some()
         {
             bail!("requests require an enabled API 0.2 or newer plugin");
@@ -3072,7 +3373,7 @@ impl PluginHost {
     pub fn subscribers(&self, kind: EventKind) -> Vec<String> {
         self.plugins
             .iter()
-            .filter(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .filter(|plugin| plugin.disabled.is_none() && plugin.subscribed(kind))
             .map(|plugin| plugin.manifest.name.clone())
             .collect()
     }
@@ -3086,8 +3387,12 @@ impl PluginHost {
         event: Event,
         snapshot: &Snapshot,
     ) -> Option<anyhow::Result<Vec<Action>>> {
-        let kind = event.kind();
-        self.dispatch_if(plugin, event, snapshot, |p| p.events.contains(&kind))
+        let wanted = |p: &Plugin| p.wants_event(&event, snapshot);
+        let wanted = self
+            .plugins
+            .iter()
+            .any(|p| p.manifest.name == plugin && wanted(p));
+        self.dispatch_if(plugin, event, snapshot, |_| wanted)
     }
 
     /// [`Self::dispatch_to`] whether or not the plugin subscribed (e.g. the
@@ -3196,7 +3501,7 @@ impl PluginHost {
     pub fn wants(&self, kind: EventKind) -> bool {
         self.plugins
             .iter()
-            .any(|plugin| plugin.disabled.is_none() && plugin.events.contains(&kind))
+            .any(|plugin| plugin.disabled.is_none() && plugin.subscribed(kind))
     }
 }
 

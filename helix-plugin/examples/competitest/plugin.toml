@@ -1,6 +1,6 @@
 name = "competitest"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Run a competitive programming solution against its testcases, like competitest.nvim"
 permissions = ["read-buffers", "open-files", "process", "filesystem", "listen"]
 wasm = "plugin.wasm"

@@ -43,6 +43,7 @@ name = "pure"
 path = "src/main.rs"
 
 [dependencies]
+slotmap.workspace = true
 helix-stdx = { path = "../helix-stdx" }
 helix-core = { path = "../helix-core" }
 helix-event = { path = "../helix-event" }
@@ -92,6 +93,7 @@ dashmap = "6.2"
 
 parking_lot.workspace = true
 trash = { version = "5.2.9", default-features = false, optional = true }
+notify = "8"
 
 [target.'cfg(windows)'.dependencies]
 crossterm = { version = "0.28", features = ["event-stream"] }

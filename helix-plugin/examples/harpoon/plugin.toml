@@ -1,6 +1,6 @@
 name = "harpoon"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Mark the files you work on and jump to them, like harpoon"
 permissions = ["read-buffers", "edit-buffers", "open-files", "run-commands"]
 wasm = "plugin.wasm"

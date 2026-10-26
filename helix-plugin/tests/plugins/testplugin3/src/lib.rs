@@ -1,5 +1,6 @@
-//! A direct-bindings fixture for the API 0.3 world, independent of the SDK.
-wit_bindgen::generate!({ path: "../../../wit/v0.4", world: "helix-plugin" });
+//! A direct-bindings fixture for the current API world (0.5), independent
+//! of the SDK.
+wit_bindgen::generate!({ path: "../../../wit/v0.5", world: "helix-plugin" });
 use helix::plugin::{host, types};
 use std::cell::{Cell, RefCell};
 thread_local! {
@@ -12,6 +13,11 @@ thread_local! {
     /// Counted in the instance that runs: the background one has its own.
     static RUNS: Cell<u32> = const { Cell::new(0) };
     static SNIPPETS: Cell<bool> = const { Cell::new(false) };
+    /// Hooks answer `cancel` while set.
+    static CANCEL_COMMANDS: Cell<bool> = const { Cell::new(false) };
+    static CANCEL_SAVES: Cell<bool> = const { Cell::new(false) };
+    /// The settings from `init` (or the last config change).
+    static CONFIG: RefCell<String> = const { RefCell::new(String::new()) };
 }
 fn item(text: &str) -> helix::plugin::ui::Item {
     helix::plugin::ui::Item {
@@ -24,9 +30,94 @@ fn record(event: String) {
     host::log(&format!("event:{event}"));
     EVENTS.with_borrow_mut(|events| events.push(event));
 }
+fn menu_status() -> String {
+    match helix::plugin::completion_menu::state() {
+        Some(menu) => format!(
+            "menu:{}:{:?}:{}",
+            menu.items.join(","),
+            menu.selected,
+            menu.previewing
+        ),
+        None => "menu:none".into(),
+    }
+}
+fn mode_arg(mode: &str) -> Result<types::Mode, String> {
+    Ok(match mode {
+        "normal" => types::Mode::Normal,
+        "insert" => types::Mode::Insert,
+        "select" => types::Mode::Select,
+        _ => return Err(format!("no mode {mode}")),
+    })
+}
+fn bind(args: &[String]) -> Result<(), String> {
+    use helix::plugin::keymaps::{set, Binding, Layer};
+    let [layer, name, mode, rest @ ..] = args else {
+        return Err("bind <layer> <name> <mode> <keys...>".into());
+    };
+    let layer = match layer.as_str() {
+        "override" => Layer::Override,
+        "plugin" => Layer::Plugin,
+        "fallback" => Layer::Fallback,
+        _ => return Err(format!("no layer {layer}")),
+    };
+    let mut keys = Vec::new();
+    let mut language = None;
+    let mut document = None;
+    let mut rest = rest.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "@lang" => language = rest.next().cloned(),
+            "@doc" => document = host::current_document(),
+            key => keys.push(key.to_string()),
+        }
+    }
+    set(&Binding {
+        mode: mode_arg(mode)?,
+        keys: keys.join(" "),
+        name: name.clone(),
+        description: format!("test binding {name}"),
+        layer,
+        document,
+        language,
+    })
+}
 struct TestPlugin;
 impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn init(config: String) -> Result<types::Registration, String> {
+        CONFIG.with_borrow_mut(|c| *c = config.clone());
+        if config.contains("subscribe-config") {
+            use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+            let filter = Filter {
+                language: None,
+                path_glob: None,
+                document: None,
+                commands: Vec::new(),
+            };
+            subscribe(EventType::ConfigChange, &filter)?;
+        }
+        if config.contains("subscribe-plugins") {
+            use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+            let filter = Filter {
+                language: None,
+                path_glob: None,
+                document: None,
+                commands: Vec::new(),
+            };
+            subscribe(EventType::PluginChange, &filter)?;
+            subscribe(EventType::Shutdown, &filter)?;
+        }
+        if config.contains("provide-echo") {
+            helix::plugin::services::register("echo", "1.2.3", &[])?;
+        }
+        if config.contains("provide-private") {
+            helix::plugin::services::register("private", "1.0.0", &["testplugin3".to_string()])?;
+        }
+        if config.contains("provide-bad") {
+            helix::plugin::services::register("Bad Name", "1.0.0", &[])?;
+        }
+        if config.contains("bind-in-init") {
+            bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
+        }
         POPUP_ON_OPEN.set(config.contains("popup-on-open"));
         SNIPPETS.set(config.contains("snippets"));
         Ok(types::Registration {
@@ -70,6 +161,39 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "registers",
                 "read-clipboard",
                 "files",
+                "bind",
+                "unbind",
+                "list-keys",
+                "fail-after-bind",
+                "subscribe",
+                "unsubscribe",
+                "menu-state",
+                "exec",
+                "batch",
+                "set-mode",
+                "views",
+                "ui-state",
+                "count-commands",
+                "call",
+                "discover",
+                "register-late",
+                "mark",
+                "marks",
+                "unmark",
+                "vlines",
+                "patch-hl",
+                "patch-ann",
+                "float",
+                "float-close",
+                "float-selected",
+                "session",
+                "session-write",
+                "session-close",
+                "progress",
+                "watch",
+                "lsp-servers",
+                "lsp-request",
+                "config",
             ]
             .into_iter()
             .map(|name| types::CommandInfo {
@@ -323,6 +447,347 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 helix::plugin::timers::cancel_timer(id);
                 Ok(())
             }
+            // bind <layer> <name> <mode> <keys...> [@lang <language>] [@doc]
+            "bind" => bind(&args),
+            "unbind" => {
+                let mode = mode_arg(args.first().map(String::as_str).unwrap_or("normal"))?;
+                let doc = args.iter().any(|a| a == "@doc").then(|| host::current_document()).flatten();
+                let keys: Vec<&str> = args[1..].iter().map(String::as_str).filter(|a| *a != "@doc").collect();
+                helix::plugin::keymaps::unset(mode, &keys.join(" "), doc)
+            }
+            "list-keys" => {
+                let keys: Vec<String> = helix::plugin::keymaps::list()
+                    .into_iter()
+                    .map(|b| format!("{}={}", b.keys, b.name))
+                    .collect();
+                host::set_status(&format!("keys:{}", keys.join(",")));
+                Ok(())
+            }
+            // A binding made by a command that fails is dropped.
+            "fail-after-bind" => {
+                bind(&["plugin".into(), "doomed".into(), "normal".into(), "C-y".into()])?;
+                Err("failing on purpose".into())
+            }
+            // subscribe <event> [@lang l] [@glob g] [@doc] [@cmd c]...
+            "subscribe" => {
+                use helix::plugin::subscriptions::{subscribe, EventType, Filter};
+                let event = match args.first().map(String::as_str) {
+                    Some("document-change") => EventType::DocumentChange,
+                    Some("document-save") => EventType::DocumentSave,
+                    Some("post-command") => EventType::PostCommand,
+                    Some("buffer-enter") => EventType::BufferEnter,
+                    Some("buffer-leave") => EventType::BufferLeave,
+                    Some("view-enter") => EventType::ViewEnter,
+                    Some("view-leave") => EventType::ViewLeave,
+                    Some("completion-menu") => EventType::CompletionMenu,
+                    Some("config-change") => EventType::ConfigChange,
+                    Some("plugin-change") => EventType::PluginChange,
+                    Some("shutdown") => EventType::Shutdown,
+                    Some("pre-command") => EventType::PreCommand,
+                    Some("pre-save") => EventType::PreSave,
+                    other => return Err(format!("no event {other:?}")),
+                };
+                let mut filter = Filter {
+                    language: None,
+                    path_glob: None,
+                    document: None,
+                    commands: Vec::new(),
+                };
+                let mut rest = args[1..].iter();
+                while let Some(arg) = rest.next() {
+                    match arg.as_str() {
+                        "@lang" => filter.language = rest.next().cloned(),
+                        "@glob" => filter.path_glob = rest.next().cloned(),
+                        "@doc" => filter.document = host::current_document(),
+                        "@cmd" => filter.commands.extend(rest.next().cloned()),
+                        "@cancel-commands" => CANCEL_COMMANDS.set(true),
+                        "@cancel-saves" => CANCEL_SAVES.set(true),
+                        other => return Err(format!("unknown filter {other}")),
+                    }
+                }
+                let id = subscribe(event, &filter)?;
+                host::set_status(&format!("subscribed:{id}"));
+                Ok(())
+            }
+            "unsubscribe" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::subscriptions::unsubscribe(id);
+                Ok(())
+            }
+            "menu-state" => {
+                host::set_status(&menu_status());
+                Ok(())
+            }
+            "exec" => {
+                // exec [#count] name args...
+                let (count, rest) = match args.first().and_then(|arg| arg.strip_prefix('#')) {
+                    Some(count) => (Some(count.parse().map_err(|_| "a count")?), &args[1..]),
+                    None => (None, &args[..]),
+                };
+                let (name, args) = rest.split_first().ok_or("a command")?;
+                let id = helix::plugin::commands::execute(name, args, count)?;
+                host::set_status(&format!("executing:{id}"));
+                Ok(())
+            }
+            "batch" => {
+                // batch name args... ; mode:insert ; ...
+                use helix::plugin::commands::Step;
+                let steps = args
+                    .split(|arg| arg == ";")
+                    .map(|step| match step {
+                        [mode] if mode.starts_with("mode:") => Step::SetMode(match &mode[5..] {
+                            "insert" => types::Mode::Insert,
+                            "select" => types::Mode::Select,
+                            _ => types::Mode::Normal,
+                        }),
+                        [name, args @ ..] => Step::Command((name.clone(), args.to_vec(), None)),
+                        [] => Step::Command((String::new(), Vec::new(), None)),
+                    })
+                    .collect::<Vec<_>>();
+                let id = helix::plugin::commands::batch(&steps)?;
+                host::set_status(&format!("batching:{id}"));
+                Ok(())
+            }
+            "set-mode" => {
+                let mode = match args.first().map(String::as_str) {
+                    Some("insert") => types::Mode::Insert,
+                    Some("select") => types::Mode::Select,
+                    _ => types::Mode::Normal,
+                };
+                helix::plugin::commands::set_mode(mode)
+            }
+            "views" => {
+                let views = helix::plugin::state::views()
+                    .iter()
+                    .map(|view| {
+                        format!(
+                            "{}:{}:{}x{}:{}-{}{}",
+                            view.id,
+                            view.document,
+                            view.area.width,
+                            view.area.height,
+                            view.first_line,
+                            view.last_line,
+                            if view.focused { "*" } else { "" }
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                host::set_status(&format!("views:{}", views.join(",")));
+                Ok(())
+            }
+            "ui-state" => {
+                let ui = helix::plugin::state::ui();
+                host::set_status(&format!(
+                    "ui:{:?}:menu={}:prompt={}:picker={}:popup={}:panel={:?}:keys={}",
+                    ui.mode, ui.completion_menu, ui.prompt, ui.picker, ui.popup, ui.focused_panel, ui.pending_keys
+                ));
+                Ok(())
+            }
+            "call" => {
+                let [service, version, method, payload] = &args[..] else {
+                    return Err("service version method payload".into());
+                };
+                let id = helix::plugin::services::call(service, version, method, payload)?;
+                host::set_status(&format!("calling:{id}"));
+                Ok(())
+            }
+            "discover" => {
+                let found = helix::plugin::services::discover(args.first().ok_or("a name")?)
+                    .iter()
+                    .map(|s| format!("{}.{}@{}", s.plugin, s.name, s.version))
+                    .collect::<Vec<_>>();
+                host::set_status(&format!("discovered:{}", found.join(",")));
+                Ok(())
+            }
+            "register-late" => helix::plugin::services::register("late", "1.0.0", &[]),
+            "mark" => {
+                // mark position before|after
+                use helix::plugin::marks::Gravity;
+                let doc = host::current_document().ok_or("no document")?;
+                let pos = args.first().and_then(|p| p.parse().ok()).ok_or("a position")?;
+                let gravity = match args.get(1).map(String::as_str) {
+                    Some("after") => Gravity::After,
+                    _ => Gravity::Before,
+                };
+                let id = helix::plugin::marks::set(doc, pos, gravity)?;
+                host::set_status(&format!("mark:{id}"));
+                Ok(())
+            }
+            "marks" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let marks = helix::plugin::marks::list(doc)
+                    .iter()
+                    .map(|(id, pos)| format!("{id}@{pos}"))
+                    .collect::<Vec<_>>();
+                let first = args
+                    .first()
+                    .and_then(|id| id.parse().ok())
+                    .map(|id| format!("{:?}", helix::plugin::marks::get(id).map(|(_, pos)| pos)))
+                    .unwrap_or_default();
+                host::set_status(&format!("marks:{}:{first}", marks.join(",")));
+                Ok(())
+            }
+            "unmark" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::marks::remove(id);
+                Ok(())
+            }
+            "vlines" => {
+                // vlines line text [line text...]
+                use helix::plugin::decorations2::VirtualLine;
+                let doc = host::current_document().ok_or("no document")?;
+                let lines = args
+                    .chunks(2)
+                    .map(|pair| VirtualLine {
+                        line: pair[0].parse().unwrap_or(0),
+                        text: pair.get(1).cloned().unwrap_or_default(),
+                        scope: "comment".into(),
+                    })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::set_virtual_lines(doc, "rows", &lines)
+            }
+            "patch-hl" => {
+                // patch-hl from to [start end...]
+                use helix::plugin::decorations::Highlight;
+                let doc = host::current_document().ok_or("no document")?;
+                let n: Vec<u32> = args.iter().filter_map(|a| a.parse().ok()).collect();
+                let highlights = n[2..]
+                    .chunks(2)
+                    .map(|pair| Highlight { from: pair[0], to: pair[1], scope: "error".into() })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::patch_highlights(doc, "hl", n[0], n[1], &highlights)
+            }
+            "patch-ann" => {
+                // patch-ann from to [pos text...]
+                use helix::plugin::decorations::Annotation;
+                let doc = host::current_document().ok_or("no document")?;
+                let (from, to) = (args[0].parse().unwrap_or(0), args[1].parse().unwrap_or(0));
+                let annotations = args[2..]
+                    .chunks(2)
+                    .map(|pair| Annotation {
+                        position: pair[0].parse().unwrap_or(0),
+                        text: pair[1].clone(),
+                        scope: "comment".into(),
+                    })
+                    .collect::<Vec<_>>();
+                helix::plugin::decorations2::patch_annotations(doc, "ann", from, to, &annotations)
+            }
+            "float" => {
+                use helix::plugin::floats::{Float, Position};
+                let items = args
+                    .iter()
+                    .skip(1)
+                    .map(|text| helix::plugin::sidebar::SidebarItem {
+                        text: text.clone(),
+                        scope: String::new(),
+                        depth: 0,
+                        command: Some("float-selected".into()),
+                        args: vec![text.clone()],
+                    })
+                    .collect();
+                helix::plugin::floats::show(&Float {
+                    title: args.first().cloned().unwrap_or_default(),
+                    items,
+                    width: 30,
+                    height: 6,
+                    position: Position::Center,
+                    selected: Some(0),
+                    focus: true,
+                })
+            }
+            "session" => {
+                let id = helix::plugin::sessions::start(
+                    &args,
+                    &helix::plugin::process::SpawnOptions {
+                        cwd: None,
+                        stdin: None,
+                        timeout_ms: None,
+                        stream: true,
+                    },
+                )?;
+                host::set_status(&format!("session:{id}"));
+                Ok(())
+            }
+            "session-write" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                // "big:N" writes N bytes.
+                let data = match args.get(1).and_then(|a| a.strip_prefix("big:")) {
+                    Some(n) => "x".repeat(n.parse().unwrap_or(0)),
+                    None => format!("{}\n", args[1..].join(" ")),
+                };
+                helix::plugin::sessions::write(id, &data)
+            }
+            "session-close" => {
+                let id = args.first().and_then(|id| id.parse().ok()).ok_or("an id")?;
+                helix::plugin::sessions::close_input(id)
+            }
+            "progress" => {
+                // progress title message percent: begins, reports; "end" ends
+                // the last one.
+                use helix::plugin::progress;
+                thread_local! { static TOKEN: Cell<u32> = const { Cell::new(0) }; }
+                match args.first().map(String::as_str) {
+                    Some("end") => progress::end(TOKEN.get()),
+                    Some(title) => {
+                        let token = progress::begin(title);
+                        TOKEN.set(token);
+                        if let Some(message) = args.get(1) {
+                            progress::report(token, message, args.get(2).and_then(|p| p.parse().ok()));
+                        }
+                    }
+                    None => return Err("a title".into()),
+                }
+                Ok(())
+            }
+            "watch" => {
+                let id = helix::plugin::watch::add(args.first().ok_or("a path")?, args.get(1).is_some())?;
+                host::set_status(&format!("watching:{id}"));
+                Ok(())
+            }
+            "lsp-servers" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let servers = helix::plugin::lsp::servers(doc)?;
+                host::set_status(&format!("servers:{}", servers.join(",")));
+                Ok(())
+            }
+            "lsp-request" => {
+                let doc = host::current_document().ok_or("no document")?;
+                let id = helix::plugin::lsp::request(doc, None, &args[0], args.get(1).map_or("null", String::as_str))?;
+                host::set_status(&format!("lsp:{id}"));
+                Ok(())
+            }
+            "config" => {
+                host::set_status(&format!("config:{}", CONFIG.with_borrow(|c| c.clone())));
+                Ok(())
+            }
+            "float-close" => {
+                helix::plugin::floats::close();
+                Ok(())
+            }
+            "float-selected" => {
+                host::set_status(&format!(
+                    "float-selected:{:?}:{}",
+                    helix::plugin::floats::selected(),
+                    args.join(",")
+                ));
+                Ok(())
+            }
+            "count-commands" => {
+                use helix::plugin::commands::CommandKind;
+                let commands = helix::plugin::commands::list();
+                let count = |kind: CommandKind| commands.iter().filter(|command| command.kind == kind).count();
+                let has = |name: &str| commands.iter().any(|command| command.name == name);
+                host::set_status(&format!(
+                    "commands:native={}:typable={}:plugin={}:{}:{}:{}",
+                    count(CommandKind::Native) > 0,
+                    count(CommandKind::Typable) > 0,
+                    count(CommandKind::Plugin) > 0,
+                    has("move_char_left"),
+                    has("write"),
+                    has("testplugin3/exec"),
+                ));
+                Ok(())
+            }
             "caps" => {
                 host::set_status(&format!("caps:{}", helix::plugin::requests::capabilities().join(",")));
                 Ok(())
@@ -403,7 +868,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             host::set_status(&format!("v3-open:{doc}"));
         }
     }
-    fn on_document_change(_doc: u32) {}
+    fn on_document_change(doc: u32) {
+        record(format!("change:{doc}"));
+    }
     fn on_mode_switch(_old: types::Mode, _new: types::Mode) {}
 }
 impl exports::helix::plugin::callbacks::Guest for TestPlugin {
@@ -537,6 +1004,152 @@ impl exports::helix::plugin::background::Guest for TestPlugin {
             },
             _ => Err(format!("unknown task {task}")),
         }
+    }
+}
+
+impl exports::helix::plugin::hooks::Guest for TestPlugin {
+    fn on_key(
+        name: String,
+        keys: String,
+        count: Option<u32>,
+    ) -> exports::helix::plugin::hooks::KeyOutcome {
+        use exports::helix::plugin::hooks::KeyOutcome;
+        record(format!("key:{name}:{keys}:{count:?}"));
+        host::set_status(&format!("key:{name}:{keys}:{count:?}"));
+        // Keys driving the completion menu.
+        if let Some(action) = name.strip_prefix("menu-") {
+            use helix::plugin::completion_menu as menu;
+            let before = menu_status();
+            let result = match action {
+                "next" => menu::next(),
+                "previous" => menu::previous(),
+                "confirm" => menu::confirm(),
+                "abort" => menu::abort(),
+                "close" => menu::close(),
+                "select-1" => menu::select(Some(1)),
+                "select-none" => menu::select(None),
+                "select-9" => menu::select(Some(9)),
+                _ => Ok(()),
+            };
+            let status = format!("{before}|{result:?}");
+            record(status.clone());
+            host::set_status(&status);
+            return KeyOutcome::Handled;
+        }
+        // Keys may edit and open UI, like a command.
+        if name.starts_with("edit") {
+            if let Some(doc) = host::current_document() {
+                let _ = host::apply_edits(doc, &[types::Edit { from: 0, to: 0, text: "K".into() }]);
+            }
+        }
+        if name.starts_with("pick") {
+            let _ = helix::plugin::ui::show_picker(&helix::plugin::ui::Picker {
+                title: "keys".into(),
+                columns: vec!["Name".into()],
+                items: vec![item("one")],
+                initial: None,
+                live: false,
+            });
+        }
+        if name.starts_with("spin") {
+            loop {
+                std::hint::spin_loop();
+            }
+        }
+        if name.starts_with("pass") {
+            KeyOutcome::PassThrough
+        } else {
+            KeyOutcome::Handled
+        }
+    }
+    fn on_pre_command(command: String) -> exports::helix::plugin::hooks::HookOutcome {
+        use exports::helix::plugin::hooks::HookOutcome;
+        record(format!("pre-command:{command}"));
+        if CANCEL_COMMANDS.get() {
+            HookOutcome::Cancel(format!("no {command}"))
+        } else {
+            HookOutcome::Proceed
+        }
+    }
+    fn on_pre_save(doc: u32) -> exports::helix::plugin::hooks::HookOutcome {
+        use exports::helix::plugin::hooks::HookOutcome;
+        record(format!("pre-save:{doc}"));
+        if CANCEL_SAVES.get() {
+            return HookOutcome::Cancel("not now".into());
+        }
+        // Saved with the document: a trailing marker.
+        if let Ok(text) = host::text(doc) {
+            if !text.ends_with("// saved\n") && text.contains("mark-on-save") {
+                let end = text.chars().count() as u32;
+                let _ = host::apply_edits(
+                    doc,
+                    &[types::Edit {
+                        from: end,
+                        to: end,
+                        text: "// saved\n".into(),
+                    }],
+                );
+            }
+        }
+        HookOutcome::Proceed
+    }
+    fn on_service_call(
+        caller: String,
+        service: String,
+        method: String,
+        payload: String,
+    ) -> Result<String, String> {
+        record(format!("service:{caller}:{service}:{method}:{payload}"));
+        match method.as_str() {
+            "echo" => Ok(payload),
+            "fail" => Err("failed on purpose".into()),
+            "bad-json" => Ok("not json".into()),
+            "slow" => loop {
+                std::hint::black_box(());
+            },
+            // Call the first service the payload (a JSON string of
+            // space-separated services) names, passing on the rest.
+            "relay" => {
+                let mut targets = payload.trim_matches('"').split_whitespace();
+                let Some(target) = targets.next() else {
+                    return Ok("\"end\"".into());
+                };
+                let rest = format!("\"{}\"", targets.collect::<Vec<_>>().join(" "));
+                let id = helix::plugin::services::call(target, "1.0.0", "relay", &rest)?;
+                Ok(format!("\"relayed:{id}\""))
+            }
+            _ => Err(format!("no method {method}")),
+        }
+    }
+}
+impl exports::helix::plugin::events2::Guest for TestPlugin {
+    fn on_event(event: exports::helix::plugin::events2::Event) {
+        if let exports::helix::plugin::events2::Event::ConfigChange(config) = &event {
+            CONFIG.with_borrow_mut(|c| *c = config.clone());
+        }
+        record(format!("e2:{event:?}"));
+    }
+}
+impl exports::helix::plugin::callbacks2::Guest for TestPlugin {
+    fn on_command_done(id: u32, result: Result<(), String>) {
+        let status = format!("command-done:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_batch_done(id: u32, results: Vec<Result<(), String>>) {
+        let status = format!("batch-done:{id}:{results:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_service_reply(id: u32, result: Result<String, String>) {
+        let status = format!("service-reply:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
+    }
+    fn on_lsp_reply(id: u32, result: Result<String, String>) {
+        let status = format!("lsp-reply:{id}:{result:?}");
+        record(status.clone());
+        host::set_status(&status);
     }
 }
 

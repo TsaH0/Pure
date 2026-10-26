@@ -392,6 +392,10 @@ fn write_impl(
         let doc_id = doc!(cx.editor).id();
         return crate::plugins::write_buffer(cx.editor, cx.jobs, doc_id);
     }
+    // Plugins hooked to saving may edit the document, or cancel.
+    let doc_id = doc!(cx.editor).id();
+    crate::plugins::pre_save(cx.editor, cx.jobs, doc_id)
+        .map_err(|reason| anyhow!("saving cancelled by {reason}"))?;
     let config = cx.editor.config();
     let (view, doc) = current!(cx.editor);
     let doc_id = doc.id();
@@ -910,6 +914,10 @@ pub fn write_all_impl(
     }
 
     for (doc_id, target_view) in saves {
+        if let Err(reason) = crate::plugins::pre_save(cx.editor, cx.jobs, doc_id) {
+            cx.editor.set_error(format!("saving cancelled by {reason}"));
+            continue;
+        }
         let doc = doc_mut!(cx.editor, &doc_id);
         let view = view_mut!(cx.editor, target_view);
 
@@ -3072,6 +3080,122 @@ fn plugin_list(
     Ok(())
 }
 
+/// A key binding of a plugin (API 0.5 `keymaps`), run from a command
+/// sequence or the palette: the plugin can't pass these keys through.
+fn plugin_key(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let (plugin, name) = (args[0].to_string(), args[1].to_string());
+    let bindings = crate::keymap::plugin_layers::bindings();
+    let keys = bindings
+        .iter()
+        .find(|binding| binding.plugin == plugin && binding.name == name)
+        .map(|binding| {
+            let keys: Vec<String> = binding.keys.iter().map(|key| key.to_string()).collect();
+            keys.join(" ")
+        })
+        .ok_or_else(|| anyhow!("plugin '{plugin}' has no key binding '{name}'"))?;
+    crate::plugins::key(cx.editor, cx.jobs, &plugin, &name, &keys, None);
+    Ok(())
+}
+
+/// `:plugin-keys`: the plugins' key bindings, their layers and what they
+/// shadow or what shadows them.
+fn plugin_doctor(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let report = crate::plugins::doctor();
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let keys = compositor
+                    .find::<ui::EditorView>()
+                    .map(|view| view.keymaps.plugin_report())
+                    .unwrap_or_default();
+                let mut contents = format!("# Plugin doctor\n\n{report}");
+                if !keys.is_empty() {
+                    contents.push_str(&format!(
+                        "## Key bindings and conflicts\n\n```\n{}\n```\n",
+                        keys.join("\n")
+                    ));
+                }
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugin-doctor", contents).auto_close(true);
+                compositor.replace_or_push("plugin-doctor", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
+fn plugin_trace(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    // [plugin] [on|off]
+    let (plugin, on) = match (args.first(), args.get(1)) {
+        (Some("off"), None) => (None, false),
+        (Some("on") | None, None) => (None, true),
+        (Some(plugin), None) => (Some(plugin), true),
+        (Some(plugin), Some("on")) => (Some(plugin), true),
+        (Some(plugin), Some("off")) => (Some(plugin), false),
+        (_, Some(other)) => bail!("expected on or off, not '{other}'"),
+    };
+    let count = crate::plugins::set_trace(plugin, on);
+    if count == 0 {
+        bail!("no such plugin loaded");
+    }
+    let what = if on { "Tracing" } else { "Stopped tracing" };
+    cx.editor.set_status(format!(
+        "{what} {count} plugin(s): every call and its time go to :plugin-log"
+    ));
+    Ok(())
+}
+
+fn plugin_keys(
+    cx: &mut compositor::Context,
+    _args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                let Some(view) = compositor.find::<ui::EditorView>() else {
+                    return;
+                };
+                let lines = view.keymaps.plugin_report();
+                let contents = if lines.is_empty() {
+                    "No plugin key bindings.".to_string()
+                } else {
+                    format!(
+                        "Plugin key bindings (mode, keys, layer, binding):\n\n```\n{}\n```\n\n\
+                         Layers, first to last: override (needs allow-key-override), your keys, \
+                         plugin, Pure's defaults, fallback.",
+                        lines.join("\n")
+                    )
+                };
+                let contents = ui::Markdown::new(contents, editor.syn_loader.clone());
+                let popup = Popup::new("plugin-keys", contents).auto_close(true);
+                compositor.replace_or_push("plugin-keys", popup);
+            },
+        )))
+    });
+    Ok(())
+}
+
 fn plugin_install(
     cx: &mut compositor::Context,
     args: Args,
@@ -4661,6 +4785,50 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
+        name: "plugin-doctor",
+        aliases: &[],
+        doc: "Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times.",
+        fun: plugin_doctor,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-trace",
+        aliases: &[],
+        doc: "Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on|off]`.",
+        fun: plugin_trace,
+        completer: CommandCompleter::positional(&[completers::plugin_name]),
+        signature: Signature {
+            positionals: (0, Some(2)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-keys",
+        aliases: &[],
+        doc: "Show the plugins' key bindings, their layers and conflicts.",
+        fun: plugin_keys,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "plugin-key",
+        aliases: &[],
+        doc: "Run a plugin's key binding: <plugin> <binding>.",
+        fun: plugin_key,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (2, Some(2)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "plugin-install",
         aliases: &[],
         doc: "Install a plugin from a git URL or a directory (it must have a committed component); asks first.",
@@ -4965,7 +5133,37 @@ pub(super) fn execute_command(
             .expect("arg parsing cannot fail when validation is turned off")
     };
 
+    // Plugins hooked to this command may cancel it.
+    if event == PromptEvent::Validate {
+        crate::plugins::pre_command(cx.editor, cx.jobs, cmd.name)
+            .map_err(|reason| anyhow!("'{}' cancelled by {reason}", cmd.name))?;
+    }
     (cmd.fun)(cx, args, event).map_err(|err| anyhow!("'{}': {err}", cmd.name))
+}
+
+/// Run typable command `name` with `args` as they are: no command line
+/// parsing and no expansions (plugin API 0.5 `commands.execute`).
+pub fn execute_with_args(
+    cx: &mut compositor::Context,
+    name: &str,
+    args: &[String],
+) -> anyhow::Result<()> {
+    let cmd = TYPABLE_COMMAND_MAP
+        .get(name)
+        .ok_or_else(|| anyhow!("no command '{name}'"))?;
+    let mut parsed = Args::new(cmd.signature, true);
+    for arg in args {
+        parsed
+            .push(std::borrow::Cow::Owned(arg.clone()))
+            .map_err(|err| anyhow!("'{name}': {err}"))?;
+    }
+    parsed.finish().map_err(|err| anyhow!("'{name}': {err}"))?;
+    (cmd.fun)(cx, parsed, PromptEvent::Validate).map_err(|err| anyhow!("'{name}': {err}"))
+}
+
+/// Every typable command's name and doc.
+pub fn typable_commands() -> impl Iterator<Item = (&'static str, &'static str)> {
+    TYPABLE_COMMAND_LIST.iter().map(|cmd| (cmd.name, cmd.doc))
 }
 
 pub(super) fn command_mode(cx: &mut Context) {

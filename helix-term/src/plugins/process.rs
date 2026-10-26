@@ -30,6 +30,7 @@ runtime_local! {
 }
 
 /// Run `argv` in the background and deliver its output to the plugin.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     plugin: String,
     id: u32,
@@ -38,7 +39,9 @@ pub fn spawn(
     stdin: Option<String>,
     timeout: Duration,
     stream: bool,
+    session: Option<helix_plugin::v05::SessionInput>,
 ) {
+    let session = session.and_then(|session| session.take());
     let (kill_tx, kill_rx) = oneshot::channel();
     RUNNING.lock().insert((plugin.clone(), id), kill_tx);
     tokio::spawn(async move {
@@ -55,7 +58,7 @@ pub fn spawn(
                 (sender, task)
             })
             .unzip();
-        let result = run(argv, cwd, stdin, timeout, kill_rx, output).await;
+        let result = run(argv, cwd, stdin, session, timeout, kill_rx, output).await;
         if let Some(forward) = forward {
             let _ = forward.await;
         }
@@ -84,6 +87,7 @@ async fn run(
     argv: Vec<String>,
     cwd: Option<PathBuf>,
     stdin: Option<String>,
+    session: Option<(mpsc::UnboundedReceiver<String>, Arc<AtomicUsize>)>,
     timeout: Duration,
     kill: oneshot::Receiver<()>,
     output: Option<mpsc::Sender<String>>,
@@ -93,7 +97,7 @@ async fn run(
     command
         .args(&argv[1..])
         .current_dir(cwd.unwrap_or_else(helix_stdx::env::current_working_dir))
-        .stdin(if stdin.is_some() {
+        .stdin(if stdin.is_some() || session.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -108,10 +112,25 @@ async fn run(
         .spawn()
         .map_err(|err| format!("failed to run '{program}': {err}"))?;
 
-    if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        // Closed when written (or when the program stops reading).
+    if let Some(mut pipe) = child.stdin.take() {
+        // Closed when written (or when the program stops reading); a
+        // session's when the plugin closes it.
         tokio::spawn(async move {
-            let _ = pipe.write_all(input.as_bytes()).await;
+            if let Some(input) = stdin {
+                if pipe.write_all(input.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+            let Some((mut input, queued)) = session else {
+                return;
+            };
+            while let Some(data) = input.recv().await {
+                let written = pipe.write_all(data.as_bytes()).await;
+                queued.fetch_sub(data.len(), Ordering::Relaxed);
+                if written.is_err() || pipe.flush().await.is_err() {
+                    return;
+                }
+            }
         });
     }
     let stdout = Capture::start(child.stdout.take(), output);
@@ -427,6 +446,7 @@ mod test {
             sh(script),
             None,
             stdin.map(str::to_owned),
+            None,
             timeout,
             kill_rx,
             None,
@@ -454,7 +474,7 @@ mod test {
         let (tx, mut rx) = mpsc::channel(1);
         let task = tokio::spawn(run(
             sh("printf 'first\\n'; sleep 1; printf '\\303'; sleep 0.02; printf '\\251\\nlast'; printf err >&2"),
-            None, None, Duration::from_secs(5), kill_rx, Some(tx),
+            None, None, None, Duration::from_secs(5), kill_rx, Some(tx),
         ));
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(3), rx.recv())
@@ -554,6 +574,7 @@ mod test {
             sh("pwd"),
             Some(dir.path().to_path_buf()),
             None,
+            None,
             Duration::from_secs(5),
             kill_rx,
             None,
@@ -581,6 +602,7 @@ mod test {
             sh("sleep 30"),
             None,
             None,
+            None,
             Duration::from_secs(30),
             kill_rx,
             None,
@@ -597,6 +619,7 @@ mod test {
         let (_kill, kill_rx) = oneshot::channel();
         let err = run(
             vec!["/nonexistent/program".into()],
+            None,
             None,
             None,
             Duration::from_secs(1),

@@ -1,5 +1,6 @@
 pub mod default;
 pub mod macros;
+pub mod plugin_layers;
 
 pub use crate::commands::MappableCommand;
 pub use default::default;
@@ -336,6 +337,7 @@ pub fn set_plugin_keys(keys: Option<HashMap<Mode, KeyTrie>>) {
 pub fn forget_filled_keymap() {
     *FILLED.lock() = None;
     *IN_BUFFER.lock() = None;
+    plugin_layers::forget_composed();
 }
 
 /// `keymaps` with the plugin keys filled in, or `None` without plugin keys
@@ -397,6 +399,8 @@ impl Keymaps {
         let base = self.map();
         let filled = with_plugin_keys(&base);
         let keymaps = filled.as_deref().unwrap_or(&base);
+        let layered = plugin_layers::compose(&base, keymaps, &Default::default(), None);
+        let keymaps = layered.as_deref().unwrap_or(keymaps);
         let keymap = &keymaps[&mode];
         keymap
             .search(self.pending())
@@ -413,11 +417,30 @@ impl Keymaps {
 
     /// [`Self::get`] in a buffer of plugin `owner`, whose buffer keys apply.
     pub fn get_in(&mut self, mode: Mode, key: KeyEvent, owner: Option<&str>) -> KeymapResult {
+        let scope = plugin_layers::KeyScope {
+            owner,
+            ..Default::default()
+        };
+        self.get_scoped(mode, key, &scope)
+    }
+
+    /// [`Self::get`] in the document of `scope`: plugin bindings for that
+    /// document or its language, and its owner's buffer keys, apply.
+    pub fn get_scoped(
+        &mut self,
+        mode: Mode,
+        key: KeyEvent,
+        scope: &plugin_layers::KeyScope,
+    ) -> KeymapResult {
         // TODO: remove the sticky part and look up manually
         let base = self.map();
         let filled = with_plugin_keys(&base);
         let keymaps = filled.as_deref().unwrap_or(&base);
-        let in_buffer = owner.and_then(|owner| with_buffer_keys(keymaps, owner));
+        let layered = plugin_layers::compose(&base, keymaps, scope, None);
+        let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let in_buffer = scope
+            .owner
+            .and_then(|owner| with_buffer_keys(keymaps, owner));
         let keymaps = in_buffer.as_deref().unwrap_or(keymaps);
         let keymap = &keymaps[&mode];
 
@@ -465,6 +488,69 @@ impl Keymaps {
             }
             None => KeymapResult::Cancelled(self.state.drain(..).collect()),
         }
+    }
+}
+
+impl Keymaps {
+    /// What `keys` would do in `mode` and `scope` without plugin binding
+    /// `exclude` (`(plugin, name)`): for a binding that passes its keys
+    /// through.
+    pub fn without_binding(
+        &self,
+        mode: Mode,
+        keys: &[KeyEvent],
+        scope: &plugin_layers::KeyScope,
+        exclude: (&str, &str),
+    ) -> Option<KeyTrie> {
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
+        let layered = plugin_layers::compose(&base, keymaps, scope, Some(exclude));
+        let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let in_buffer = scope
+            .owner
+            .and_then(|owner| with_buffer_keys(keymaps, owner));
+        let keymaps = in_buffer.as_deref().unwrap_or(keymaps);
+        keymaps.get(&mode)?.search(keys).cloned()
+    }
+
+    /// Whether `key` (after the keys pending) runs a plugin binding in
+    /// `mode` and `scope`, without consuming anything.
+    pub fn is_plugin_binding(
+        &self,
+        mode: Mode,
+        key: KeyEvent,
+        scope: &plugin_layers::KeyScope,
+    ) -> bool {
+        if !plugin_layers::has_bindings() {
+            return false;
+        }
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
+        let layered = plugin_layers::compose(&base, keymaps, scope, None);
+        let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let mut keys = self.state.clone();
+        keys.push(key);
+        let trie = match &self.sticky {
+            Some(node) => KeyTrie::Node(node.clone()),
+            None => match keymaps.get(&mode) {
+                Some(trie) => trie.clone(),
+                None => return false,
+            },
+        };
+        matches!(
+            trie.search(&keys),
+            Some(KeyTrie::MappableCommand(command)) if plugin_layers::binding_of(command).is_some()
+        )
+    }
+
+    /// `:plugin-keys`: every plugin binding with its layer and conflicts.
+    pub fn plugin_report(&self) -> Vec<String> {
+        let base = self.map();
+        let filled = with_plugin_keys(&base);
+        let keymaps = filled.as_deref().unwrap_or(&base);
+        plugin_layers::report(&base, keymaps)
     }
 }
 

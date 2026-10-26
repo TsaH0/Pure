@@ -1,6 +1,6 @@
 name = "illuminate"
 version = "0.1.0"
-api = "0.4"
+api = "0.5"
 description = "Highlight the other uses of the word under the cursor, like vim-illuminate"
 permissions = ["read-buffers"]
 wasm = "plugin.wasm"

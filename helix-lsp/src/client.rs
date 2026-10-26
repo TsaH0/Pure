@@ -501,6 +501,38 @@ impl Client {
         }
     }
 
+    /// Send request `method` with `params` as they are (for plugins) and
+    /// return the result as it is.
+    pub fn call_raw(&self, method: String, params: Value) -> impl Future<Output = Result<Value>> {
+        let server_tx = self.server_tx.clone();
+        let id = self.next_request_id();
+        let timeout_secs = self.req_timeout;
+        let request = jsonrpc::MethodCall {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            id: id.clone(),
+            method,
+            params: Self::value_into_params(params),
+        };
+        let (tx, rx) = channel::<Result<Value>>(1);
+        // Sent now, so requests keep their order.
+        let sent = server_tx
+            .send(Payload::Request {
+                chan: tx,
+                value: request,
+            })
+            .map_err(|e| Error::Other(e.into()));
+        async move {
+            use std::time::Duration;
+            use tokio::time::timeout;
+            sent?;
+            let mut rx = rx;
+            timeout(Duration::from_secs(timeout_secs), rx.recv())
+                .await
+                .map_err(|_| Error::Timeout(id))?
+                .ok_or(Error::StreamClosed)?
+        }
+    }
+
     /// Send a RPC notification to the language server.
     pub fn notify<R: lsp::notification::Notification>(&self, params: R::Params)
     where

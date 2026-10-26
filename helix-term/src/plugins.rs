@@ -26,6 +26,7 @@ mod picker;
 mod popup;
 mod process;
 mod prompt;
+mod watch;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -56,7 +57,7 @@ const EVENT_DELAY: Duration = Duration::from_millis(50);
 
 runtime_local! {
     static HOST: Mutex<Option<PluginHost>> = Mutex::new(None);
-    static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), scheduled: false });
+    static PENDING: Mutex<Pending> = Mutex::new(Pending { events: Vec::new(), events2: Vec::new(), scheduled: false });
     /// Set while plugin actions are applied, so a plugin's own edits don't
     /// produce change events (which could loop forever).
     static APPLYING: AtomicUsize = AtomicUsize::new(0);
@@ -66,10 +67,22 @@ runtime_local! {
     /// The events some plugin subscribed to (bits of `event_bit`), so editor
     /// hooks cost nothing when no plugin listens.
     static WANTED: AtomicU32 = AtomicU32::new(0);
+    /// The same for API 0.5's events and hooks (bits of `event2_bit`).
+    static WANTED2: AtomicU32 = AtomicU32::new(0);
+    /// The focused view and its document, as last reported to plugins.
+    static LAST_FOCUS: Mutex<Option<(ViewId, DocumentId)>> = Mutex::new(None);
+    /// The host's marks, moved by every edit (without the host's lock).
+    static MARKS: Mutex<Option<helix_plugin::v05::SharedMarks>> = Mutex::new(None);
+    /// What the UI shows (prompt, picker, popup) and the keys typed so far,
+    /// for `state.ui`.
+    static UI: Mutex<UiFlags> = Mutex::new(UiFlags { prompt: false, picker: false, popup: false, pending: Vec::new() });
     /// The workspace of the working directory, cached: `(cwd, workspace)`.
     static WORKSPACE: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
     /// Whether a plugin may read registers, so snapshots include them.
     static WANTS_REGISTERS: AtomicBool = AtomicBool::new(false);
+    /// Whether an API 0.5 plugin is loaded (it can read the completion
+    /// menu's items and `state.ui`).
+    static HAS_V05: AtomicBool = AtomicBool::new(false);
     /// Completion requests waiting for a plugin's answer: `(plugin, id)`.
     static COMPLETIONS: Mutex<Vec<(String, u32, tokio::sync::oneshot::Sender<Vec<PluginCompletion>>)>> = Mutex::new(Vec::new());
     /// A background load is running: directories wait for it.
@@ -106,9 +119,12 @@ fn abort_timers(plugin: Option<&str>) {
 /// Remove what a disabled plugin left behind: processes, timers, completion
 /// requests, decorations, diagnostics, statusline text and its sidebar.
 fn tear_down(editor: &mut Editor, plugin: &str) {
+    plugin_changed(plugin, helix_plugin::v05::PluginState::Disabled);
     process::kill_plugin(plugin);
     abort_timers(Some(plugin));
     listen::stop_plugin(Some(plugin));
+    watch::stop_plugin(Some(plugin));
+    clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
         if !doc.plugin_decorations.is_empty() {
@@ -171,7 +187,229 @@ fn workspace() -> PathBuf {
 
 struct Pending {
     events: Vec<Event>,
+    /// API 0.5 events, with the document they are about.
+    events2: Vec<(helix_plugin::v05::Event2, Option<u32>)>,
     scheduled: bool,
+}
+
+/// The API 0.5 events and hooks, as bits of [`WANTED2`].
+const EVENT2_KINDS: [helix_plugin::v05::SubscriptionEvent; 10] = {
+    use helix_plugin::v05::SubscriptionEvent as S;
+    [
+        S::BufferEnter,
+        S::BufferLeave,
+        S::ViewEnter,
+        S::ViewLeave,
+        S::CompletionMenu,
+        S::ConfigChange,
+        S::PluginChange,
+        S::Shutdown,
+        S::PreCommand,
+        S::PreSave,
+    ]
+};
+
+fn event2_bit(kind: helix_plugin::v05::SubscriptionEvent) -> u32 {
+    EVENT2_KINDS
+        .iter()
+        .position(|k| *k == kind)
+        .map_or(0, |i| 1 << i)
+}
+
+/// Whether some plugin subscribed to `kind` (one atomic load).
+fn wants2(kind: helix_plugin::v05::SubscriptionEvent) -> bool {
+    WANTED2.load(Ordering::Relaxed) & event2_bit(kind) != 0
+}
+
+fn wanted2_mask(host: &PluginHost) -> u32 {
+    EVENT2_KINDS
+        .into_iter()
+        .filter(|kind| host.wants2(*kind))
+        .map(event2_bit)
+        .fold(0, |mask, bit| mask | bit)
+}
+
+/// Queue an API 0.5 event about `doc` for the plugins that subscribed.
+fn queue2(event: helix_plugin::v05::Event2, doc: Option<u32>) {
+    if !wants2(helix_plugin::v05::SubscriptionEvent::of(&event)) {
+        return;
+    }
+    let mut pending = PENDING.lock();
+    pending.events2.push((event, doc));
+    if !pending.scheduled {
+        pending.scheduled = true;
+        tokio::spawn(async {
+            tokio::time::sleep(EVENT_DELAY).await;
+            job::dispatch(|editor, _| deliver_events(editor)).await;
+        });
+    }
+}
+
+/// The completion menu opened, changed or closed: tell the plugins that
+/// subscribed.
+pub fn completion_menu_event(
+    editor: &Editor,
+    event: crate::ui::completion::menu_events::MenuEvent,
+) {
+    use crate::ui::completion::menu_events::{Close, MenuEvent};
+    use helix_plugin::v05::{CloseReason, CompletionEvent, Event2, SubscriptionEvent};
+    if !wants2(SubscriptionEvent::CompletionMenu) {
+        return;
+    }
+    let event = match event {
+        MenuEvent::Opened(n) => CompletionEvent::Opened(n),
+        MenuEvent::Updated(n) => CompletionEvent::Updated(n),
+        MenuEvent::Confirmed(label) => CompletionEvent::Confirmed(label),
+        MenuEvent::Closed(reason) => CompletionEvent::Closed(match reason {
+            Close::Aborted => CloseReason::Aborted,
+            Close::Confirmed => CloseReason::Confirmed,
+            Close::Dismissed => CloseReason::Dismissed,
+            Close::ModeChange => CloseReason::ModeChange,
+            Close::Replaced => CloseReason::Replaced,
+        }),
+    };
+    let doc = plugin_doc_id(editor.tree.get(editor.tree.focus).doc);
+    queue2(Event2::CompletionMenu(event), Some(doc));
+}
+
+/// Apply what the plugins a hook asked did; `Err(plugin: reason)` if one
+/// cancelled.
+fn finish_hook(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    result: helix_plugin::v05::HookResult,
+) -> Result<(), String> {
+    for (plugin, actions) in result.results {
+        report_with(editor, Some(&mut *jobs), &plugin, actions);
+    }
+    match result.cancelled {
+        Some((plugin, reason)) => Err(format!("{plugin}: {reason}")),
+        None => Ok(()),
+    }
+}
+
+/// Before `command` runs (a native command's or a typable command's name):
+/// the plugins hooked to it may cancel it (`Err`). Commands plugins run
+/// themselves aren't hooked.
+pub fn pre_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) -> Result<(), String> {
+    use helix_plugin::v05::SubscriptionEvent;
+    if !wants2(SubscriptionEvent::PreCommand)
+        || APPLYING.load(Ordering::Relaxed) > 0
+        || !with_host(|host| host.hooks_command(command)).unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let snapshot = snapshot(editor);
+    let Some(result) = with_host(|host| host.pre_command(command, &snapshot)) else {
+        return Ok(());
+    };
+    finish_hook(editor, jobs, result)
+}
+
+/// Before `doc` is written: the plugins hooked to saving may edit it (saved
+/// with it) or cancel (`Err`).
+pub fn pre_save(editor: &mut Editor, jobs: &mut Jobs, doc: DocumentId) -> Result<(), String> {
+    use helix_plugin::v05::SubscriptionEvent;
+    if !wants2(SubscriptionEvent::PreSave) || APPLYING.load(Ordering::Relaxed) > 0 {
+        return Ok(());
+    }
+    let snapshot = snapshot(editor);
+    let Some(result) = with_host(|host| host.pre_save(plugin_doc_id(doc), &snapshot)) else {
+        return Ok(());
+    };
+    finish_hook(editor, jobs, result)
+}
+
+fn view_number(view: ViewId) -> u64 {
+    use slotmap::Key;
+    view.data().as_ffi()
+}
+
+/// Called each frame: tell plugins that subscribed when the focused view,
+/// or the document it shows, changed.
+pub fn check_focus(editor: &Editor) {
+    use helix_plugin::v05::{Event2, SubscriptionEvent as S};
+    let wanted = [S::BufferEnter, S::BufferLeave, S::ViewEnter, S::ViewLeave];
+    if !wanted.into_iter().any(wants2) {
+        return;
+    }
+    let view = editor.tree.focus;
+    let Some(doc) = editor.tree.try_get(view).map(|view| view.doc) else {
+        return;
+    };
+    let previous = LAST_FOCUS.lock().replace((view, doc));
+    if previous == Some((view, doc)) {
+        return;
+    }
+    if let Some((old_view, old_doc)) = previous {
+        if editor.documents.contains_key(&old_doc) {
+            queue2(
+                Event2::BufferLeave(plugin_doc_id(old_doc), view_number(old_view)),
+                Some(plugin_doc_id(old_doc)),
+            );
+        }
+        if old_view != view {
+            queue2(Event2::ViewLeave(view_number(old_view)), None);
+        }
+    }
+    if previous.is_none_or(|(old_view, _)| old_view != view) {
+        queue2(Event2::ViewEnter(view_number(view)), None);
+    }
+    queue2(
+        Event2::BufferEnter(plugin_doc_id(doc), view_number(view)),
+        Some(plugin_doc_id(doc)),
+    );
+}
+
+/// The editor is quitting: tell the plugins that subscribed, now.
+pub fn shutdown(editor: &mut Editor) {
+    use helix_plugin::v05::{Event2, SubscriptionEvent};
+    if !wants2(SubscriptionEvent::Shutdown) {
+        return;
+    }
+    let snapshot = snapshot(editor);
+    let Some(results) = with_host(|host| host.dispatch2(&Event2::Shutdown, None, &snapshot)) else {
+        return;
+    };
+    for (plugin, result) in results {
+        report(editor, &plugin, result);
+    }
+}
+
+/// Tell the plugins that subscribed that `plugin` changed state.
+fn plugin_changed(plugin: &str, state: helix_plugin::v05::PluginState) {
+    queue2(
+        helix_plugin::v05::Event2::PluginChange(plugin.to_string(), state),
+        None,
+    );
+}
+
+/// Run a plugin's completion menu command on the editor view.
+fn menu_command(
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+    command: helix_plugin::v05::MenuAction,
+) {
+    use crate::ui::completion::menu_events::MenuCommand as C;
+    use helix_plugin::v05::MenuAction as A;
+    let command = match command {
+        A::Select(index) => C::Select(index),
+        A::Next => C::Next,
+        A::Previous => C::Previous,
+        A::Confirm => C::Confirm,
+        A::Abort => C::Abort,
+        A::Close => C::Close,
+    };
+    let Some(view) = compositor.find::<crate::ui::EditorView>() else {
+        return;
+    };
+    let mut jobs = Jobs::new();
+    let mut cx = crate::compositor::Context {
+        editor,
+        jobs: &mut jobs,
+        scroll: None,
+    };
+    view.completion_command(command, &mut cx);
 }
 
 /// The directory plugins with `allow-files` may use: the workspace, but only
@@ -399,6 +637,7 @@ fn build_host(
         Some(helix_loader::data_dir().join("plugins")),
     );
     host.set_program_check(starts_program);
+    host.set_editor_fns(editor_fns());
     let mut setting_errors = Vec::new();
     // Installed plugins whose component changed since aren't loaded.
     // An unreadable lock can't tell which plugins were installed: load none.
@@ -461,6 +700,8 @@ fn install(
     editor.panels.clear();
     abort_timers(None);
     listen::stop_plugin(None);
+    watch::stop_plugin(None);
+    clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
             .into_iter()
@@ -469,12 +710,22 @@ fn install(
             .fold(0, |mask, bit| mask | bit)
     });
     WANTED.store(wanted, Ordering::Relaxed);
+    WANTED2.store(host.as_ref().map_or(0, wanted2_mask), Ordering::Relaxed);
+    if let Some(host) = &host {
+        for plugin in host.plugins() {
+            if plugin.disabled().is_none() {
+                plugin_changed(plugin.name(), helix_plugin::v05::PluginState::Loaded);
+            }
+        }
+    }
     WANTS_REGISTERS.store(
         host.as_ref().is_some_and(|host| host.wants_registers()),
         Ordering::Relaxed,
     );
+    HAS_V05.store(host.as_ref().is_some_and(has_v05), Ordering::Relaxed);
     clear_plugin_diagnostics(editor);
     COMPLETIONS.lock().clear();
+    *MARKS.lock() = host.as_ref().map(PluginHost::marks);
     *HOST.lock() = host;
 
     apply(editor, None, actions);
@@ -497,6 +748,7 @@ pub fn load_from(editor: &mut Editor, dir: &Path, settings: &toml::Table) {
     process::kill_all();
     GENERATION.fetch_add(1, Ordering::Relaxed);
     *HOST.lock() = None;
+    *MARKS.lock() = None;
     *LOADED.lock() = Some((dir.to_path_buf(), settings.clone()));
     let (host, actions, errors) = build_host(dir, settings);
     install(editor, host, actions, errors);
@@ -511,6 +763,84 @@ pub fn load_with_settings(editor: &mut Editor, dir: &Path, settings: &str) -> an
     let settings: toml::Table = toml::from_str(settings)?;
     load_from(editor, dir, &settings);
     Ok(())
+}
+
+/// `:config-reload`: read `plugins.toml` again and apply what changed.
+pub fn config_reloaded(editor: &mut Editor) {
+    let (settings, error) = read_settings();
+    match error {
+        Some(err) => editor.set_error(err.to_string()),
+        None => settings_changed(editor, &settings),
+    }
+}
+
+/// The user's plugin settings are now `settings`: plugins whose own
+/// settings changed get a `config-change` event; if what a plugin is
+/// granted (or which plugins are enabled) changed, they are all reloaded.
+pub fn settings_changed(editor: &mut Editor, settings: &toml::Table) {
+    let Some((dir, old)) = LOADED.lock().clone() else {
+        return;
+    };
+    if &old == settings {
+        return;
+    }
+    // Grants, keys and `enabled` decide what is loaded and allowed.
+    let fixed = |table: &toml::Table| -> std::collections::BTreeMap<String, toml::Value> {
+        table
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    toml::Value::Table(table) => toml::Value::Table(
+                        table
+                            .iter()
+                            .filter(|(key, _)| {
+                                key.starts_with("allow-") || *key == "enabled" || *key == "keys"
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect(),
+                    ),
+                    other => other.clone(),
+                };
+                (name.clone(), value)
+            })
+            .filter(|(_, value)| value.as_table().is_none_or(|table| !table.is_empty()))
+            .collect()
+    };
+    if fixed(&old) != fixed(settings) {
+        load_from(editor, &dir, settings);
+        editor.set_status("Plugins reloaded: their permissions or keys changed");
+        return;
+    }
+    *LOADED.lock() = Some((dir, settings.clone()));
+    let names: Vec<String> = with_host(|host| {
+        host.plugins()
+            .iter()
+            .map(|plugin| plugin.name().to_string())
+            .collect()
+    })
+    .unwrap_or_default();
+    for name in names {
+        let Some(Ok(plugin_settings)) = plugin_settings(settings, &name) else {
+            continue;
+        };
+        let snapshot = snapshot(editor);
+        match with_host(|host| host.set_config(&name, &plugin_settings.config, &snapshot)) {
+            Some(Ok(Some(actions))) => apply(editor, None, actions),
+            Some(Err(err)) => editor.set_error(format!("{err:#}")),
+            _ => {}
+        }
+    }
+    refresh_wanted(editor);
+}
+
+/// The report of `:plugin-doctor`.
+pub fn doctor() -> String {
+    with_host(|host| host.doctor()).unwrap_or_else(|| "No plugins are loaded.".into())
+}
+
+/// Trace `plugin`'s calls (or all plugins'), or stop: how many plugins.
+pub fn set_trace(plugin: Option<&str>, on: bool) -> usize {
+    with_host(|host| host.set_trace(plugin, on)).unwrap_or(0)
 }
 
 /// The settings for plugin `name`, or `None` if it is disabled.
@@ -530,6 +860,8 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-files");
     table.remove("allow-dirs");
     table.remove("allow-listen");
+    table.remove("allow-key-override");
+    table.remove("allow-lsp");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -539,8 +871,19 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             files: file_grant(settings, name)?,
             dirs: allowed_dirs(settings, name)?,
             listen: allowed_ports(settings, name)?,
+            key_override: flag(settings, name, "allow-key-override")?,
+            lsp: flag(settings, name, "allow-lsp")?,
         })
     })())
+}
+
+/// A `true`/`false` setting of plugin `name` (false if missing).
+fn flag(settings: &toml::Table, name: &str, key: &str) -> anyhow::Result<bool> {
+    match settings.get(name).and_then(|table| table.get(key)) {
+        None => Ok(false),
+        Some(toml::Value::Boolean(allowed)) => Ok(*allowed),
+        Some(_) => anyhow::bail!("[{name}] {key}: expected true or false"),
+    }
 }
 
 type Keys = HashMap<Mode, crate::keymap::KeyTrie>;
@@ -783,6 +1126,378 @@ pub fn log_lines(plugin: &str) -> anyhow::Result<Vec<String>> {
 }
 
 /// Run a plugin command given as `plugin/command`.
+struct UiFlags {
+    prompt: bool,
+    picker: bool,
+    popup: bool,
+    pending: Vec<helix_view::input::KeyEvent>,
+}
+
+fn has_v05(host: &PluginHost) -> bool {
+    host.plugins()
+        .iter()
+        .any(|p| p.disabled().is_none() && p.manifest().at_least_0_5())
+}
+
+/// Whether a plugin can read the completion menu's items.
+pub fn reads_menu() -> bool {
+    HAS_V05.load(Ordering::Relaxed)
+}
+
+/// The compositor's layers, each frame.
+pub fn set_ui_layers(layers: impl Iterator<Item = &'static str>) {
+    if !HAS_V05.load(Ordering::Relaxed) {
+        return;
+    }
+    let (mut prompt, mut picker, mut popup) = (false, false, false);
+    for layer in layers {
+        prompt |= layer.contains("ui::prompt::Prompt");
+        picker |= layer.contains("ui::picker::Picker");
+        popup |= layer.contains("ui::popup::Popup");
+    }
+    let mut ui = UI.lock();
+    (ui.prompt, ui.picker, ui.popup) = (prompt, picker, popup);
+}
+
+/// The keys typed so far of a sequence, each frame.
+pub fn set_pending_keys(keys: &[helix_view::input::KeyEvent]) {
+    if !HAS_V05.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut ui = UI.lock();
+    if ui.pending != keys {
+        ui.pending = keys.to_vec();
+    }
+}
+
+/// The views and UI, for snapshots.
+fn views_and_ui(editor: &Editor) -> (Vec<helix_plugin::v05::ViewInfo>, helix_plugin::v05::UiState) {
+    let focus = editor.tree.focus;
+    let views = editor
+        .tree
+        .views()
+        .map(|(view, focused)| {
+            let doc = &editor.documents[&view.doc];
+            let text = doc.text().slice(..);
+            let first = text.char_to_line(doc.view_offset(view.id).anchor.min(text.len_chars()));
+            let last = (first + view.inner_height().saturating_sub(1))
+                .min(text.len_lines().saturating_sub(1));
+            let area = view.area;
+            helix_plugin::v05::ViewInfo {
+                id: view_number(view.id),
+                document: plugin_doc_id(view.doc),
+                area: (area.x, area.y, area.width, area.height),
+                first_line: first as u32,
+                last_line: last as u32,
+                focused: focused || view.id == focus,
+            }
+        })
+        .collect();
+    let flags = UI.lock();
+    let pending: Vec<String> = flags.pending.iter().map(|key| key.to_string()).collect();
+    let ui = helix_plugin::v05::UiState {
+        mode: plugin_mode(editor.mode()),
+        completion_menu: crate::ui::completion::menu_events::is_open(),
+        prompt: flags.prompt,
+        picker: flags.picker,
+        popup: flags.popup,
+        focused_panel: editor
+            .panels
+            .iter()
+            .find(|panel| panel.focused)
+            .map(|panel| {
+                match panel.dock {
+                    helix_view::sidebar::Dock::Left => "left",
+                    helix_view::sidebar::Dock::Right => "right",
+                    helix_view::sidebar::Dock::Bottom => "bottom",
+                    helix_view::sidebar::Dock::Float => "float",
+                }
+                .to_string()
+            }),
+        pending_keys: pending.join(" "),
+    };
+    (views, ui)
+}
+
+/// Every native and typable command, for `commands.list`.
+fn command_entries() -> Vec<helix_plugin::v05::CommandEntry> {
+    use helix_plugin::v05::{CommandEntry, CommandKind};
+    let native = MappableCommand::STATIC_COMMAND_LIST
+        .iter()
+        .map(|command| CommandEntry {
+            name: command.name().to_string(),
+            doc: command.doc().to_string(),
+            kind: CommandKind::Native,
+        });
+    let typable = commands::typed::typable_commands().map(|(name, doc)| CommandEntry {
+        name: name.to_string(),
+        doc: doc.to_string(),
+        kind: CommandKind::Typable,
+    });
+    native.chain(typable).collect()
+}
+
+/// What the editor provides to API 0.5 calls.
+fn editor_fns() -> helix_plugin::v05::EditorFns {
+    helix_plugin::v05::EditorFns {
+        check_keys: Some(|keys| parse_keys(keys).map(|_| ())),
+        commands: Some(command_entries),
+    }
+}
+
+/// Run command `name` for a plugin (API 0.5): a plugin's "plugin/command",
+/// a typable command with `args` as they are, or a native command `count`
+/// times.
+fn execute_named(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    name: &str,
+    args: Vec<String>,
+    count: Option<u32>,
+) -> Result<(), String> {
+    if name.contains('/') {
+        return run_command(editor, jobs, name, args).map_err(|err| err.to_string());
+    }
+    if commands::typed::typable_commands().any(|(typable, _)| typable == name) {
+        let mut cx = crate::compositor::Context {
+            editor,
+            jobs,
+            scroll: None,
+        };
+        return commands::typed::execute_with_args(&mut cx, name, &args)
+            .map_err(|err| err.to_string());
+    }
+    let command = MappableCommand::from_str(name).map_err(|err| err.to_string())?;
+    run_static(editor, jobs, &command, count);
+    Ok(())
+}
+
+/// Run a native command as its key would, reporting a mode change.
+fn run_static(editor: &mut Editor, jobs: &mut Jobs, command: &MappableCommand, count: Option<u32>) {
+    let old_mode = editor.mode();
+    let mut cx = commands::Context {
+        register: None,
+        count: count.and_then(|count| std::num::NonZeroUsize::new(count as usize)),
+        editor,
+        callback: Vec::new(),
+        on_next_key_callback: None,
+        jobs,
+    };
+    command.execute(&mut cx);
+    let new_mode = cx.editor.mode();
+    if new_mode != old_mode {
+        helix_event::dispatch(crate::events::OnModeSwitch {
+            old_mode,
+            new_mode,
+            cx: &mut cx,
+        });
+    }
+    for callback in cx.callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::Callback(callback));
+    }
+    if let Some((callback, kind)) = cx.on_next_key_callback {
+        crate::compositor::defer_ui(crate::compositor::DeferredUi::NextKey(callback, kind));
+    }
+}
+
+/// Switch mode like the mode keys.
+fn set_mode(editor: &mut Editor, jobs: &mut Jobs, mode: helix_plugin::Mode) {
+    let (target, command) = match mode {
+        helix_plugin::Mode::Normal => (Mode::Normal, MappableCommand::normal_mode),
+        helix_plugin::Mode::Insert => (Mode::Insert, MappableCommand::insert_mode),
+        helix_plugin::Mode::Select => (Mode::Select, MappableCommand::select_mode),
+    };
+    if editor.mode() != target {
+        run_static(editor, jobs, &command, None);
+    }
+}
+
+/// Send a plugin's request to a language server; deliver the reply later.
+fn lsp_request(
+    editor: &Editor,
+    plugin: String,
+    id: u32,
+    doc: helix_plugin::DocumentId,
+    server: Option<String>,
+    method: String,
+    params: String,
+) {
+    use helix_plugin::v05::Callback2;
+    let params = serde_json::from_str(&params).unwrap_or(serde_json::Value::Null);
+    let reply = editor_doc_id(editor, doc).and_then(|doc| {
+        let doc = editor.documents.get(&doc)?;
+        doc.language_servers()
+            .find(|client| server.as_deref().is_none_or(|name| client.name() == name))
+            .map(|client| client.call_raw(method, params))
+    });
+    let Some(reply) = reply else {
+        let result = Err("the language server is gone".to_string());
+        return deliver2_later(plugin, Callback2::LspReply { id, result });
+    };
+    tokio::spawn(async move {
+        let result = match reply.await {
+            Ok(value) => {
+                let json = value.to_string();
+                if json.len() > 16 << 20 {
+                    Err("the reply is larger than 16 MiB".to_string())
+                } else {
+                    Ok(json)
+                }
+            }
+            Err(err) => Err(err.to_string()),
+        };
+        deliver2_later(plugin, Callback2::LspReply { id, result });
+    });
+}
+
+/// Serve a plugin's service call after this event, then deliver the
+/// reply to the caller.
+fn serve_later(call: helix_plugin::v05::ServiceCall) {
+    tokio::spawn(async move {
+        job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+            move |editor, _, jobs| {
+                let snapshot = snapshot(editor);
+                let Some((result, actions)) = with_host(|host| host.serve(&call, &snapshot)) else {
+                    return;
+                };
+                apply(editor, Some(&mut *jobs), actions);
+                refresh_wanted(editor);
+                let callback = helix_plugin::v05::Callback2::ServiceReply {
+                    id: call.id,
+                    result,
+                };
+                deliver2(editor, jobs, call.caller, callback);
+            },
+        )))
+        .await;
+    });
+}
+
+/// Deliver an API 0.5 result to `plugin` now.
+fn deliver2(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    plugin: String,
+    callback: helix_plugin::v05::Callback2,
+) {
+    let snapshot = snapshot(editor);
+    match with_host(|host| host.callback2(&plugin, callback, &snapshot)) {
+        Some(Ok(actions)) => apply(editor, Some(jobs), actions),
+        Some(Err(err)) => {
+            refresh_wanted(editor);
+            editor.set_error(err.to_string());
+        }
+        None => {}
+    }
+}
+
+/// Deliver an API 0.5 result to `plugin` after this event.
+fn deliver2_later(plugin: String, callback: helix_plugin::v05::Callback2) {
+    tokio::spawn(async move {
+        job::dispatch_callback(job::Callback::EditorCompositorJobs(Box::new(
+            move |editor, _, jobs| deliver2(editor, jobs, plugin, callback),
+        )))
+        .await;
+    });
+}
+
+/// "space f" as key events.
+fn parse_keys(keys: &str) -> Result<Vec<helix_view::input::KeyEvent>, String> {
+    keys.split_whitespace()
+        .map(|key| {
+            key.parse::<helix_view::input::KeyEvent>()
+                .map_err(|err| format!("invalid key '{key}': {err}"))
+        })
+        .collect()
+}
+
+/// Store `plugin`'s key bindings (all of them). Bindings it still has keep
+/// their place in the order bindings were set; new ones go last.
+fn set_key_bindings(editor: &Editor, plugin: &str, bindings: Vec<helix_plugin::v05::KeyBinding>) {
+    use crate::keymap::plugin_layers::{self, Layer, PluginBinding};
+    let converted: Vec<PluginBinding> = bindings
+        .into_iter()
+        .filter_map(|binding| {
+            let keys = parse_keys(&binding.keys).ok()?;
+            let document = match binding.document {
+                Some(doc) => Some(editor_doc_id(editor, doc)?),
+                None => None,
+            };
+            Some(PluginBinding {
+                plugin: plugin.to_string(),
+                name: binding.name,
+                description: binding.description,
+                layer: match binding.layer {
+                    helix_plugin::v05::KeyLayer::Override => Layer::Override,
+                    helix_plugin::v05::KeyLayer::Plugin => Layer::Plugin,
+                    helix_plugin::v05::KeyLayer::Fallback => Layer::Fallback,
+                },
+                mode: match binding.mode {
+                    helix_plugin::Mode::Normal => Mode::Normal,
+                    helix_plugin::Mode::Insert => Mode::Insert,
+                    helix_plugin::Mode::Select => Mode::Select,
+                },
+                keys,
+                document,
+                language: binding.language,
+            })
+        })
+        .collect();
+    let same = |a: &PluginBinding, b: &PluginBinding| {
+        a.mode == b.mode && a.keys == b.keys && a.document == b.document
+    };
+    let mut all = (*plugin_layers::bindings()).clone();
+    all.retain(|old| old.plugin != plugin || converted.iter().any(|new| same(old, new)));
+    for new in converted {
+        match all
+            .iter_mut()
+            .find(|old| old.plugin == plugin && same(old, &new))
+        {
+            Some(old) => *old = new,
+            None => all.push(new),
+        }
+    }
+    plugin_layers::set_bindings(all);
+}
+
+/// Forget `plugin`'s key bindings (`None`: everyone's).
+fn clear_key_bindings(plugin: Option<&str>) {
+    use crate::keymap::plugin_layers;
+    let mut all = (*plugin_layers::bindings()).clone();
+    all.retain(|binding| plugin.is_some_and(|plugin| binding.plugin != plugin));
+    plugin_layers::set_bindings(all);
+}
+
+/// Keys bound to `plugin`'s callback `name` were pressed: ask it. `true`:
+/// handled; `false`: pass the keys through. Errors (including a disabled or
+/// missing plugin) are shown and pass the keys through.
+pub fn key(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    plugin: &str,
+    name: &str,
+    keys: &str,
+    count: Option<u32>,
+) -> bool {
+    use helix_plugin::v05::KeyOutcome;
+    let snapshot = snapshot(editor);
+    let result = with_host(|host| host.key(plugin, name, keys, count, snapshot));
+    match result {
+        Some(Ok((outcome, actions))) => {
+            DEPTH.fetch_add(1, Ordering::Relaxed);
+            apply(editor, Some(jobs), actions);
+            DEPTH.fetch_sub(1, Ordering::Relaxed);
+            outcome == KeyOutcome::Handled
+        }
+        Some(Err(err)) => {
+            refresh_wanted(editor);
+            editor.set_error(format!("{plugin}: {err}"));
+            false
+        }
+        None => false,
+    }
+}
+
 pub fn run_command(
     editor: &mut Editor,
     jobs: &mut Jobs,
@@ -850,6 +1565,7 @@ fn view_for(editor: &Editor, doc: DocumentId) -> Option<ViewId> {
 
 /// What plugins can see of the editor. Cheap: ropes are reference counted.
 pub fn snapshot(editor: &Editor) -> Snapshot {
+    let (views, ui) = views_and_ui(editor);
     let documents = editor
         .documents()
         .map(|doc| {
@@ -863,6 +1579,10 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     selection,
                     modified: doc.is_modified(),
                     revision: doc.version().max(0) as u64,
+                    language_servers: doc
+                        .language_servers()
+                        .map(|server| server.name().to_string())
+                        .collect(),
                     owner: doc
                         .plugin_owner
                         .clone()
@@ -888,6 +1608,15 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                 focused: panel.focused,
             })
             .collect(),
+        views,
+        ui,
+        completion_menu: crate::ui::completion::menu_events::snapshot().map(|menu| {
+            helix_plugin::v05::MenuState {
+                items: menu.items,
+                selected: menu.selected,
+                previewing: menu.previewing,
+            }
+        }),
         registers: if WANTS_REGISTERS.load(Ordering::Relaxed) {
             editor.registers.stored().collect()
         } else {
@@ -905,7 +1634,8 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
     let mut edited: HashMap<DocumentId, ViewId> = HashMap::new();
     // UI changes need the compositor: run them later, together, in order.
     let mut ui: Vec<UiJob> = Vec::new();
-    for action in actions {
+    let mut actions = actions.into_iter();
+    while let Some(action) = actions.next() {
         match action {
             Action::Edit { doc, transaction } => {
                 let Some(doc_id) = editor_doc_id(editor, doc) else {
@@ -967,13 +1697,14 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 stdin,
                 timeout,
                 stream,
+                session,
             } => ui.push(Box::new(move |_, _| {
                 if with_host(|host| {
                     host.has_request(&plugin, id, helix_plugin::PendingKind::Process)
                 })
                 .unwrap_or(false)
                 {
-                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream);
+                    process::spawn(plugin, id, argv, cwd, stdin, timeout, stream, session);
                 }
             })),
             Action::RunInteractive {
@@ -1008,7 +1739,88 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 ui.push(Box::new(move |_, _| process::kill(&plugin, id)))
             }
             Action::Listen { plugin, id, port } => listen::start(plugin, id, port),
+            Action::SubscriptionsChanged => refresh_wanted(editor),
+            Action::Execute {
+                plugin,
+                id,
+                name,
+                args,
+                count,
+            } => {
+                let result = match jobs.as_deref_mut() {
+                    Some(jobs) => execute_named(editor, jobs, &name, args, count),
+                    None => Err("commands can't run from here".to_string()),
+                };
+                deliver2_later(
+                    plugin,
+                    helix_plugin::v05::Callback2::CommandDone { id, result },
+                );
+            }
+            Action::Batch { plugin, id, steps } => {
+                let mut results = Vec::with_capacity(steps.len());
+                let mut failed = false;
+                for step in steps {
+                    if failed {
+                        results.push(Err("skipped".to_string()));
+                        continue;
+                    }
+                    let result = match (jobs.as_deref_mut(), step) {
+                        (None, _) => Err("commands can't run from here".to_string()),
+                        (Some(jobs), helix_plugin::v05::Step::Command { name, args, count }) => {
+                            execute_named(editor, jobs, &name, args, count)
+                        }
+                        (Some(jobs), helix_plugin::v05::Step::SetMode(mode)) => {
+                            set_mode(editor, jobs, mode);
+                            Ok(())
+                        }
+                    };
+                    failed = result.is_err();
+                    results.push(result);
+                }
+                deliver2_later(
+                    plugin,
+                    helix_plugin::v05::Callback2::BatchDone { id, results },
+                );
+            }
+            Action::ServiceCall(call) => serve_later(call),
+            Action::SetMode(mode) => {
+                if let Some(jobs) = jobs.as_deref_mut() {
+                    set_mode(editor, jobs, mode);
+                }
+            }
+            // The menu is the editor view's: the rest of the actions wait
+            // until it is done, to keep their order.
+            Action::CompletionMenu(command) => {
+                let rest: Vec<Action> = actions.by_ref().collect();
+                ui.push(Box::new(move |editor, compositor| {
+                    menu_command(editor, compositor, command);
+                    apply(editor, None, rest);
+                }));
+            }
+            Action::KeyBindings { plugin, bindings } => {
+                set_key_bindings(editor, &plugin, bindings);
+                helix_event::request_redraw();
+            }
             Action::StopListen { plugin, id } => listen::stop(&plugin, id),
+            Action::Watch {
+                plugin,
+                id,
+                path,
+                recursive,
+            } => {
+                if let Err(err) = watch::start(plugin, id, path, recursive) {
+                    editor.set_error(err);
+                }
+            }
+            Action::Unwatch { plugin, id } => watch::stop(&plugin, id),
+            Action::LspRequest {
+                plugin,
+                id,
+                doc,
+                server,
+                method,
+                params,
+            } => lsp_request(editor, plugin, id, doc, server, method, params),
             Action::ShowPicker {
                 plugin,
                 id,
@@ -1087,6 +1899,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     }
                     helix_plugin::Decorations::Conceals(conceals) => {
                         store.set_conceals(layer, conceals, len)
+                    }
+                    helix_plugin::Decorations::VirtualLines(lines) => {
+                        store.set_virtual_lines(layer, lines, len)
+                    }
+                    helix_plugin::Decorations::PatchHighlights(range, highlights) => {
+                        store.patch_highlights(layer, range, highlights, len)
+                    }
+                    helix_plugin::Decorations::PatchAnnotations(range, annotations) => {
+                        store.patch_annotations(layer, range, annotations, len)
                     }
                     helix_plugin::Decorations::RawOnCursorLine(raw) => {
                         store.set_raw_on_cursor_line(layer, raw)
@@ -1211,7 +2032,18 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 items,
                 width,
                 selected,
+                float,
             } => {
+                let float = float.map(|(height, position)| {
+                    use helix_plugin::v05::FloatPosition as P;
+                    use helix_view::sidebar::FloatPosition as V;
+                    let position = match position {
+                        P::Center => V::Center,
+                        P::Cursor => V::Cursor,
+                        P::TopRight => V::TopRight,
+                    };
+                    (height, position)
+                });
                 let items: Vec<_> = items
                     .into_iter()
                     .map(|item| helix_view::sidebar::SidebarItem {
@@ -1240,6 +2072,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     selected,
                     scroll,
                     focused,
+                    float,
                 });
                 helix_event::request_redraw();
             }
@@ -1360,6 +2193,7 @@ fn view_dock(dock: helix_plugin::Dock) -> helix_view::sidebar::Dock {
         helix_plugin::Dock::Left => helix_view::sidebar::Dock::Left,
         helix_plugin::Dock::Right => helix_view::sidebar::Dock::Right,
         helix_plugin::Dock::Bottom => helix_view::sidebar::Dock::Bottom,
+        helix_plugin::Dock::Float => helix_view::sidebar::Dock::Float,
     }
 }
 
@@ -1368,6 +2202,7 @@ fn plugin_dock(dock: helix_view::sidebar::Dock) -> helix_plugin::Dock {
         helix_view::sidebar::Dock::Left => helix_plugin::Dock::Left,
         helix_view::sidebar::Dock::Right => helix_plugin::Dock::Right,
         helix_view::sidebar::Dock::Bottom => helix_plugin::Dock::Bottom,
+        helix_view::sidebar::Dock::Float => helix_plugin::Dock::Float,
     }
 }
 
@@ -1848,12 +2683,24 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidChange<'_>| {
+        if let Some(marks) = &*MARKS.lock() {
+            marks
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .map(plugin_doc_id(event.doc.id()), event.changes);
+        }
         if !event.ghost_transaction && APPLYING.load(Ordering::Relaxed) == 0 {
             queue(Event::DocumentChange(plugin_doc_id(event.doc.id())));
         }
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        if let Some(marks) = &*MARKS.lock() {
+            marks
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .close(plugin_doc_id(event.doc.id()));
+        }
         queue(Event::DocumentClose(plugin_doc_id(event.doc.id())));
         Ok(())
     });
@@ -1890,6 +2737,10 @@ pub fn editor_idle(editor: &mut Editor) {
 }
 
 fn refresh_wanted(editor: &mut Editor) {
+    WANTED2.store(
+        with_host(|host| wanted2_mask(host)).unwrap_or(0),
+        Ordering::Relaxed,
+    );
     let (mask, disabled) = with_host(|host| {
         let mask = EVENT_KINDS
             .into_iter()
@@ -1908,6 +2759,10 @@ fn refresh_wanted(editor: &mut Editor) {
     WANTED.store(mask, Ordering::Relaxed);
     WANTS_REGISTERS.store(
         with_host(|host| host.wants_registers()).unwrap_or(false),
+        Ordering::Relaxed,
+    );
+    HAS_V05.store(
+        with_host(|host| has_v05(host)).unwrap_or(false),
         Ordering::Relaxed,
     );
     for plugin in disabled {
@@ -1943,13 +2798,41 @@ fn queue(event: Event) {
 
 /// Send the queued events to the plugins and apply what they do.
 pub fn deliver_events(editor: &mut Editor) {
-    let events = {
+    let (events, events2) = {
         let mut pending = PENDING.lock();
         pending.scheduled = false;
-        std::mem::take(&mut pending.events)
+        (
+            std::mem::take(&mut pending.events),
+            std::mem::take(&mut pending.events2),
+        )
     };
     for event in events {
         deliver_event(editor, event);
+    }
+    for (event, doc) in events2 {
+        let snapshot = snapshot(editor);
+        let Some(results) = with_host(|host| host.dispatch2(&event, doc, &snapshot)) else {
+            continue;
+        };
+        for (plugin, result) in results {
+            report(editor, &plugin, result);
+        }
+    }
+}
+
+/// [`report`] with jobs, for actions that need them.
+fn report_with(
+    editor: &mut Editor,
+    jobs: Option<&mut Jobs>,
+    _plugin: &str,
+    result: anyhow::Result<Vec<Action>>,
+) {
+    match result {
+        Ok(actions) => apply(editor, jobs, actions),
+        Err(error) => {
+            refresh_wanted(editor);
+            editor.set_error(error.to_string());
+        }
     }
 }
 
