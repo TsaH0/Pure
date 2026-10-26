@@ -2233,6 +2233,28 @@ async fn plugins_can_be_completion_sources() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn one_ctrl_c_leaves_insert_mode_with_the_completion_menu_open() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_v3_settings(ALL, "[testplugin3]\ncompletion = true\n");
+    keys(&mut app, "ial").await;
+    deliver_events(&mut app).await;
+    // The menu previews `alpha`; ctrl-c drops the preview and, in the same
+    // press, leaves insert mode.
+    keys(&mut app, "<C-n>").await;
+    assert!(text(&app).starts_with("alpha"), "{:?}", text(&app));
+    keys(&mut app, "<C-c>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    assert!(
+        text(&app).starts_with("al") && !text(&app).starts_with("alpha"),
+        "{:?}",
+        text(&app)
+    );
+    // Without a menu it leaves insert mode too.
+    keys(&mut app, "ix<C-c>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_snippets_have_tab_stops() -> anyhow::Result<()> {
     let (mut app, _dir) =
         app_with_v3_settings(ALL, "[testplugin3]\ncompletion = true\nsnippets = true\n");

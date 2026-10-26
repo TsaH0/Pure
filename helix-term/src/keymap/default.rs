@@ -390,7 +390,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
         },
     }));
     let insert = keymap!({ "Insert mode"
-        "esc" => normal_mode,
+        "esc" | "C-c" => normal_mode,
 
         "C-s" => commit_undo_checkpoint,
         "C-x" => completion,

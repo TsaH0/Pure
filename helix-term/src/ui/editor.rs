@@ -1722,8 +1722,10 @@ impl Component for EditorView {
                                 }
                             }
 
-                            // if completion didn't take the event, we pass it onto commands
-                            if !consumed {
+                            // if completion didn't take the event, we pass it onto commands.
+                            // Ctrl-c closes the menu and still does what it is bound to
+                            // (leave insert mode), so one press is enough.
+                            if !consumed || key == crate::ctrl!('c') {
                                 self.insert_mode(&mut cx, key);
 
                                 // record last_insert key

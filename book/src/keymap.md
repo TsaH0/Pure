@@ -412,7 +412,7 @@ escaping from insert mode to normal mode.
 
 | Key                                         | Description                 | Command                  |
 | -----                                       | -----------                 | -------                  |
-| `Escape`                                    | Switch to normal mode       | `normal_mode`            |
+| `Escape`, `Ctrl-c`                          | Switch to normal mode (`Ctrl-c` also when the completion menu is open) | `normal_mode` |
 | `Ctrl-s`                                    | Commit undo checkpoint      | `commit_undo_checkpoint` |
 | `Ctrl-x`                                    | Autocomplete                | `completion`             |
 | `Ctrl-r`                                    | Insert a register content   | `insert_register`        |
