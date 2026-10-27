@@ -55,6 +55,11 @@ impl Component for PluginPopup {
                 if matches!(key.code, KeyCode::Esc)
                     || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'))
                 {
+                    // Typing: the key also leaves insert mode, so one press
+                    // is enough.
+                    if cx.editor.mode() == helix_view::document::Mode::Insert {
+                        return EventResult::Ignored(Some(callback));
+                    }
                     return EventResult::Consumed(Some(callback));
                 }
                 return EventResult::Ignored(Some(callback));
