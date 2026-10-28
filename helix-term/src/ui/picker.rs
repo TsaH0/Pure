@@ -1105,6 +1105,22 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 &cx.editor.theme,
                 &mut overlay_highlights,
             );
+            // Plugin buffers (oil...) look as they do in the editor.
+            let mut annotations = TextAnnotations::default();
+            if !doc.plugin_decorations.is_empty() {
+                let text = doc.text().slice(..);
+                let first = text.char_to_line(offset.anchor.min(text.len_chars()));
+                let last = (first + area.height as usize).min(text.len_lines());
+                let visible = text.line_to_char(first)..text.line_to_char(last);
+                doc.plugin_decorations.overlays_into(
+                    &cx.editor.theme,
+                    visible,
+                    None,
+                    &mut overlay_highlights,
+                );
+                doc.plugin_decorations
+                    .annotate(Some(&cx.editor.theme), None, &mut annotations);
+            }
 
             let mut decorations = DecorationManager::default();
 
@@ -1134,7 +1150,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 doc,
                 offset,
                 // TODO: compute text annotations asynchronously here (like inlay hints)
-                &TextAnnotations::default(),
+                &annotations,
                 syntax_highlighter,
                 overlay_highlights,
                 &cx.editor.theme,

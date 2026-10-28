@@ -69,6 +69,9 @@ runtime_local! {
     static WANTED: AtomicU32 = AtomicU32::new(0);
     /// The same for API 0.5's events and hooks (bits of `event2_bit`).
     static WANTED2: AtomicU32 = AtomicU32::new(0);
+    /// Plugin buffers being opened (their owner is told at once, but not
+    /// again from inside that answer).
+    static OPENING: AtomicUsize = AtomicUsize::new(0);
     /// The focused view and its document, as last reported to plugins.
     static LAST_FOCUS: Mutex<Option<(ViewId, DocumentId)>> = Mutex::new(None);
     /// The host's marks, moved by every edit (without the host's lock).
@@ -1783,6 +1786,18 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 );
             }
             Action::ServiceCall(call) => serve_later(call),
+            Action::CloseBuffer(doc) => {
+                if let Some(doc_id) = editor_doc_id(editor, doc) {
+                    let shown = editor.tree.views().any(|(view, _)| view.doc == doc_id);
+                    let modified = editor
+                        .documents
+                        .get(&doc_id)
+                        .is_some_and(|d| d.is_modified());
+                    if !shown && !modified {
+                        let _ = editor.close_document(doc_id, false);
+                    }
+                }
+            }
             Action::SetMode(mode) => {
                 if let Some(jobs) = jobs.as_deref_mut() {
                     set_mode(editor, jobs, mode);
@@ -1994,17 +2009,30 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                         doc_id
                     }
                 };
-                // Tell the owner the id of its buffer.
+                // Tell the owner the id of its buffer. Now, so what it does
+                // (decorations) is in the first frame that shows the buffer;
+                // later when this is itself the answer to that event.
                 if let Some((plugin, _)) = owner {
                     let event = Event::DocumentOpen(plugin_doc_id(doc_id));
-                    later(move |editor, _| {
+                    if OPENING.fetch_add(1, Ordering::Relaxed) == 0 {
                         let snapshot = snapshot(editor);
                         let result =
                             with_host(|host| host.dispatch_unsubscribed(&plugin, event, &snapshot));
                         if let Some(result) = result.flatten() {
-                            report(editor, &plugin, result);
+                            report_with(editor, jobs.as_deref_mut(), &plugin, result);
                         }
-                    });
+                    } else {
+                        later(move |editor, _| {
+                            let snapshot = snapshot(editor);
+                            let result = with_host(|host| {
+                                host.dispatch_unsubscribed(&plugin, event, &snapshot)
+                            });
+                            if let Some(result) = result.flatten() {
+                                report(editor, &plugin, result);
+                            }
+                        });
+                    }
+                    OPENING.fetch_sub(1, Ordering::Relaxed);
                 }
             }
             Action::CreatePath { path, directory } => {

@@ -773,6 +773,11 @@ interface state {
 
   views: func() -> list<view-info>;
   ui: func() -> ui-state;
+  /// Close one of this plugin's buffers (`host.open-buffer`) after this
+  /// call, unless a view still shows it or it has unsaved changes: then it
+  /// stays open. For buffers a plugin moves away from (a directory
+  /// listing), so they don't pile up in the buffer list.
+  close-buffer: func(doc: document-id) -> result<_, string>;
 }
 
 /// API 0.5: services other plugins can call. Names are namespaced by the

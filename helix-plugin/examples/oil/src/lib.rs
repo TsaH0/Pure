@@ -52,8 +52,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use helix_plugin_api::{
     decorations::{self, annotation, highlight, overlay, Annotation, Highlight},
-    editor, files, register_plugin, text, CommandInfo, DocumentId, Edit, EventKind, OpenAction, Plugin,
-    PopupOptions, Range, Registration,
+    editor, files, register_plugin, state, text, CommandInfo, DocumentId, Edit, EventKind,
+    OpenAction, Plugin, PopupOptions, Range, Registration,
 };
 
 const SCHEME: &str = "oil://";
@@ -63,7 +63,9 @@ enum Kind {
     File,
     Dir,
     /// A symbolic link, to a directory or not.
-    Link { dir: bool },
+    Link {
+        dir: bool,
+    },
 }
 
 impl Kind {
@@ -265,7 +267,9 @@ struct Line {
 fn parse_line(line: &str) -> Option<Line> {
     let line = line.trim_end_matches(['\r', '\n']);
     let (id, rest) = match line.strip_prefix('/').and_then(|rest| rest.split_once(' ')) {
-        Some((digits, rest)) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+        Some((digits, rest))
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+        {
             (digits.parse().ok(), rest)
         }
         _ => (None, line),
@@ -297,7 +301,11 @@ impl Op {
             Op::Copy { from, to } => format!("COPY   {} → {}", from.display(), to.display()),
             Op::Move { from, to } => format!("MOVE   {} → {}", from.display(), to.display()),
             Op::Delete { path, dir } => {
-                let verb = if OIL.with_borrow(|oil| oil.trash) { "TRASH " } else { "DELETE" };
+                let verb = if OIL.with_borrow(|oil| oil.trash) {
+                    "TRASH "
+                } else {
+                    "DELETE"
+                };
                 format!("{verb} {}{}", path.display(), if *dir { "/" } else { "" })
             }
         }
@@ -332,7 +340,10 @@ fn plan(buffers: &[(PathBuf, String, bool)]) -> Result<Vec<Op>, String> {
                 }
                 match line.id.filter(|id| oil.entries.contains_key(id)) {
                     Some(id) => placed.entry(id).or_default().push(path),
-                    None if *modified => creates.push(Op::Create { path, dir: line.dir }),
+                    None if *modified => creates.push(Op::Create {
+                        path,
+                        dir: line.dir,
+                    }),
                     None => {}
                 }
             }
@@ -477,7 +488,9 @@ fn order(mut ops: Vec<Op>) -> Vec<Op> {
         let Op::Move { from, to } = ops.remove(i) else {
             unreachable!()
         };
-        let name = from.file_name().map_or_else(Default::default, |n| n.to_string_lossy().into_owned());
+        let name = from
+            .file_name()
+            .map_or_else(Default::default, |n| n.to_string_lossy().into_owned());
         let aside = from.with_file_name(format!(".oil-swap-{name}"));
         ordered.push(Op::Move {
             from,
@@ -553,7 +566,10 @@ fn execute(ops: Vec<Op>) -> Result<(), String> {
             // Unchanged buffers show what happened; edited ones keep their
             // edits for another try.
             refresh_all(false)?;
-            Err(format!("oil: not everything was applied: {}", failed.join("; ")))
+            Err(format!(
+                "oil: not everything was applied: {}",
+                failed.join("; ")
+            ))
         }
     });
     if let Err(err) = started {
@@ -617,7 +633,13 @@ fn place_cursor(doc: DocumentId, text: &str, line: usize) -> Result<(), String> 
     let prefix = 2 + id_width() as u32;
     let len = text::char_len(text);
     let pos = (start + prefix).min(len.saturating_sub(1));
-    editor::set_selections(doc, &[Range { anchor: pos, head: pos }])
+    editor::set_selections(
+        doc,
+        &[Range {
+            anchor: pos,
+            head: pos,
+        }],
+    )
 }
 
 fn icon(kind: Kind, icons: Icons) -> &'static str {
@@ -661,7 +683,11 @@ fn date(time: SystemTime) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02} {:02}:{:02}", rest / 3600, rest % 3600 / 60)
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}",
+        rest / 3600,
+        rest % 3600 / 60
+    )
 }
 
 /// Icons over the ids, names coloured, details and link targets as virtual
@@ -735,10 +761,22 @@ fn kind_scope(kind: Kind) -> &'static str {
 }
 
 /// Open `dir` in the current view, with the cursor on `focus` if given.
+/// Moving from one directory to another in the same view closes the one
+/// left, so the buffer list doesn't fill up with directories (it stays open
+/// if it has unsaved changes, like the cut half of a move, or another view
+/// shows it).
 fn open_dir(dir: PathBuf, focus: Option<String>, action: OpenAction) -> Result<(), String> {
     let ids = read_dir(&dir)?;
     OIL.with_borrow_mut(|oil| oil.focus = Some((dir.clone(), focus.unwrap_or_default())));
-    editor::open_buffer(&buffer_name(&dir), &render(&ids), None, action)
+    let left = matches!(action, OpenAction::Replace)
+        .then(editor::current_document)
+        .flatten()
+        .filter(|&doc| buffer_dir(doc).is_some_and(|old| old != dir));
+    editor::open_buffer(&buffer_name(&dir), &render(&ids), None, action)?;
+    if let Some(doc) = left {
+        state::close_buffer(doc)?;
+    }
+    Ok(())
 }
 
 /// The entry under the primary cursor of the current buffer.
@@ -761,7 +799,10 @@ fn current_line() -> Result<(DocumentId, PathBuf, Line), String> {
 fn select(action: OpenAction) -> Result<(), String> {
     let (_, dir, line) = current_line()?;
     let path = dir.join(&line.name);
-    let is_dir = match line.id.and_then(|id| OIL.with_borrow(|oil| oil.entries.get(&id).cloned())) {
+    let is_dir = match line
+        .id
+        .and_then(|id| OIL.with_borrow(|oil| oil.entries.get(&id).cloned()))
+    {
         Some(entry) if entry.path() == path => entry.kind.is_dir(),
         Some(_) | None if !path.exists() => {
             return Err("save (:w) first: this entry doesn't exist yet".into())
@@ -788,7 +829,8 @@ fn start_dir() -> (PathBuf, Option<String>) {
         .map(PathBuf::from)
     {
         Some(path) => (
-            path.parent().map_or_else(|| PathBuf::from(editor::cwd()), Path::to_path_buf),
+            path.parent()
+                .map_or_else(|| PathBuf::from(editor::cwd()), Path::to_path_buf),
             path.file_name().map(|n| n.to_string_lossy().into_owned()),
         ),
         None => (PathBuf::from(editor::cwd()), None),
@@ -825,8 +867,12 @@ fn preview() -> Result<(), String> {
                 .join("\n")
         }
     };
-    editor::popup(&format!("**{}**\n\n```\n{}\n```", path.display(), body.replace("```", "ˋˋˋ")))
-        .map(|_| ())
+    editor::popup(&format!(
+        "**{}**\n\n```\n{}\n```",
+        path.display(),
+        body.replace("```", "ˋˋˋ")
+    ))
+    .map(|_| ())
 }
 
 const HELP: &str = "**oil** — edit, then `:w` to apply\n\n\
@@ -846,9 +892,7 @@ fn write() -> Result<(), String> {
     }
     let buffers: Vec<(PathBuf, String, bool)> = our_buffers()
         .into_iter()
-        .map(|(doc, dir)| {
-            Ok((dir, editor::text(doc)?, editor::document_modified(doc)?))
-        })
+        .map(|(doc, dir)| Ok((dir, editor::text(doc)?, editor::document_modified(doc)?)))
         .collect::<Result<_, String>>()?;
     let ops = plan(&buffers)?;
     if ops.is_empty() {
@@ -914,7 +958,10 @@ impl Plugin for OilPlugin {
             };
         });
         let commands = [
-            ("open", "Open a directory (default: the current file's) as a buffer"),
+            (
+                "open",
+                "Open a directory (default: the current file's) as a buffer",
+            ),
             ("open-parent", "Open the current file's directory"),
             ("select", "Open the entry under the cursor"),
             ("select-vsplit", "Open the entry in a vertical split"),
@@ -922,15 +969,24 @@ impl Plugin for OilPlugin {
             ("parent", "Go to the parent directory"),
             ("cwd", "Go to the working directory"),
             ("preview", "Preview the entry under the cursor"),
-            ("refresh", "Read the directory again (drops unsaved changes)"),
+            (
+                "refresh",
+                "Read the directory again (drops unsaved changes)",
+            ),
             ("close", "Close the directory buffer"),
             ("toggle-hidden", "Show or hide dot files"),
             ("cycle-sort", "Sort by name, size or modification time"),
-            ("toggle-details", "Show or hide sizes and modification times"),
+            (
+                "toggle-details",
+                "Show or hide sizes and modification times",
+            ),
             ("help", "Show the keys of directory buffers"),
             ("cd", "Make the current directory the working directory"),
             ("yank-path", "Yank the path of the entry under the cursor"),
-            ("open-external", "Open the entry with the system's default program"),
+            (
+                "open-external",
+                "Open the entry with the system's default program",
+            ),
         ];
         Ok(Registration {
             commands: commands
@@ -1020,14 +1076,20 @@ impl Plugin for OilPlugin {
             "open-external" => {
                 let (_, dir, line) = current_line()?;
                 let path = dir.join(&line.name).to_string_lossy().into_owned();
-                let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                editor::spawn(&[opener, path.as_str()], Default::default(), |result| {
-                    match result {
+                let opener = if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                };
+                editor::spawn(
+                    &[opener, path.as_str()],
+                    Default::default(),
+                    |result| match result {
                         Ok(output) if output.exit_code == Some(0) => Ok(()),
                         Ok(output) => Err(output.stderr.trim().to_string()),
                         Err(err) => Err(err),
-                    }
-                })
+                    },
+                )
                 .map(|_| ())
             }
             _ => Err(format!("unknown command {name}")),
@@ -1102,11 +1164,19 @@ mod test {
     fn lines_parse() {
         assert_eq!(
             parse_line("/012 src/"),
-            Some(Line { id: Some(12), name: "src".into(), dir: true })
+            Some(Line {
+                id: Some(12),
+                name: "src".into(),
+                dir: true
+            })
         );
         assert_eq!(
             parse_line("new file.txt"),
-            Some(Line { id: None, name: "new file.txt".into(), dir: false })
+            Some(Line {
+                id: None,
+                name: "new file.txt".into(),
+                dir: false
+            })
         );
         assert_eq!(parse_line("   "), None);
         assert!(check_name("a/../b").is_err());
@@ -1131,11 +1201,26 @@ mod test {
         assert_eq!(
             ops,
             [
-                Op::Copy { from: p("/nonexistent-a/copied.txt"), to: p("/nonexistent-b/copy.txt") },
-                Op::Move { from: p("/nonexistent-a/old.txt"), to: p("/nonexistent-a/new-name.txt") },
-                Op::Move { from: p("/nonexistent-a/moved.txt"), to: p("/nonexistent-b/moved.txt") },
-                Op::Delete { path: p("/nonexistent-a/gone"), dir: true },
-                Op::Create { path: p("/nonexistent-a/fresh"), dir: true },
+                Op::Copy {
+                    from: p("/nonexistent-a/copied.txt"),
+                    to: p("/nonexistent-b/copy.txt")
+                },
+                Op::Move {
+                    from: p("/nonexistent-a/old.txt"),
+                    to: p("/nonexistent-a/new-name.txt")
+                },
+                Op::Move {
+                    from: p("/nonexistent-a/moved.txt"),
+                    to: p("/nonexistent-b/moved.txt")
+                },
+                Op::Delete {
+                    path: p("/nonexistent-a/gone"),
+                    dir: true
+                },
+                Op::Create {
+                    path: p("/nonexistent-a/fresh"),
+                    dir: true
+                },
             ]
         );
         assert!(plan(&[("/nonexistent-a".into(), "x\nx\n".into(), true)]).is_err());
@@ -1153,11 +1238,18 @@ mod test {
     #[test]
     fn swaps_and_moves_into_new_directories_are_ordered() {
         let p = |s: &str| PathBuf::from(s);
-        let mv = |from: &str, to: &str| Op::Move { from: p(from), to: p(to) };
+        let mv = |from: &str, to: &str| Op::Move {
+            from: p(from),
+            to: p(to),
+        };
         // a ↔ b: through a temporary name.
         assert_eq!(
             order(vec![mv("/d/a", "/d/b"), mv("/d/b", "/d/a")]),
-            [mv("/d/a", "/d/.oil-swap-a"), mv("/d/b", "/d/a"), mv("/d/.oil-swap-a", "/d/b")]
+            [
+                mv("/d/a", "/d/.oil-swap-a"),
+                mv("/d/b", "/d/a"),
+                mv("/d/.oil-swap-a", "/d/b")
+            ]
         );
         // A chain: c → d after d → e.
         assert_eq!(
@@ -1167,16 +1259,41 @@ mod test {
         // Copy before its source moves; a moved-out child before its
         // directory is deleted; a new directory before what goes in it.
         let ops = order(vec![
-            Op::Delete { path: p("/d/old"), dir: true },
+            Op::Delete {
+                path: p("/d/old"),
+                dir: true,
+            },
             mv("/d/x", "/d/y"),
-            Op::Copy { from: p("/d/x"), to: p("/d/z") },
+            Op::Copy {
+                from: p("/d/x"),
+                to: p("/d/z"),
+            },
             mv("/d/old/keep", "/d/new/keep"),
-            Op::Create { path: p("/d/new"), dir: true },
+            Op::Create {
+                path: p("/d/new"),
+                dir: true,
+            },
         ]);
         let at = |op: &Op| ops.iter().position(|o| o == op).unwrap();
-        assert!(at(&Op::Copy { from: p("/d/x"), to: p("/d/z") }) < at(&mv("/d/x", "/d/y")));
-        assert!(at(&mv("/d/old/keep", "/d/new/keep")) < at(&Op::Delete { path: p("/d/old"), dir: true }));
-        assert!(at(&Op::Create { path: p("/d/new"), dir: true }) < at(&mv("/d/old/keep", "/d/new/keep")));
+        assert!(
+            at(&Op::Copy {
+                from: p("/d/x"),
+                to: p("/d/z")
+            }) < at(&mv("/d/x", "/d/y"))
+        );
+        assert!(
+            at(&mv("/d/old/keep", "/d/new/keep"))
+                < at(&Op::Delete {
+                    path: p("/d/old"),
+                    dir: true
+                })
+        );
+        assert!(
+            at(&Op::Create {
+                path: p("/d/new"),
+                dir: true
+            }) < at(&mv("/d/old/keep", "/d/new/keep"))
+        );
     }
 
     #[test]
