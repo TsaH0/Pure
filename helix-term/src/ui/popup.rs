@@ -302,6 +302,16 @@ impl<T: Component> Component for Popup<T> {
             compositor.remove(self.id.as_ref());
         });
 
+        // A popup that closes on any other key (hover, plugin text...) must
+        // not cost an extra press when it is open while typing: it closes
+        // and the key goes on to leave insert mode.
+        if self.auto_close
+            && cx.editor.mode() == helix_view::document::Mode::Insert
+            && matches!(key, key!(Esc) | ctrl!('c'))
+        {
+            return EventResult::Ignored(Some(close_fn));
+        }
+
         // Code completion handles arrows and page up/down itself,
         // but code lens does not. First check whether content knows
         // about the key event. When not, check the default keys.

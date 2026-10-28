@@ -3911,3 +3911,73 @@ async fn plugin_doctor_and_trace_report_what_plugins_do() -> anyhow::Result<()> 
     assert!(status(&app).0.starts_with("Stopped tracing"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_escape_closes_a_plugin_popup_and_leaves_insert_mode() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin popup-key insert C-q<ret>",
+    )
+    .await;
+    // A popup that appears while typing...
+    keys(&mut app, "i<C-q>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    // ...closes with the same Esc that leaves insert mode.
+    keys(&mut app, "<esc>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    keys(&mut app, ":plugin-run testplugin3/popup-events<ret>").await;
+    let events = status(&app).0;
+    assert!(
+        events.contains("closed:[") && !events.contains("closed:[]"),
+        "{events}"
+    );
+    // Ctrl-c does the same.
+    keys(&mut app, "i<C-q><C-c>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    // In normal mode Esc still just closes the popup.
+    keys(&mut app, ":plugin-run testplugin3/popup - shown<ret>").await;
+    keys(&mut app, "<esc>").await;
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_escape_closes_an_info_popup_and_leaves_insert_mode() -> anyhow::Result<()> {
+    use helix_term::ui::{Popup, Text};
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    for (open_in_insert, escape) in [(true, "<esc>"), (true, "<C-c>"), (false, "<esc>")] {
+        if open_in_insert {
+            keys(&mut app, "i").await;
+        }
+        helix_term::job::dispatch(|_, compositor| {
+            // What hover and the other documentation popups are.
+            let popup = Popup::new("hover", Text::new("documentation".into())).auto_close(true);
+            compositor.replace_or_push("hover", popup);
+        })
+        .await;
+        keys(&mut app, "").await;
+        keys(&mut app, escape).await;
+        // One press leaves insert mode and closes the popup.
+        assert_eq!(
+            app.editor.mode(),
+            helix_view::document::Mode::Normal,
+            "{escape}"
+        );
+        let open = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let seen = open.clone();
+        helix_term::job::dispatch(move |_, compositor| {
+            seen.store(
+                compositor.find_id::<Popup<Text>>("hover").is_some(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        })
+        .await;
+        keys(&mut app, "").await;
+        assert!(
+            !open.load(std::sync::atomic::Ordering::Relaxed),
+            "{escape}: the popup is still open"
+        );
+    }
+    Ok(())
+}

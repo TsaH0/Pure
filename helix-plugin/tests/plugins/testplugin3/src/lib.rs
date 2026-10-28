@@ -1037,6 +1037,12 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
             return KeyOutcome::Handled;
         }
         // Keys may edit and open UI, like a command.
+        if name.starts_with("popup") {
+            let _ = helix::plugin::ui::show_popup(&helix::plugin::ui::Popup {
+                markdown: "shown while typing".into(),
+                centered: false,
+            });
+        }
         if name.starts_with("edit") {
             if let Some(doc) = host::current_document() {
                 let _ = host::apply_edits(doc, &[types::Edit { from: 0, to: 0, text: "K".into() }]);
