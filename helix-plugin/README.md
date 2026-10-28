@@ -68,7 +68,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`snippets`](examples/snippets) | snippets with tab stops in the completion menu (`fn`, `test`, `for`...), like LuaSnip | `[snippets.snippets.rust]` `dbg = "dbg!($1)"` |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
-| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"` |
+| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"`, `icons = true` (Nerd Font) |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens, `sort` (in the background, applied only if the text didn't change) | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |

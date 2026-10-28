@@ -591,8 +591,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .unwrap_or_else(|| "".into())
     }
 
+    /// Column names are shown when more than one shown column has one (an
+    /// unnamed icon column doesn't make a header).
+    fn shows_header(&self) -> bool {
+        self.columns
+            .iter()
+            .filter(|column| !column.hidden && !column.name.is_empty())
+            .count()
+            > 1
+    }
+
     fn header_height(&self) -> u16 {
-        if self.columns.len() > 1 {
+        if self.shows_header() {
             1
         } else {
             0
@@ -953,7 +963,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .widths(&self.widths);
 
         // -- Header
-        if self.columns.len() > 1 {
+        if self.shows_header() {
             let active_column = self.query.active_column(self.prompt.position());
             let header_style = cx.editor.theme.get("ui.picker.header");
             let header_column_style = cx.editor.theme.get("ui.picker.header.column");

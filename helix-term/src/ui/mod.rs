@@ -215,6 +215,15 @@ fn get_excluded_types() -> ignore::types::Types {
 pub struct FilePickerData {
     root: PathBuf,
     directory_style: Style,
+    /// `editor.icons`
+    icons: bool,
+}
+
+/// The icon of `path` in its color (`editor.icons`): a column of its own, so
+/// shortening a long path never hides it and matching ignores it.
+fn icon_cell(path: &Path, is_dir: bool) -> tui::widgets::Cell<'static> {
+    let (glyph, color) = helix_view::icons::for_path(path, is_dir);
+    Span::styled(glyph, Style::default().fg(color)).into()
 }
 type FilePicker = Picker<PathBuf, FilePickerData>;
 
@@ -226,6 +235,7 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
     let data = FilePickerData {
         root: root.clone(),
         directory_style: editor.theme.get("ui.text.directory"),
+        icons: editor.config().icons,
     };
 
     let now = Instant::now();
@@ -259,35 +269,48 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
         });
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
-    let columns = [PickerColumn::new(
-        "path",
-        |item: &PathBuf, data: &FilePickerData| {
-            let path = item.strip_prefix(&data.root).unwrap_or(item);
-            let mut spans = Vec::with_capacity(3);
-            if let Some(dirs) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                spans.extend([
-                    Span::styled(dirs.to_string_lossy(), data.directory_style),
-                    Span::styled(std::path::MAIN_SEPARATOR_STR, data.directory_style),
-                ]);
-            }
-            let filename = path
-                .file_name()
-                .expect("normalized paths can't end in `..`")
-                .to_string_lossy();
-            spans.push(Span::raw(filename));
-            Spans::from(spans).into()
-        },
-    )];
-    let picker = Picker::new(columns, 0, [], data, move |cx, path: &PathBuf, action| {
-        if let Err(e) = cx.editor.open(path, action) {
-            let err = if let Some(err) = e.source() {
-                format!("{}", err)
-            } else {
-                format!("unable to open \"{}\"", path.display())
-            };
-            cx.editor.set_error(err);
+    let columns = PickerColumn::new("path", |item: &PathBuf, data: &FilePickerData| {
+        let path = item.strip_prefix(&data.root).unwrap_or(item);
+        let mut spans = Vec::with_capacity(3);
+        if let Some(dirs) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            spans.extend([
+                Span::styled(dirs.to_string_lossy(), data.directory_style),
+                Span::styled(std::path::MAIN_SEPARATOR_STR, data.directory_style),
+            ]);
         }
-    })
+        let filename = path
+            .file_name()
+            .expect("normalized paths can't end in `..`")
+            .to_string_lossy();
+        spans.push(Span::raw(filename));
+        Spans::from(spans).into()
+    });
+    let icons = data.icons;
+    let (columns, primary) = if icons {
+        let icon = PickerColumn::new("", |item: &PathBuf, _: &FilePickerData| {
+            icon_cell(item, false)
+        })
+        .without_filtering();
+        (vec![icon, columns], 1)
+    } else {
+        (vec![columns], 0)
+    };
+    let picker = Picker::new(
+        columns,
+        primary,
+        [],
+        data,
+        move |cx, path: &PathBuf, action| {
+            if let Err(e) = cx.editor.open(path, action) {
+                let err = if let Some(err) = e.source() {
+                    format!("{}", err)
+                } else {
+                    format!("unable to open \"{}\"", path.display())
+                };
+                cx.editor.set_error(err);
+            }
+        },
+    )
     .with_preview(|_editor, path| Some((path.as_path().into(), None)));
     let injector = picker.injector();
     let timeout = std::time::Instant::now() + std::time::Duration::from_millis(30);
@@ -320,7 +343,7 @@ pub fn file_explorer(root: PathBuf, editor: &Editor) -> Result<FileExplorer, std
     let directory_style = editor.theme.get("ui.text.directory");
     let directory_content = directory_content(&root, editor)?;
 
-    let columns = [PickerColumn::new(
+    let path = PickerColumn::new(
         "path",
         |(path, is_dir): &(PathBuf, bool), (root, directory_style): &(PathBuf, Style)| {
             let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
@@ -330,10 +353,20 @@ pub fn file_explorer(root: PathBuf, editor: &Editor) -> Result<FileExplorer, std
                 name.into()
             }
         },
-    )];
+    );
+    let (columns, primary) = if editor.config().icons {
+        let icon = PickerColumn::new(
+            "",
+            |(path, is_dir): &(PathBuf, bool), _: &(PathBuf, Style)| icon_cell(path, *is_dir),
+        )
+        .without_filtering();
+        (vec![icon, path], 1)
+    } else {
+        (vec![path], 0)
+    };
     let picker = Picker::new(
         columns,
-        0,
+        primary,
         directory_content,
         (root, directory_style),
         move |cx, (path, is_dir): &(PathBuf, bool), action| {

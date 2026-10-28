@@ -397,6 +397,9 @@ pub struct Config {
     pub continue_comments: bool,
     /// Whether to display infoboxes. Defaults to true.
     pub auto_info: bool,
+    /// File type icons in the file explorer and file picker. They are Nerd
+    /// Font glyphs: the terminal's font must be one. Defaults to false.
+    pub icons: bool,
     pub file_picker: FilePickerConfig,
     pub file_explorer: FileExplorerConfig,
     /// Configuration of the statusline elements
@@ -1282,6 +1285,7 @@ impl Default for Config {
             completion_keys: HashMap::new(),
             completion_trigger_len: 2,
             auto_info: true,
+            icons: false,
             file_picker: FilePickerConfig::default(),
             file_explorer: FileExplorerConfig::default(),
             statusline: StatusLineConfig::default(),
