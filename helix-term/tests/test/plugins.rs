@@ -3981,3 +3981,47 @@ async fn one_escape_closes_an_info_popup_and_leaves_insert_mode() -> anyhow::Res
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_ctrl_c_leaves_insert_mode_with_signature_help_open() -> anyhow::Result<()> {
+    use helix_term::ui::{Popup, Text};
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    for cancel in ["<C-c>", "<esc>"] {
+        keys(&mut app, "i").await;
+        helix_term::job::dispatch(|_, compositor| {
+            // Set up like the language server's signature help.
+            let popup = Popup::new(
+                "signature-help",
+                Text::new("struct Document { rope }".into()),
+            )
+            .ignore_escape_key(true)
+            .pass_ctrl_c(true);
+            compositor.replace_or_push("signature-help", popup);
+        })
+        .await;
+        keys(&mut app, "").await;
+        keys(&mut app, cancel).await;
+        assert_eq!(
+            app.editor.mode(),
+            helix_view::document::Mode::Normal,
+            "{cancel}"
+        );
+        let open = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let seen = open.clone();
+        helix_term::job::dispatch(move |_, compositor| {
+            seen.store(
+                compositor
+                    .find_id::<Popup<Text>>("signature-help")
+                    .is_some(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        })
+        .await;
+        keys(&mut app, "").await;
+        assert!(
+            !open.load(std::sync::atomic::Ordering::Relaxed),
+            "{cancel}: signature help is still open"
+        );
+    }
+    Ok(())
+}

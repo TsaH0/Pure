@@ -38,6 +38,7 @@ pub struct Popup<T: Component> {
     auto_close: bool,
     centered: bool,
     ignore_escape_key: bool,
+    pass_ctrl_c: bool,
     id: &'static str,
     has_scrollbar: bool,
 }
@@ -53,6 +54,7 @@ impl<T: Component> Popup<T> {
             auto_close: false,
             centered: false,
             ignore_escape_key: false,
+            pass_ctrl_c: false,
             id,
             has_scrollbar: true,
         }
@@ -100,6 +102,14 @@ impl<T: Component> Popup<T> {
     /// would be required to exit insert mode.
     pub fn ignore_escape_key(mut self, ignore: bool) -> Self {
         self.ignore_escape_key = ignore;
+        self
+    }
+
+    /// Lets Ctrl-c through like [`Self::ignore_escape_key`] does Esc, for
+    /// popups that close when insert mode ends (signature help): one press
+    /// leaves insert mode. Not for completion, where Ctrl-c aborts the menu.
+    pub fn pass_ctrl_c(mut self, pass: bool) -> Self {
+        self.pass_ctrl_c = pass;
         self
     }
 
@@ -294,6 +304,9 @@ impl<T: Component> Component for Popup<T> {
         };
 
         if key!(Esc) == key && self.ignore_escape_key {
+            return EventResult::Ignored(None);
+        }
+        if ctrl!('c') == key && self.pass_ctrl_c {
             return EventResult::Ignored(None);
         }
 
