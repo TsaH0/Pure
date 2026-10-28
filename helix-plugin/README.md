@@ -68,7 +68,7 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`snippets`](examples/snippets) | snippets with tab stops in the completion menu (`fn`, `test`, `for`...), like LuaSnip | `[snippets.snippets.rust]` `dbg = "dbg!($1)"` |
 | [`pomodoro`](examples/pomodoro) | `start`, `stop`: a timer in the statusline | `[pomodoro]` `work = 25`, `rest = 5` |
 | [`yank-history`](examples/yank-history) | `list`: pick an earlier yank to paste | – |
-| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"` |
+| [`tree`](examples/tree) | `toggle` (`space B`): a file tree in a sidebar, like nvim-tree | `[tree]` `allow-files = "read"`, `icons = true` (Nerd Font) |
 | [`api-demo`](examples/api-demo) | popup callbacks, live queries, streaming, positioned opens, `sort` (in the background, applied only if the text didn't change) | `[api-demo]` `allow-process = ["sh"]` for streaming |
 | [`js-upper`](examples/js-upper) | `upper` (written in JavaScript) | – |
 | [`markdown`](examples/markdown) | `toggle` (`space M`); renders Markdown in the buffer like render-markdown.nvim | – |
@@ -291,7 +291,7 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 | `keymaps` | bind keys to `on-key` (or closures); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
 | `completion-menu` | the open menu's items and selection; select, next, previous, confirm, abort (drops the preview), close (keeps it); `completion-menu` events say why it closed | – |
 | `subscriptions`, `hooks` | subscribe and unsubscribe at any time, filtered by language, path glob, document or command; `pre-command` and `pre-save` may cancel (and `pre-save` may edit) | – |
-| `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; views and what the UI shows | `run-commands` (and `allow-process` for commands that start programs) |
+| `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; views and what the UI shows; close your own buffers you moved away from (`state.close-buffer`, kept while shown or modified) | `run-commands` (and `allow-process` for commands that start programs) |
 | `services` | register from `init`, discover, call with JSON (1 MiB); versions, allowed callers, no cycles, at most four plugins deep; `dependencies` in `plugin.toml` load first | – |
 | `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
 | `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |

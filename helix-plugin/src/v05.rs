@@ -1001,6 +1001,18 @@ impl State {
     pub(crate) fn ui_state(&mut self) -> UiState {
         self.snapshot.ui.clone()
     }
+    pub(crate) fn close_buffer(&mut self, doc: DocumentId) -> Result<(), String> {
+        let owned = self
+            .document(doc)?
+            .owner
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == self.plugin);
+        if !owned {
+            return Err(format!("document {doc} isn't one of this plugin's buffers"));
+        }
+        self.actions.push(crate::Action::CloseBuffer(doc));
+        Ok(())
+    }
     pub(crate) fn register_service(
         &mut self,
         name: String,

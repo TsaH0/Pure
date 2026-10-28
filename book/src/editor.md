@@ -52,6 +52,7 @@
 | `directory-handler` | A plugin command that opens directories passed on the command line or to `:open` (it gets the directory as its argument), e.g. `"oil/open"`. Without it, or if it fails, the file picker opens | unset |
 | `auto-reload` | Reload files other programs change on disk, like Vim's `autoread`: buffers without unsaved changes follow the file; for the others you get a warning (`:reload` takes the disk's version, `:w!` keeps yours). Checked every second (only while a file is open; it costs one `stat` per open file) and when the terminal regains focus. FIFOs and devices are never read | `true` |
 | `auto-info` | Whether to display info boxes | `true` |
+| `icons` | File type icons in the file explorer (`space e`) and file picker (`space f`). They are [Nerd Font](https://www.nerdfonts.com) glyphs: your terminal's font must be a Nerd Font | `false` |
 | `true-color` | Whether to override automatic detection of terminal truecolor support in the event of a false negative | `false` |
 | `undercurl` | Whether to override automatic detection of terminal undercurl support in the event of a false negative | `false` |
 | `rulers` | List of column positions at which to display the rulers. Can be overridden by language specific `rulers` in `languages.toml` file | `[]` |

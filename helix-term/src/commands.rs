@@ -3432,6 +3432,8 @@ fn buffer_picker(cx: &mut Context) {
     struct BufferMeta<'a> {
         id: DocumentId,
         path: Option<Cow<'a, Path>>,
+        /// A buffer's own name (a plugin's buffer) when it has no path.
+        name: Option<String>,
         is_modified: bool,
         is_current: bool,
         focused_at: std::time::Instant,
@@ -3439,6 +3441,11 @@ fn buffer_picker(cx: &mut Context) {
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
+        name: doc
+            .path()
+            .is_none()
+            .then(|| doc.name.as_ref().map(|name| name.to_string()))
+            .flatten(),
         path: doc
             .path()
             .map(ToOwned::to_owned)
@@ -3470,9 +3477,13 @@ fn buffer_picker(cx: &mut Context) {
             }
             flags.into()
         }),
-        PickerColumn::new("path", |meta: &BufferMeta, config: &PathStyleConfig| {
-            config.stylize(meta.path.as_deref(), None)
-        }),
+        PickerColumn::new(
+            "path",
+            |meta: &BufferMeta, config: &PathStyleConfig| match &meta.name {
+                Some(name) => Span::styled(name.clone(), config.directory_style).into(),
+                None => config.stylize(meta.path.as_deref(), None),
+            },
+        ),
     ];
 
     let initial_cursor = if cx

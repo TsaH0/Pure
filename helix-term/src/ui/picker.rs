@@ -591,8 +591,18 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .unwrap_or_else(|| "".into())
     }
 
+    /// Column names are shown when more than one shown column has one (an
+    /// unnamed icon column doesn't make a header).
+    fn shows_header(&self) -> bool {
+        self.columns
+            .iter()
+            .filter(|column| !column.hidden && !column.name.is_empty())
+            .count()
+            > 1
+    }
+
     fn header_height(&self) -> u16 {
-        if self.columns.len() > 1 {
+        if self.shows_header() {
             1
         } else {
             0
@@ -953,7 +963,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             .widths(&self.widths);
 
         // -- Header
-        if self.columns.len() > 1 {
+        if self.shows_header() {
             let active_column = self.query.active_column(self.prompt.position());
             let header_style = cx.editor.theme.get("ui.picker.header");
             let header_column_style = cx.editor.theme.get("ui.picker.header.column");
@@ -1095,6 +1105,22 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 &cx.editor.theme,
                 &mut overlay_highlights,
             );
+            // Plugin buffers (oil...) look as they do in the editor.
+            let mut annotations = TextAnnotations::default();
+            if !doc.plugin_decorations.is_empty() {
+                let text = doc.text().slice(..);
+                let first = text.char_to_line(offset.anchor.min(text.len_chars()));
+                let last = (first + area.height as usize).min(text.len_lines());
+                let visible = text.line_to_char(first)..text.line_to_char(last);
+                doc.plugin_decorations.overlays_into(
+                    &cx.editor.theme,
+                    visible,
+                    None,
+                    &mut overlay_highlights,
+                );
+                doc.plugin_decorations
+                    .annotate(Some(&cx.editor.theme), None, &mut annotations);
+            }
 
             let mut decorations = DecorationManager::default();
 
@@ -1124,7 +1150,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
                 doc,
                 offset,
                 // TODO: compute text annotations asynchronously here (like inlay hints)
-                &TextAnnotations::default(),
+                &annotations,
                 syntax_highlighter,
                 overlay_highlights,
                 &cx.editor.theme,

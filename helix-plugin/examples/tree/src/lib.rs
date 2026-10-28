@@ -13,6 +13,7 @@
 //! allow-files = "read"   # needed: the workspace
 //! width = 32
 //! hidden = false         # show dot files
+//! icons = true           # file type icons (needs a Nerd Font)
 //! ```
 
 use std::cell::RefCell;
@@ -32,6 +33,8 @@ struct Tree {
     shown: bool,
     hidden: bool,
     width: u32,
+    /// Nerd Font file type icons.
+    icons: bool,
     /// The path of each item, to select an entry.
     paths: Vec<PathBuf>,
 }
@@ -44,6 +47,7 @@ thread_local! {
             shown: false,
             hidden: false,
             width: 32,
+            icons: false,
             paths: Vec::new(),
         })
     };
@@ -73,6 +77,40 @@ fn entries(dir: &Path, hidden: bool) -> Vec<(String, bool)> {
     entries
 }
 
+/// The Nerd Font icon of a file or folder, and a space.
+fn icon(name: &str, is_dir: bool, open: bool) -> &'static str {
+    if is_dir {
+        return if open { "\u{f07c} " } else { "\u{f07b} " };
+    }
+    let extension = name.rsplit_once('.').map_or("", |(_, ext)| ext);
+    match (name, extension.to_ascii_lowercase().as_str()) {
+        ("Cargo.toml" | "Cargo.lock", _) | (_, "rs") => "\u{e7a8} ",
+        (".gitignore" | ".gitattributes" | ".gitmodules", _) => "\u{e702} ",
+        ("Makefile", _) => "\u{e779} ",
+        (_, "py") => "\u{e606} ",
+        (_, "js" | "mjs") => "\u{e74e} ",
+        (_, "ts") => "\u{e628} ",
+        (_, "jsx" | "tsx") => "\u{e7ba} ",
+        (_, "json") => "\u{e60b} ",
+        (_, "toml") => "\u{e6b2} ",
+        (_, "yaml" | "yml") => "\u{e6a8} ",
+        (_, "md") => "\u{e73e} ",
+        (_, "lua") => "\u{e620} ",
+        (_, "go") => "\u{e627} ",
+        (_, "c" | "h") => "\u{e61e} ",
+        (_, "cpp" | "cc" | "hpp") => "\u{e61d} ",
+        (_, "java") => "\u{e738} ",
+        (_, "sh" | "bash" | "zsh" | "fish") => "\u{e795} ",
+        (_, "html") => "\u{e736} ",
+        (_, "css") => "\u{e749} ",
+        (_, "nix") => "\u{f313} ",
+        (_, "wasm" | "wit") => "\u{e6a1} ",
+        (_, "png" | "jpg" | "jpeg" | "gif" | "svg") => "\u{e60d} ",
+        (_, "lock") => "\u{f023} ",
+        _ => "\u{f15b} ",
+    }
+}
+
 /// The visible rows: `(item, path)`.
 fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<(SidebarItem, PathBuf)> {
     fn walk(
@@ -80,6 +118,7 @@ fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<(SidebarItem
         depth: u32,
         open: &BTreeSet<PathBuf>,
         hidden: bool,
+        icons: bool,
         out: &mut Vec<(SidebarItem, PathBuf)>,
     ) {
         for (name, is_dir) in entries(dir, hidden) {
@@ -88,20 +127,31 @@ fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<(SidebarItem
             if is_dir {
                 let is_open = open.contains(&path);
                 let marker = if is_open { "▾ " } else { "▸ " };
-                let row = item(format!("{marker}{name}/"), "ui.text.directory", depth);
+                let glyph = if icons {
+                    icon(&name, true, is_open)
+                } else {
+                    ""
+                };
+                let row = item(
+                    format!("{marker}{glyph}{name}/"),
+                    "ui.text.directory",
+                    depth,
+                );
                 out.push((on_enter(row, "fold", arg), path.clone()));
                 if is_open {
-                    walk(&path, depth + 1, open, hidden, out);
+                    walk(&path, depth + 1, open, hidden, icons, out);
                 }
             } else {
                 let scope = if name.starts_with('.') { "comment" } else { "" };
-                let row = item(format!("  {name}"), scope, depth);
+                let glyph = if icons { icon(&name, false, false) } else { "" };
+                let row = item(format!("  {glyph}{name}"), scope, depth);
                 out.push((on_enter(row, "open", arg), path));
             }
         }
     }
     let mut out = Vec::new();
-    walk(root, 0, open, hidden, &mut out);
+    let icons = TREE.with_borrow(|tree| tree.icons);
+    walk(root, 0, open, hidden, icons, &mut out);
     out
 }
 
@@ -112,9 +162,10 @@ fn show(select: Option<&Path>) -> Result<(), String> {
         TREE.with_borrow(|tree| (tree.open.clone(), tree.hidden, tree.width));
     let rows = rows(&root, &open, hidden);
     let selected = select.and_then(|path| rows.iter().position(|(_, p)| p == path));
-    let title = root
-        .file_name()
-        .map_or_else(|| root.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+    let title = root.file_name().map_or_else(
+        || root.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     let (items, paths): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
     TREE.with_borrow_mut(|tree| {
         tree.shown = true;
@@ -136,7 +187,11 @@ fn reveal(path: &Path) -> Result<(), String> {
         return show(None);
     }
     TREE.with_borrow_mut(|tree| {
-        for dir in path.ancestors().skip(1).take_while(|dir| dir.starts_with(&root) && *dir != root) {
+        for dir in path
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(&root) && *dir != root)
+        {
             tree.open.insert(dir.to_path_buf());
         }
     });
@@ -161,7 +216,11 @@ impl Plugin for TreePlugin {
             TREE.with_borrow_mut(|tree| tree.width = width);
         }
         let hidden = config.contains("\"hidden\":true");
-        TREE.with_borrow_mut(|tree| tree.hidden = hidden);
+        let icons = config.contains("\"icons\":true");
+        TREE.with_borrow_mut(|tree| {
+            tree.hidden = hidden;
+            tree.icons = icons;
+        });
         let command = |name: &str, doc: &str| CommandInfo {
             name: name.into(),
             doc: doc.into(),

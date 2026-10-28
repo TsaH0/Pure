@@ -4025,3 +4025,73 @@ async fn one_ctrl_c_leaves_insert_mode_with_signature_help_open() -> anyhow::Res
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn oil_example_reuses_one_buffer_while_moving_between_directories() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("a.txt"), "a")?;
+    std::fs::create_dir_all(work.join("sub/deeper"))?;
+    std::fs::write(work.join("sub/inner.txt"), "inner")?;
+    std::fs::write(work.join("sub/deeper/note.txt"), "note")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("a.txt"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("oil");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/oil").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[oil]\nallow-files = \"write\"\nallow-dirs = [{:?}]\nconfirm = false\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    let oil_buffers = |app: &Application| {
+        app.editor
+            .documents()
+            .filter(|doc| doc.display_name().starts_with("oil://"))
+            .map(|doc| doc.display_name().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    keys(&mut app, "-").await;
+    // Drawn in the first frame: decorated as soon as it opens.
+    assert!(!helix_view::doc!(app.editor).plugin_decorations.is_empty());
+    // Into sub/ (the first line), into deeper/, up, up, into sub/ again.
+    for step in ["gg<ret>", "gg<ret>", "-", "-", "gg<ret>"] {
+        keys(&mut app, step).await;
+        deliver_events(&mut app).await;
+        assert_eq!(
+            oil_buffers(&app).len(),
+            1,
+            "after {step}: {:?}",
+            oil_buffers(&app)
+        );
+        assert!(!helix_view::doc!(app.editor).plugin_decorations.is_empty());
+    }
+    assert_eq!(
+        oil_buffers(&app),
+        [format!("oil://{}/sub/", work.display())]
+    );
+    // A directory with unsaved changes stays open (the cut half of a move).
+    keys(&mut app, "ggxd").await;
+    assert!(helix_view::doc!(app.editor).is_modified());
+    keys(&mut app, "-").await;
+    deliver_events(&mut app).await;
+    let mut open = oil_buffers(&app);
+    open.sort();
+    assert_eq!(
+        open,
+        [
+            format!("oil://{}/", work.display()),
+            format!("oil://{}/sub/", work.display())
+        ]
+    );
+    Ok(())
+}

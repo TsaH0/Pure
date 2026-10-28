@@ -254,6 +254,9 @@ mod state_impl {
                 pending_keys: ui.pending_keys,
             }
         }
+        fn close_buffer(&mut self, doc: u32) -> std::result::Result<(), String> {
+            State::close_buffer(self, doc)
+        }
     }
 }
 

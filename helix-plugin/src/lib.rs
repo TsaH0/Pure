@@ -617,6 +617,9 @@ pub enum Action {
     },
     /// Switch mode like the mode keys (API 0.5).
     SetMode(Mode),
+    /// Close a plugin's buffer unless a view shows it or it is modified
+    /// (API 0.5 `state.close-buffer`).
+    CloseBuffer(DocumentId),
     /// Serve a call to another plugin's service after this call, then
     /// deliver the reply (API 0.5, [`PluginHost::serve`]).
     ServiceCall(v05::ServiceCall),
