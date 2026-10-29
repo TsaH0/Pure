@@ -61,7 +61,8 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
 | [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase; `space u t` receives testcases from the Competitive Companion browser extension (`receive problem` / `receive contest` make new files from a template) | `[competitest]` `allow-process = true`, `allow-files = "write"`, `allow-listen = [27121]` |
-| [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps | – |
+| [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps. Symbols come from the syntax tree (`tags.scm`) | – |
+| [`script`](examples/script) | like `init.lua`: a [Rhai](https://rhai.rs) script from `plugins.toml` (or `init.rhai`) defines commands, binds keys and handles events; `:script/eval` runs a line. The engine is compiled into the plugin (1.7 MB) | `allow-files = "read"` and `allow-dirs` only to read `init.rhai` |
 | [`harpoon`](examples/harpoon) | like harpoon: `space +` marks a file, `space 1`–`4` jump, `space =` edits the marks | – |
 | [`git-blame`](examples/git-blame) | like git-blame.nvim: the cursor line's author, age and commit at its end | `[git-blame]` `allow-process = ["git"]` |
 | [`illuminate`](examples/illuminate) | like vim-illuminate: highlights the other uses of the word under the cursor | – |

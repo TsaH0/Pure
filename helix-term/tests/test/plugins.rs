@@ -4164,3 +4164,42 @@ async fn plugin_https_requests_never_reach_local_addresses() -> anyhow::Result<(
     );
     Ok(())
 }
+
+/// The `script` example: a Rhai script from plugins.toml defines a command,
+/// binds a key and handles saves; `:script/eval` runs a line.
+#[tokio::test(flavor = "multi_thread")]
+async fn script_example_runs_a_user_script() -> anyhow::Result<()> {
+    let file = helpers::temp_file_with_contents("one two\n")?;
+    let settings = r#"[script]
+source = '''
+define("upper", "Uppercase the selections", "upper");
+bind("normal", "space u", "upper");
+on("save", "saved");
+fn upper() { replace_selections(selected().map(|s| s.to_upper())); }
+fn saved() { status(`saved ${text().len()} chars`); }
+'''
+"#;
+    let (mut app, _dir) = app_with_example_on("script", file.path(), settings);
+    keys(&mut app, "e:script/upper<ret>").await;
+    assert_eq!(text(&app), "ONE two\n");
+    // The key the script bound.
+    keys(&mut app, "e<space>u").await;
+    assert_eq!(text(&app), "ONE TWO\n", "{:?}", app.editor.get_status());
+    keys(&mut app, ":w<ret>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "saved 8 chars");
+
+    keys(&mut app, ":script/eval 6 * 7<ret>").await;
+    assert_eq!(status(&app).0, "42");
+    // The script's functions are there too.
+    keys(&mut app, ":script/eval selected()<ret>").await;
+    assert_eq!(status(&app).0, r#"[" TWO"]"#);
+    // An endless loop is stopped; the plugin keeps working.
+    keys(&mut app, ":script/eval loop {}<ret>").await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("Too many operations"), "{message}");
+    keys(&mut app, ":script/eval 1 + 1<ret>").await;
+    assert_eq!(status(&app).0, "2");
+    Ok(())
+}
