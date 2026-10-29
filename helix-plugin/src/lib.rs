@@ -30,6 +30,7 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+pub mod http;
 pub mod settings;
 pub mod syntax;
 pub mod v05;
@@ -73,6 +74,9 @@ pub enum Permission {
     /// Send requests to language servers (API 0.5 `lsp`). The user must
     /// also grant it with `allow-lsp`.
     Lsp,
+    /// Send HTTPS requests (API 0.5 `http`), only to the hosts the user
+    /// lists in `allow-network`.
+    Network,
 }
 
 impl Permission {
@@ -87,6 +91,7 @@ impl Permission {
             Permission::Registers => "registers",
             Permission::Listen => "listen",
             Permission::Lsp => "lsp",
+            Permission::Network => "network",
         }
     }
 }
@@ -151,6 +156,9 @@ pub struct PluginSettings {
     pub key_override: bool,
     /// Requests to language servers (`allow-lsp`).
     pub lsp: bool,
+    /// Hosts HTTPS requests may go to (`allow-network`): names, IP
+    /// addresses or `*.domain`.
+    pub network: Vec<String>,
 }
 
 impl PluginSettings {
@@ -346,6 +354,7 @@ pub const CAPABILITIES_05: &[&str] = &[
     "lsp",
     "settings-schema",
     "syntax",
+    "http",
 ];
 
 /// Most decorations in one layer.
@@ -587,6 +596,17 @@ pub enum Action {
         method: String,
         params: String,
     },
+    /// Send an HTTPS request and deliver the response (API 0.5 `http`).
+    HttpRequest {
+        plugin: String,
+        id: u32,
+        request: http::HttpRequest,
+    },
+    /// Stop an `HttpRequest`.
+    CancelHttp {
+        plugin: String,
+        id: u32,
+    },
     /// Kill a program started with `Spawn`.
     Kill {
         plugin: String,
@@ -814,6 +834,8 @@ pub enum PendingKind {
     Lsp,
     /// A watched path (API 0.5 `watch`).
     Watch,
+    /// API 0.5 `http.fetch`.
+    Http,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -2083,6 +2105,7 @@ impl State {
             Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
             Some(PendingKind::Listen) => self.actions.push(Action::StopListen { plugin, id }),
             Some(PendingKind::Watch) => self.actions.push(Action::Unwatch { plugin, id }),
+            Some(PendingKind::Http) => self.actions.push(Action::CancelHttp { plugin, id }),
             Some(PendingKind::Completion) => self.actions.push(Action::Completions {
                 plugin,
                 id,
@@ -3021,6 +3044,7 @@ impl PluginHost {
             v05: v05::V05 {
                 key_override: settings.key_override,
                 lsp: settings.lsp,
+                network: settings.network,
                 editor: self.editor_fns,
                 marks: self.marks.clone(),
                 ..Default::default()

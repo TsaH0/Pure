@@ -1,6 +1,6 @@
 //! API 0.5: key callbacks, the completion menu, subscriptions, commands,
 //! editor state, services, floats, marks, more decorations, sessions,
-//! progress, file watches, language servers and syntax trees.
+//! progress, file watches, language servers, syntax trees and HTTPS.
 //!
 //! Closures passed to [`keymaps::bind`], [`services::provide`],
 //! [`commands::execute`], [`watch::add`] and the like run when the editor
@@ -140,6 +140,44 @@ pub mod commands {
             args.iter().map(|a| a.to_string()).collect(),
             count,
         ))
+    }
+}
+
+/// HTTPS requests to the hosts the user allows (`allow-network`); needs the
+/// `network` permission.
+pub mod http {
+    use super::*;
+    pub use plugin::http::{Header, Request};
+
+    /// Send `request`; `reply` gets the response as JSON,
+    /// `{"status": 200, "headers": [["name", "value"], ...], "body": "..."}`,
+    /// or the error.
+    pub fn fetch(
+        request: &Request,
+        reply: impl FnOnce(Result<String, String>) -> Result<(), String> + 'static,
+    ) -> Result<RequestId, String> {
+        let id = plugin::http::fetch(request)?;
+        REPLIES.with_borrow_mut(|replies| replies.insert(id, Box::new(reply)));
+        Ok(id)
+    }
+
+    /// A `GET` of `url`.
+    pub fn get(
+        url: &str,
+        reply: impl FnOnce(Result<String, String>) -> Result<(), String> + 'static,
+    ) -> Result<RequestId, String> {
+        fetch(&request("GET", url), reply)
+    }
+
+    /// A request without headers or body.
+    pub fn request(method: &str, url: &str) -> Request {
+        Request {
+            method: method.into(),
+            url: url.into(),
+            headers: Vec::new(),
+            body: None,
+            timeout: None,
+        }
     }
 }
 

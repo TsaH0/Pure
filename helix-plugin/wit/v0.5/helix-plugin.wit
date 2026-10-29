@@ -1030,6 +1030,37 @@ interface syntax {
   sexp: func(doc: document-id, node: node) -> result<string, string>;
 }
 
+/// API 0.5: HTTPS requests, only to hosts the user lists for the plugin
+/// (`allow-network = ["api.example.com", "*.example.org"]` in
+/// plugins.toml) and needing the `network` permission. Sent by the editor
+/// with the system's `curl`: no redirects, no addresses that aren't public
+/// (loopback, private, link-local...), checked after DNS too.
+interface http {
+  use types.{request-id};
+
+  record header { name: string, value: string }
+
+  record request {
+    /// GET, HEAD, POST, PUT, PATCH or DELETE.
+    method: string,
+    /// An `https://` URL.
+    url: string,
+    /// Not `Host`, `Content-Length` and the like: the editor sets those.
+    headers: list<header>,
+    /// At most 4 MiB.
+    body: option<string>,
+    /// Seconds, 1 to 120 (default 30).
+    timeout: option<u32>,
+  }
+
+  /// Send `request`; at most 8 at a time, not from `init`. The response
+  /// arrives as `callbacks2.on-service-reply(id, result)`: a JSON object
+  /// `{"status": 200, "headers": [["name", "value"], ...], "body": "..."}`
+  /// (the body as text, at most 16 MiB), or the error. Cancel with
+  /// `requests.cancel`.
+  fetch: func(request: request) -> result<request-id, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1060,6 +1091,7 @@ world helix-plugin {
   import watch;
   import lsp;
   import syntax;
+  import http;
   export plugin;
   export callbacks;
   export events;

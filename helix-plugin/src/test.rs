@@ -157,7 +157,7 @@ fn manifest_parsing() {
         err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nunknown = 1").contains("unknown field")
     );
     assert!(
-        err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\npermissions = [\"network\"]")
+        err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\npermissions = [\"telepathy\"]")
             .contains("unknown variant")
     );
     assert!(err("version = \"1\"\napi = \"0.1\"").contains("missing field"));
@@ -1097,7 +1097,8 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Batch
         | PendingKind::Service
         | PendingKind::Lsp
-        | PendingKind::Watch => unreachable!(),
+        | PendingKind::Watch
+        | PendingKind::Http => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -5414,4 +5415,84 @@ fn api_05_syntax_needs_read_buffers() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("read-buffers"), "{err}");
+}
+
+/// testplugin3 on API 0.5 with `permissions` and `settings`.
+fn v5_granted(permissions: &[&str], settings: PluginSettings) -> (PluginHost, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        permissions,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(&dir, settings).unwrap();
+    (host, root)
+}
+
+#[test]
+fn api_05_http_needs_the_permission_and_an_allowed_host() {
+    let allowed = PluginSettings {
+        network: vec!["api.example.com".into(), "*.example.org".into()],
+        ..PluginSettings::new("{}")
+    };
+    // Asked for, but the user allows no hosts.
+    let (mut host, _root) = v5_granted(&["network"], PluginSettings::new("{}"));
+    let err = v5_run(&mut host, "http", &["GET", "https://api.example.com/"]).unwrap_err();
+    assert!(err.to_string().contains("allow-network"), "{err}");
+    // Allowed hosts, but not asked for.
+    let (mut host, _root) = v5_granted(&["read-buffers"], allowed.clone());
+    let err = v5_run(&mut host, "http", &["GET", "https://api.example.com/"]).unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    let (mut host, _root) = v5_granted(&["network"], allowed);
+    let actions = v5_run(
+        &mut host,
+        "http",
+        &[
+            "POST",
+            "https://a.example.org/x?y=1",
+            "Accept",
+            "text/plain",
+        ],
+    )
+    .unwrap();
+    let request = actions
+        .iter()
+        .find_map(|action| match action {
+            Action::HttpRequest { request, .. } => Some(request.clone()),
+            _ => None,
+        })
+        .expect("a request");
+    assert_eq!(request.host, "a.example.org");
+    assert_eq!(
+        request.headers,
+        [("Accept".to_string(), "text/plain".to_string())]
+    );
+    assert_eq!(request.body.as_deref(), Some("{\"a\":1}"));
+    for (url, why) in [
+        ("https://example.com/", "allow-network"),
+        ("http://api.example.com/", "only https"),
+        ("https://127.0.0.1/", "allow-network"),
+    ] {
+        let err = v5_run(&mut host, "http", &["GET", url]).unwrap_err();
+        assert!(err.to_string().contains(why), "{url}: {err}");
+    }
+    let err = v5_run(
+        &mut host,
+        "http",
+        &["GET", "https://api.example.com/", "Host", "x"],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("set by the editor"), "{err}");
+    // The doctor shows the grant.
+    assert!(host
+        .doctor()
+        .contains("allow-network = [\"api.example.com\", \"*.example.org\"]"));
 }

@@ -260,6 +260,29 @@ mod state_impl {
     }
 }
 
+mod http_impl {
+    use super::*;
+    use v0_5::helix::plugin::http::{Host, Request};
+
+    impl Host for State {
+        fn fetch(&mut self, request: Request) -> std::result::Result<u32, String> {
+            let headers = request
+                .headers
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect();
+            State::http_fetch(
+                self,
+                &request.method,
+                &request.url,
+                headers,
+                request.body,
+                request.timeout,
+            )
+        }
+    }
+}
+
 mod syntax_impl {
     use super::*;
     use crate::syntax::{self as syn, SyntaxNode};
@@ -715,6 +738,15 @@ pub(crate) async fn callback2(
             callbacks.call_on_batch_done(store, *id, results).await
         }
         v05::Callback2::ServiceReply { id, result } => {
+            callbacks
+                .call_on_service_reply(
+                    store,
+                    *id,
+                    result.as_ref().map(String::as_str).map_err(String::as_str),
+                )
+                .await
+        }
+        v05::Callback2::HttpReply { id, result } => {
             callbacks
                 .call_on_service_reply(
                     store,

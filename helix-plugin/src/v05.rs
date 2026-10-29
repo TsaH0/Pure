@@ -242,6 +242,12 @@ pub enum Callback2 {
         id: u32,
         result: Result<String, String>,
     },
+    /// Delivered to the guest as `on-service-reply` (0.5 can't gain
+    /// exports).
+    HttpReply {
+        id: u32,
+        result: Result<String, String>,
+    },
 }
 
 /// Most key bindings per plugin.
@@ -270,6 +276,8 @@ pub(crate) struct V05 {
     pub key_override: bool,
     /// The user's `allow-lsp`.
     pub lsp: bool,
+    /// The user's `allow-network`.
+    pub network: Vec<String>,
     pub editor: EditorFns,
     pub key_bindings: Vec<KeyBinding>,
     pub subscriptions: Vec<Subscription>,
@@ -338,6 +346,7 @@ impl Default for V05 {
         Self {
             key_override: false,
             lsp: false,
+            network: Vec::new(),
             editor: EditorFns::default(),
             key_bindings: Vec::new(),
             subscriptions: Vec::new(),
@@ -1542,6 +1551,47 @@ impl State {
     }
 }
 
+impl State {
+    pub(crate) fn http_fetch(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: Option<String>,
+        timeout: Option<u32>,
+    ) -> Result<u32, String> {
+        self.need(crate::Permission::Network)?;
+        if self.v05.network.is_empty() {
+            return Err(format!(
+                "HTTPS requests need allow-network = [\"host\", ...] under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        if self.context == crate::CallContext::Init {
+            return Err("http.fetch can't be used from init".into());
+        }
+        let in_flight = self
+            .pending
+            .values()
+            .filter(|kind| **kind == crate::PendingKind::Http)
+            .count();
+        if in_flight >= crate::http::MAX_IN_FLIGHT {
+            return Err(format!(
+                "at most {} requests at a time",
+                crate::http::MAX_IN_FLIGHT
+            ));
+        }
+        let request = crate::http::check(method, url, headers, body, timeout, &self.v05.network)?;
+        let id = self.request(crate::PendingKind::Http)?;
+        self.actions.push(crate::Action::HttpRequest {
+            plugin: self.plugin.clone(),
+            id,
+            request,
+        });
+        Ok(id)
+    }
+}
+
 /// Most watched paths per plugin.
 pub const MAX_WATCHES: usize = 16;
 
@@ -1906,6 +1956,7 @@ impl crate::PluginHost {
             Callback2::BatchDone { id, .. } => (*id, crate::PendingKind::Batch),
             Callback2::ServiceReply { id, .. } => (*id, crate::PendingKind::Service),
             Callback2::LspReply { id, .. } => (*id, crate::PendingKind::Lsp),
+            Callback2::HttpReply { id, .. } => (*id, crate::PendingKind::Http),
         };
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
@@ -2003,6 +2054,9 @@ impl crate::PluginHost {
             if state.v05.lsp {
                 grants.push("allow-lsp".into());
             }
+            if !state.v05.network.is_empty() {
+                grants.push(format!("allow-network = {:?}", state.v05.network));
+            }
             let _ = writeln!(out, "- Granted in plugins.toml: {}", list(&grants));
             // Asked for but not granted: why calls fail.
             let mut missing = Vec::new();
@@ -2023,6 +2077,11 @@ impl crate::PluginHost {
                     "allow-listen",
                 ),
                 (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
+                (
+                    crate::Permission::Network,
+                    !state.v05.network.is_empty(),
+                    "allow-network",
+                ),
             ] {
                 if m.permissions.contains(&permission) && !granted {
                     missing.push(format!("{} (needs {setting})", permission.as_str()));

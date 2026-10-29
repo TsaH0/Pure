@@ -176,6 +176,9 @@ allow-key-override = true        # its keys may take precedence over yours
 
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
+
+[my-ai-tool]
+allow-network = ["api.example.com", "*.example.org"]  # HTTPS hosts it may reach
 ```
 
 Plugins that declare their settings have them checked when they load: a
@@ -188,6 +191,11 @@ without reloading it; changing what it is allowed (`allow-…`), its keys or
 machine, such as the Competitive Companion browser extension. It listens
 on 127.0.0.1 only and accepts only JSON requests addressed to `localhost`,
 so web pages can't reach it.
+
+`allow-network` lets a plugin send HTTPS requests to the hosts listed
+(`*.example.org` means its subdomains). The editor sends them with `curl`,
+which must be installed; it never follows redirects and never connects to
+your machine or local network, even if a name resolves there.
 
 Plugins with the `registers` permission can read your registers (never the
 clipboard) and write them.

@@ -4126,3 +4126,41 @@ async fn plugins_query_the_syntax_tree() -> anyhow::Result<()> {
     assert_eq!(status(&app).0, "syntax:lang=rust 0:name=identifier@3-6");
     Ok(())
 }
+
+/// API 0.5 `http`: even an allowed host can't be a local address (here an
+/// IP literal, so no network is needed); the reply says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_https_requests_never_reach_local_addresses() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""network""#,
+        "[testplugin3]\nallow-network = [\"127.0.0.1\", \"::1\"]\n",
+    );
+    for url in ["https://127.0.0.1/", "https://[::1]:8443/x"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/http GET {url}<ret>"),
+        )
+        .await;
+        for _ in 0..50 {
+            if status(&app).0.starts_with("service-reply") {
+                break;
+            }
+            deliver_events(&mut app).await;
+        }
+        let (message, _) = status(&app);
+        assert!(message.contains("not public"), "{url}: {message}");
+    }
+    // Hosts that aren't allowed fail right away.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/http GET https://example.com/<ret>",
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("allow-network"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}

@@ -194,6 +194,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "watch",
                 "lsp-servers",
                 "lsp-request",
+                "http",
                 "config",
             ]
             .into_iter()
@@ -788,6 +789,22 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 let doc = host::current_document().ok_or("no document")?;
                 let servers = helix::plugin::lsp::servers(doc)?;
                 host::set_status(&format!("servers:{}", servers.join(",")));
+                Ok(())
+            }
+            // `http method url [header-name header-value]`.
+            "http" => {
+                let headers = match &args[2..] {
+                    [name, value] => vec![helix::plugin::http::Header { name: name.clone(), value: value.clone() }],
+                    _ => Vec::new(),
+                };
+                let id = helix::plugin::http::fetch(&helix::plugin::http::Request {
+                    method: args[0].clone(),
+                    url: args[1].clone(),
+                    headers,
+                    body: (args[0] == "POST").then(|| "{\"a\":1}".to_string()),
+                    timeout: Some(20),
+                })?;
+                host::set_status(&format!("http:{id}"));
                 Ok(())
             }
             "lsp-request" => {
