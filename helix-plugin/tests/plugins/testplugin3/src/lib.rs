@@ -173,6 +173,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "set-mode",
                 "views",
                 "ui-state",
+                "syntax",
                 "count-commands",
                 "call",
                 "discover",
@@ -573,6 +574,45 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     })
                     .collect::<Vec<_>>();
                 host::set_status(&format!("views:{}", views.join(",")));
+                Ok(())
+            }
+            // `syntax query [from to]`: the matches, then the node at
+            // `from..to`, its parent and named children.
+            "syntax" => {
+                use helix::plugin::syntax;
+                let doc = host::current_document().ok_or("no document")?;
+                let show = |node: &syntax::Node| format!("{}@{}-{}", node.kind, node.start, node.end);
+                let range = match &args[1..] {
+                    [from, to] => Some((from.parse().unwrap(), to.parse().unwrap())),
+                    _ => None,
+                };
+                let matches = syntax::query(doc, args.first().ok_or("a query")?, range)?;
+                let mut out = vec![format!(
+                    "lang={}",
+                    syntax::language(doc).unwrap_or_default()
+                )];
+                for found in &matches {
+                    for capture in &found.captures {
+                        out.push(format!("{}:{}={}", found.pattern, capture.name, show(&capture.node)));
+                    }
+                }
+                if let Some((from, to)) = range {
+                    if let Some(node) = syntax::node_at(doc, from, to, true) {
+                        out.push(format!("at={}", show(&node)));
+                        if let Some(parent) = syntax::parent(doc, &node)? {
+                            out.push(format!("parent={}", show(&parent)));
+                            let children = syntax::children(doc, &parent, true)?;
+                            out.push(format!(
+                                "children={}",
+                                children.iter().map(show).collect::<Vec<_>>().join("+")
+                            ));
+                        }
+                        if let Some(next) = syntax::next_sibling(doc, &node, true)? {
+                            out.push(format!("next={}", show(&next)));
+                        }
+                    }
+                }
+                host::set_status(&format!("syntax:{}", out.join(" ")));
                 Ok(())
             }
             "ui-state" => {

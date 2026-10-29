@@ -122,7 +122,9 @@ show a **sidebar** (a file tree, an outline: `j`/`k` and `enter`
 in it, `esc` back to the editor, `q` closes it), open **scratch buffers**
 and buffers they own (`:w` goes to the plugin, as
 in `oil`), use **registers**, and rename, create or delete files through
-the editor so open buffers follow. Inside a plugin's own buffer its
+the editor so open buffers follow. They can read a document's **syntax
+tree** (tree-sitter queries, the node under the cursor), which is how the
+`outline` example finds symbols. Inside a plugin's own buffer its
 `[keys.buffer]` bindings apply; nowhere else.
 
 ### Editing directories with `oil`

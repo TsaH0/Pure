@@ -580,7 +580,7 @@ mod v05;
 #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
 pub use v05::{
     commands, completion_menu, decorations2, floats, keymaps, lsp, marks, progress, services,
-    sessions, state, subscriptions, watch, CloseReason, CompletionEvent, Event, HookOutcome,
+    sessions, state, subscriptions, syntax, watch, CloseReason, CompletionEvent, Event, HookOutcome,
     KeyOutcome, PluginState,
 };
 

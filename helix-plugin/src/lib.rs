@@ -31,6 +31,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
 pub mod settings;
+pub mod syntax;
 pub mod v05;
 
 use api::{v0_1, v0_2, v0_3, v0_4, v0_5, Instance};
@@ -344,6 +345,7 @@ pub const CAPABILITIES_05: &[&str] = &[
     "watch",
     "lsp",
     "settings-schema",
+    "syntax",
 ];
 
 /// Most decorations in one layer.
@@ -472,6 +474,9 @@ pub struct DocumentSnapshot {
     pub revision: u64,
     /// The language servers attached to it (API 0.5 `lsp.servers`).
     pub language_servers: Vec<String>,
+    /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
+    /// plugin is loaded. A copy shares the tree, so it is cheap.
+    pub syntax: Option<helix_core::tree_sitter::Tree>,
 }
 
 /// The editor state a plugin call can read.

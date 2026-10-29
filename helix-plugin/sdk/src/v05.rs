@@ -1,6 +1,6 @@
 //! API 0.5: key callbacks, the completion menu, subscriptions, commands,
 //! editor state, services, floats, marks, more decorations, sessions,
-//! progress, file watches and language servers.
+//! progress, file watches, language servers and syntax trees.
 //!
 //! Closures passed to [`keymaps::bind`], [`services::provide`],
 //! [`commands::execute`], [`watch::add`] and the like run when the editor
@@ -146,6 +146,26 @@ pub mod commands {
 /// Views and UI state.
 pub mod state {
     pub use super::plugin::state::*;
+}
+
+/// Documents' syntax trees: tree-sitter queries, the node at a position,
+/// parents, children and siblings. Needs `read-buffers`.
+pub mod syntax {
+    pub use super::plugin::syntax::*;
+
+    /// The captures named `name` (without the "@") of `query` over `doc`.
+    pub fn captures(
+        doc: crate::DocumentId,
+        source: &str,
+        name: &str,
+    ) -> Result<Vec<Node>, String> {
+        Ok(query(doc, source, None)?
+            .into_iter()
+            .flat_map(|found| found.captures)
+            .filter(|capture| capture.name == name)
+            .map(|capture| capture.node)
+            .collect())
+    }
 }
 
 /// Services for and from other plugins.

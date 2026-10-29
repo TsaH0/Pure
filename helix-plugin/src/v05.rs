@@ -995,6 +995,62 @@ impl State {
         self.actions.push(crate::Action::SetMode(mode));
         Ok(())
     }
+    /// The tree and text of `doc` for `syntax` calls.
+    fn syntax_tree(
+        &self,
+        doc: DocumentId,
+    ) -> Result<Option<(&helix_core::tree_sitter::Tree, &helix_core::Rope)>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let doc = self.document(doc)?;
+        Ok(doc.syntax.as_ref().map(|tree| (tree, &doc.text)))
+    }
+    pub(crate) fn syntax_language(&mut self, doc: DocumentId) -> Result<Option<String>, String> {
+        let parsed = self.syntax_tree(doc)?.is_some();
+        Ok(parsed
+            .then(|| self.document(doc).ok()?.language.clone())
+            .flatten())
+    }
+    pub(crate) fn syntax_query(
+        &mut self,
+        doc: DocumentId,
+        source: &str,
+        range: Option<(u32, u32)>,
+    ) -> Result<Vec<crate::syntax::QueryMatch>, String> {
+        match self.syntax_tree(doc)? {
+            Some((tree, text)) => crate::syntax::query(tree, text, source, range),
+            None => Err(format!("document {doc} has no syntax tree")),
+        }
+    }
+    pub(crate) fn syntax_node_at(
+        &mut self,
+        doc: DocumentId,
+        from: u32,
+        to: u32,
+        named: bool,
+    ) -> Result<Option<crate::syntax::SyntaxNode>, String> {
+        Ok(self
+            .syntax_tree(doc)?
+            .and_then(|(tree, text)| crate::syntax::node_at(tree, text, from, to, named)))
+    }
+    pub(crate) fn syntax_root(
+        &mut self,
+        doc: DocumentId,
+    ) -> Result<Option<crate::syntax::SyntaxNode>, String> {
+        Ok(self
+            .syntax_tree(doc)?
+            .map(|(tree, text)| crate::syntax::root(tree, text)))
+    }
+    /// Run `f` on the tree of `doc`, which must have one.
+    pub(crate) fn with_syntax<T>(
+        &mut self,
+        doc: DocumentId,
+        f: impl FnOnce(&helix_core::tree_sitter::Tree, &helix_core::Rope) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self.syntax_tree(doc)? {
+            Some((tree, text)) => f(tree, text),
+            None => Err(format!("document {doc} has no syntax tree")),
+        }
+    }
     pub(crate) fn views(&mut self) -> Vec<ViewInfo> {
         self.snapshot.views.clone()
     }

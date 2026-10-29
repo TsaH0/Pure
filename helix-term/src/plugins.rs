@@ -1586,6 +1586,11 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                         .language_servers()
                         .map(|server| server.name().to_string())
                         .collect(),
+                    syntax: if HAS_V05.load(Ordering::Relaxed) {
+                        doc.syntax().map(|syntax| syntax.tree().clone())
+                    } else {
+                        None
+                    },
                     owner: doc
                         .plugin_owner
                         .clone()

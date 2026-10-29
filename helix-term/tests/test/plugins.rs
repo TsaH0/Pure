@@ -1534,7 +1534,7 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
     let file = root.path().join("lib.rs");
     std::fs::write(
         &file,
-        "struct A;\n\nimpl A {\n    fn go(&self) {}\n}\n\nfn main() {}\n",
+        "struct A;\n\nimpl A {\n    fn go(&self) {}\n}\n\nfn main() {}\n\nfn\nsplit() {}\n",
     )?;
     let (mut app, _dir) = app_with_example_on("outline", &file, "");
     keys(&mut app, ":outline/toggle<ret>").await;
@@ -1550,7 +1550,14 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
         .collect();
     assert_eq!(
         rows,
-        [("struct A", 0), ("impl A", 0), ("fn go", 1), ("fn main", 0)]
+        // From the syntax tree: a line by line scan misses `split`.
+        [
+            ("struct A", 0),
+            ("impl A", 0),
+            ("fn go", 1),
+            ("fn main", 0),
+            ("fn split", 0)
+        ]
     );
     assert_eq!(panel.title, "Outline: lib.rs");
     // It follows the cursor...
@@ -1559,7 +1566,7 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
     let panel = app.editor.panel(helix_view::sidebar::Dock::Right).unwrap();
     assert_eq!(panel.selected, 2, "on fn go");
     // ...and enter jumps.
-    keys(&mut app, ":outline/focus<ret>G<ret>").await;
+    keys(&mut app, ":outline/focus<ret>Gk<ret>").await;
     deliver_events(&mut app).await;
     let (view, doc) = helix_view::current_ref!(app.editor);
     let cursor = doc
@@ -4093,5 +4100,29 @@ async fn oil_example_reuses_one_buffer_while_moving_between_directories() -> any
             format!("oil://{}/sub/", work.display())
         ]
     );
+    Ok(())
+}
+
+/// API 0.5 `syntax`: plugins query the document's own syntax tree, as it is
+/// after the latest edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_query_the_syntax_tree() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("fn #[m|]#ain() {}\n", None, "");
+    keys(&mut app, ":set-language rust<ret>").await;
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/syntax '(function_item name: (identifier) @name)'<ret>",
+    )
+    .await;
+    assert_eq!(status(&app).0, "syntax:lang=rust 0:name=identifier@3-7");
+    // Renamed: the next call sees the new tree.
+    keys(&mut app, "ecrun<esc>").await;
+    assert_eq!(text(&app), "fn run() {}\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/syntax '(function_item name: (identifier) @name)'<ret>",
+    )
+    .await;
+    assert_eq!(status(&app).0, "syntax:lang=rust 0:name=identifier@3-6");
     Ok(())
 }
