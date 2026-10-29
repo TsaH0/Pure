@@ -7,12 +7,55 @@ use crate::injections_query::{InjectionLanguageMarker, InjectionsQuery};
 use crate::Language;
 
 use std::fmt::Write;
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Debug)]
 pub struct LanguageConfig {
     pub grammar: Grammar,
-    pub highlight_query: HighlightQuery,
+    /// Shared by languages with the same grammar and queries (Rust and
+    /// `rust-format-args-macro`, say), so it is compiled once.
+    pub highlight_query: Arc<HighlightQuery>,
     pub injection_query: InjectionsQuery,
+}
+
+/// Compiled highlight queries by grammar and source (the highlights and
+/// locals, trimmed: `; inherits` adds blank lines), while in use.
+static HIGHLIGHT_QUERIES: Mutex<Vec<(Grammar, String, Weak<HighlightQuery>)>> =
+    Mutex::new(Vec::new());
+
+/// Queries at least this long are compiled on threads of their own, at the
+/// same time; below it a thread costs more than it saves.
+pub(crate) const PARALLEL_QUERY_LEN: usize = 4096;
+
+/// Run `a` and `b`, at the same time when `parallel`.
+pub(crate) fn join<A: Send, B: Send>(
+    parallel: bool,
+    a: impl FnOnce() -> A + Send,
+    b: impl FnOnce() -> B,
+) -> (A, B) {
+    if !parallel {
+        let a = a();
+        return (a, b());
+    }
+    let result = std::thread::scope(|scope| {
+        let a = scope.spawn(a);
+        let b = b();
+        let a = a
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        (a, b)
+    });
+    // Give back the memory the other thread freed: glibc keeps it in that
+    // thread's arena otherwise (megabytes after compiling a big query).
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        extern "C" {
+            fn malloc_trim(pad: usize) -> std::ffi::c_int;
+        }
+        // SAFETY: only releases free memory to the system.
+        unsafe { malloc_trim(0) };
+    }
+    result
 }
 
 impl LanguageConfig {
@@ -25,9 +68,39 @@ impl LanguageConfig {
         // NOTE: the injection queries are parsed first since the local query is passed as-is
         // to `Query::new` in `InjectionsQuery::new`. This ensures that the more readable error
         // bubbles up first if the locals queries have an issue.
-        let injection_query =
-            InjectionsQuery::new(grammar, injection_query_text, local_query_text)?;
-        let highlight_query = HighlightQuery::new(grammar, highlight_query_text, local_query_text)?;
+        let source = format!(
+            "{}\n{}",
+            highlight_query_text.trim(),
+            local_query_text.trim()
+        );
+        let shared = {
+            let mut queries = HIGHLIGHT_QUERIES.lock().unwrap();
+            queries.retain(|(_, _, query)| query.strong_count() > 0);
+            queries
+                .iter()
+                .find(|(other, text, _)| *other == grammar && *text == source)
+                .and_then(|(_, _, query)| query.upgrade())
+        };
+        let parallel = shared.is_none() && source.len() >= PARALLEL_QUERY_LEN;
+        let (highlight_query, injection_query) = join(
+            parallel,
+            || match shared {
+                Some(query) => Ok(query),
+                None => HighlightQuery::new(grammar, highlight_query_text, local_query_text)
+                    .map(Arc::new),
+            },
+            || InjectionsQuery::new(grammar, injection_query_text, local_query_text),
+        );
+        let injection_query = injection_query?;
+        let highlight_query = highlight_query?;
+        let mut queries = HIGHLIGHT_QUERIES.lock().unwrap();
+        if !queries
+            .iter()
+            .any(|(other, text, _)| *other == grammar && *text == source)
+        {
+            queries.push((grammar, source, Arc::downgrade(&highlight_query)));
+        }
+        drop(queries);
 
         Ok(Self {
             grammar,
