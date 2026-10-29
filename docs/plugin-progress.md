@@ -822,7 +822,10 @@ work (`6734495`) and Pure after it (`02034a3`), all built with plain
 - **Idle:** with a file open, the `auto-reload` check wakes the main thread
   once a second (one `stat` per open file; 0 ms CPU measured over 5 s).
   With no file open, or with `auto-reload = false`, there are no wake-ups
-  (S02). Replacing the poll with file watches is F09.
+  (S02). Since 2026-10-29 the directories of open files are watched
+  instead (`helix-term/src/auto_reload.rs`): 0 wake-ups per 5 s with a
+  file open (was 21), startup unchanged; the timer stays as a fallback
+  where watching fails.
 - **Panels and the new examples** cost nothing when unused: no panel means
   `layout` returns the editor area unchanged, and plugin key tries only
   cover the plugins that are loaded.

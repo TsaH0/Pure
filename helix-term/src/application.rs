@@ -79,8 +79,8 @@ pub struct Application {
     lsp_progress: LspProgressMap,
 
     theme_mode: Option<theme::Mode>,
-    /// Checks for files changed on disk (`editor.auto-reload`).
-    auto_reload_timer: tokio::time::Interval,
+    /// Notices files changed on disk (`editor.auto-reload`).
+    auto_reload: crate::auto_reload::AutoReload,
 }
 
 #[cfg(feature = "integration")]
@@ -271,11 +271,7 @@ impl Application {
             jobs,
             lsp_progress: LspProgressMap::new(),
             theme_mode,
-            auto_reload_timer: {
-                let mut timer = tokio::time::interval(std::time::Duration::from_secs(1));
-                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                timer
-            },
+            auto_reload: crate::auto_reload::AutoReload::new(),
         };
 
         Ok(app)
@@ -344,6 +340,8 @@ impl Application {
 
             use futures_util::StreamExt;
 
+            self.auto_reload.sync(&self.editor);
+
             tokio::select! {
                 biased;
 
@@ -380,9 +378,11 @@ impl Application {
                 }
                 // Only polled (so only waking the editor) while there are
                 // files to check.
-                _ = self.auto_reload_timer.tick(), if self.editor.config().auto_reload
+                paths = self.auto_reload.changed(), if self.editor.config().auto_reload
                     && self.editor.documents.values().any(|doc| doc.path().is_some()) => {
-                    if self.editor.reload_changed_documents() {
+                    if self.auto_reload.touches(&self.editor, &paths)
+                        && self.editor.reload_changed_documents()
+                    {
                         self.render().await;
                     }
                 }

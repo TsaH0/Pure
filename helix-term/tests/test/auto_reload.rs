@@ -105,3 +105,25 @@ async fn special_files_are_not_read() -> anyhow::Result<()> {
     app.close().await;
     Ok(())
 }
+
+/// The editor notices a change by itself: it watches the file's directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn notices_changes_without_being_asked() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("watched.txt");
+    std::fs::write(&path, "one\n")?;
+    let mut app = helpers::AppBuilder::new().with_file(&path, None).build()?;
+    helpers::run_event_loop_until_idle(&mut app).await;
+
+    change_on_disk(&path, "two\n", 10);
+    for _ in 0..100 {
+        if text(&app) == "two\n" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        helpers::run_event_loop_until_idle(&mut app).await;
+    }
+    assert_eq!(text(&app), "two\n");
+    app.close().await;
+    Ok(())
+}
