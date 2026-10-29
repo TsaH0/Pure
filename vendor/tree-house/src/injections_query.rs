@@ -121,57 +121,71 @@ impl InjectionsQuery {
 
         let mut injection_properties: HashMap<Pattern, InjectionProperties> = HashMap::new();
         let mut not_scope_inherits = HashSet::new();
-        let injection_query = Query::new(grammar, injection_query_text, |pattern, predicate| {
-            match predicate {
-                // injections
-                UserPredicate::SetProperty {
-                    key: "injection.include-unnamed-children",
-                    val: None,
-                } => {
-                    injection_properties
-                        .entry(pattern)
-                        .or_default()
-                        .include_children = IncludedChildren::Unnamed
-                }
-                UserPredicate::SetProperty {
-                    key: "injection.include-children",
-                    val: None,
-                } => {
-                    injection_properties
-                        .entry(pattern)
-                        .or_default()
-                        .include_children = IncludedChildren::All
-                }
-                UserPredicate::SetProperty {
-                    key: "injection.language",
-                    val: Some(lang),
-                } => injection_properties.entry(pattern).or_default().language = Some(lang.into()),
-                UserPredicate::SetProperty {
-                    key: "injection.combined",
-                    val: None,
-                } => injection_properties.entry(pattern).or_default().combined = true,
-                predicate => {
-                    return Err(InvalidPredicateError::unknown(predicate));
-                }
-            }
-            Ok(())
-        })?;
-        let mut local_query = Query::new(grammar, local_query_text, |pattern, predicate| {
-            match predicate {
-                UserPredicate::SetProperty {
-                    key: "local.scope-inherits",
-                    val,
-                } => {
-                    if val.is_some_and(|val| val != "true") {
-                        not_scope_inherits.insert(pattern);
+        let parallel = injection_query_text.len().min(local_query_text.len())
+            >= crate::config::PARALLEL_QUERY_LEN / 4;
+        let (local_query, injection_query) = crate::config::join(
+            parallel,
+            || {
+                Query::new(grammar, local_query_text, |pattern, predicate| {
+                    match predicate {
+                        UserPredicate::SetProperty {
+                            key: "local.scope-inherits",
+                            val,
+                        } => {
+                            if val.is_some_and(|val| val != "true") {
+                                not_scope_inherits.insert(pattern);
+                            }
+                        }
+                        predicate => {
+                            return Err(InvalidPredicateError::unknown(predicate));
+                        }
                     }
-                }
-                predicate => {
-                    return Err(InvalidPredicateError::unknown(predicate));
-                }
-            }
-            Ok(())
-        })?;
+                    Ok(())
+                })
+            },
+            || {
+                Query::new(grammar, injection_query_text, |pattern, predicate| {
+                    match predicate {
+                        // injections
+                        UserPredicate::SetProperty {
+                            key: "injection.include-unnamed-children",
+                            val: None,
+                        } => {
+                            injection_properties
+                                .entry(pattern)
+                                .or_default()
+                                .include_children = IncludedChildren::Unnamed
+                        }
+                        UserPredicate::SetProperty {
+                            key: "injection.include-children",
+                            val: None,
+                        } => {
+                            injection_properties
+                                .entry(pattern)
+                                .or_default()
+                                .include_children = IncludedChildren::All
+                        }
+                        UserPredicate::SetProperty {
+                            key: "injection.language",
+                            val: Some(lang),
+                        } => {
+                            injection_properties.entry(pattern).or_default().language =
+                                Some(lang.into())
+                        }
+                        UserPredicate::SetProperty {
+                            key: "injection.combined",
+                            val: None,
+                        } => injection_properties.entry(pattern).or_default().combined = true,
+                        predicate => {
+                            return Err(InvalidPredicateError::unknown(predicate));
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        );
+        let injection_query = injection_query?;
+        let mut local_query = local_query?;
 
         // The injection queries do not track references - these are read by the highlight
         // query instead.

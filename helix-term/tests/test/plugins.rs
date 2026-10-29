@@ -1534,7 +1534,7 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
     let file = root.path().join("lib.rs");
     std::fs::write(
         &file,
-        "struct A;\n\nimpl A {\n    fn go(&self) {}\n}\n\nfn main() {}\n",
+        "struct A;\n\nimpl A {\n    fn go(&self) {}\n}\n\nfn main() {}\n\nfn\nsplit() {}\n",
     )?;
     let (mut app, _dir) = app_with_example_on("outline", &file, "");
     keys(&mut app, ":outline/toggle<ret>").await;
@@ -1550,7 +1550,14 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
         .collect();
     assert_eq!(
         rows,
-        [("struct A", 0), ("impl A", 0), ("fn go", 1), ("fn main", 0)]
+        // From the syntax tree: a line by line scan misses `split`.
+        [
+            ("struct A", 0),
+            ("impl A", 0),
+            ("fn go", 1),
+            ("fn main", 0),
+            ("fn split", 0)
+        ]
     );
     assert_eq!(panel.title, "Outline: lib.rs");
     // It follows the cursor...
@@ -1559,7 +1566,7 @@ async fn outline_example_lists_symbols_in_a_right_panel() -> anyhow::Result<()> 
     let panel = app.editor.panel(helix_view::sidebar::Dock::Right).unwrap();
     assert_eq!(panel.selected, 2, "on fn go");
     // ...and enter jumps.
-    keys(&mut app, ":outline/focus<ret>G<ret>").await;
+    keys(&mut app, ":outline/focus<ret>Gk<ret>").await;
     deliver_events(&mut app).await;
     let (view, doc) = helix_view::current_ref!(app.editor);
     let cursor = doc
@@ -4093,5 +4100,106 @@ async fn oil_example_reuses_one_buffer_while_moving_between_directories() -> any
             format!("oil://{}/sub/", work.display())
         ]
     );
+    Ok(())
+}
+
+/// API 0.5 `syntax`: plugins query the document's own syntax tree, as it is
+/// after the latest edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_query_the_syntax_tree() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("fn #[m|]#ain() {}\n", None, "");
+    keys(&mut app, ":set-language rust<ret>").await;
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/syntax '(function_item name: (identifier) @name)'<ret>",
+    )
+    .await;
+    assert_eq!(status(&app).0, "syntax:lang=rust 0:name=identifier@3-7");
+    // Renamed: the next call sees the new tree.
+    keys(&mut app, "ecrun<esc>").await;
+    assert_eq!(text(&app), "fn run() {}\n");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/syntax '(function_item name: (identifier) @name)'<ret>",
+    )
+    .await;
+    assert_eq!(status(&app).0, "syntax:lang=rust 0:name=identifier@3-6");
+    Ok(())
+}
+
+/// API 0.5 `http`: even an allowed host can't be a local address (here an
+/// IP literal, so no network is needed); the reply says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_https_requests_never_reach_local_addresses() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""network""#,
+        "[testplugin3]\nallow-network = [\"127.0.0.1\", \"::1\"]\n",
+    );
+    for url in ["https://127.0.0.1/", "https://[::1]:8443/x"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/http GET {url}<ret>"),
+        )
+        .await;
+        for _ in 0..50 {
+            if status(&app).0.starts_with("service-reply") {
+                break;
+            }
+            deliver_events(&mut app).await;
+        }
+        let (message, _) = status(&app);
+        assert!(message.contains("not public"), "{url}: {message}");
+    }
+    // Hosts that aren't allowed fail right away.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/http GET https://example.com/<ret>",
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("allow-network"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}
+
+/// The `script` example: a Rhai script from plugins.toml defines a command,
+/// binds a key and handles saves; `:script/eval` runs a line.
+#[tokio::test(flavor = "multi_thread")]
+async fn script_example_runs_a_user_script() -> anyhow::Result<()> {
+    let file = helpers::temp_file_with_contents("one two\n")?;
+    let settings = r#"[script]
+source = '''
+define("upper", "Uppercase the selections", "upper");
+bind("normal", "space u", "upper");
+on("save", "saved");
+fn upper() { replace_selections(selected().map(|s| s.to_upper())); }
+fn saved() { status(`saved ${text().len()} chars`); }
+'''
+"#;
+    let (mut app, _dir) = app_with_example_on("script", file.path(), settings);
+    keys(&mut app, "e:script/upper<ret>").await;
+    assert_eq!(text(&app), "ONE two\n");
+    // The key the script bound.
+    keys(&mut app, "e<space>u").await;
+    assert_eq!(text(&app), "ONE TWO\n", "{:?}", app.editor.get_status());
+    keys(&mut app, ":w<ret>").await;
+    deliver_events(&mut app).await;
+    assert_eq!(status(&app).0, "saved 8 chars");
+
+    keys(&mut app, ":script/eval 6 * 7<ret>").await;
+    assert_eq!(status(&app).0, "42");
+    // The script's functions are there too.
+    keys(&mut app, ":script/eval selected()<ret>").await;
+    assert_eq!(status(&app).0, r#"[" TWO"]"#);
+    // An endless loop is stopped; the plugin keeps working.
+    keys(&mut app, ":script/eval loop {}<ret>").await;
+    let (message, severity) = status(&app);
+    assert_eq!(severity, Severity::Error);
+    assert!(message.contains("Too many operations"), "{message}");
+    keys(&mut app, ":script/eval 1 + 1<ret>").await;
+    assert_eq!(status(&app).0, "2");
     Ok(())
 }

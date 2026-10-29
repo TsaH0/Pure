@@ -822,7 +822,10 @@ work (`6734495`) and Pure after it (`02034a3`), all built with plain
 - **Idle:** with a file open, the `auto-reload` check wakes the main thread
   once a second (one `stat` per open file; 0 ms CPU measured over 5 s).
   With no file open, or with `auto-reload = false`, there are no wake-ups
-  (S02). Replacing the poll with file watches is F09.
+  (S02). Since 2026-10-29 the directories of open files are watched
+  instead (`helix-term/src/auto_reload.rs`): 0 wake-ups per 5 s with a
+  file open (was 21), startup unchanged; the timer stays as a fallback
+  where watching fails.
 - **Panels and the new examples** cost nothing when unused: no panel means
   `layout` returns the editor area unchanged, and plugin key tries only
   cover the plugins that are loaded.
@@ -871,3 +874,47 @@ With plugins (separate cache directories per configuration):
   the same name sharing one cache directory recompile each other's plugins
   on alternate runs (the cache keeps one build per plugin name), which first
   looked like a 2.5x startup regression.
+
+## Closing the gaps with Neovim, and speed (2026-10-29)
+
+Five changes, measured with `docs/bench/vs-helix.py` on the 257 KB Rust
+file (medians; "before" is the release build of master before them):
+
+| | Before | After |
+| --- | --- | --- |
+| Startup to first frame | 356 ms | 271 ms (−24%) |
+| Startup, 7 plugins loaded (warm cache) | 346 ms | 263 ms |
+| Editing CPU (the scripted session) | 14.0 s | 14.3 s (noise: ranges overlap) |
+| Editing CPU, 7 plugins | 14.4 s | 14.2 s |
+| Idle wake-ups per 5 s, a file open | 22 | 0 |
+| Allocated memory after startup (heap + anonymous) | 16.8 MiB | 17.5 MiB |
+
+Peak RSS is ~4 MiB higher, of which ~2.3 MiB is more of the binary paged in
+(file-backed, shared), not allocations. The binary is 62.5 MB (was 62.2).
+
+1. **Auto-reload watches files** (`helix-term/src/auto_reload.rs`): the
+   directories of open files, through `notify`, instead of a 1 s timer;
+   the timer remains where watching fails.
+2. **Faster query compilation** (vendored `tree-house`, see
+   `vendor/README.md`): a language's highlights, injections and locals
+   queries compile in parallel, and languages with the same grammar and
+   highlight queries share one compiled query (Rust and
+   `rust-format-args-macro`, which Rust injects into `format!` and which
+   used to cost a second full compile). Startup went 341 → 273 ms with only
+   this; CPU is unchanged.
+3. **Syntax trees for plugins** (API 0.5 `syntax`): tree-sitter queries,
+   node lookup and tree walks, the editor's query files. The snapshot holds
+   a reference-counted copy of the root tree only while an API 0.5 plugin is
+   loaded. `outline` uses `tags.scm`.
+4. **HTTPS for plugins** (API 0.5 `http`, `network` permission,
+   `allow-network` hosts): sent with the system's curl, pinned to an address
+   checked to be public. Nothing runs unless a plugin sends a request.
+5. **Scripting** (`examples/script`): Rhai scripts from `plugins.toml` or
+   `init.rhai`. A script handler on every change costs no measurable
+   editing CPU (14.05 s vs 14.24 s with the same plugins); the plugin uses
+   about 10 MiB (the engine and its compiled module).
+
+Plugin startup numbers need a warm compilation cache: the first start after
+a new binary or plugin set compiles the plugins (seconds of CPU in the
+background), and runs that alternate between two plugin sets in one data
+directory keep recompiling.

@@ -242,6 +242,12 @@ pub enum Callback2 {
         id: u32,
         result: Result<String, String>,
     },
+    /// Delivered to the guest as `on-service-reply` (0.5 can't gain
+    /// exports).
+    HttpReply {
+        id: u32,
+        result: Result<String, String>,
+    },
 }
 
 /// Most key bindings per plugin.
@@ -270,6 +276,8 @@ pub(crate) struct V05 {
     pub key_override: bool,
     /// The user's `allow-lsp`.
     pub lsp: bool,
+    /// The user's `allow-network`.
+    pub network: Vec<String>,
     pub editor: EditorFns,
     pub key_bindings: Vec<KeyBinding>,
     pub subscriptions: Vec<Subscription>,
@@ -338,6 +346,7 @@ impl Default for V05 {
         Self {
             key_override: false,
             lsp: false,
+            network: Vec::new(),
             editor: EditorFns::default(),
             key_bindings: Vec::new(),
             subscriptions: Vec::new(),
@@ -995,6 +1004,62 @@ impl State {
         self.actions.push(crate::Action::SetMode(mode));
         Ok(())
     }
+    /// The tree and text of `doc` for `syntax` calls.
+    fn syntax_tree(
+        &self,
+        doc: DocumentId,
+    ) -> Result<Option<(&helix_core::tree_sitter::Tree, &helix_core::Rope)>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let doc = self.document(doc)?;
+        Ok(doc.syntax.as_ref().map(|tree| (tree, &doc.text)))
+    }
+    pub(crate) fn syntax_language(&mut self, doc: DocumentId) -> Result<Option<String>, String> {
+        let parsed = self.syntax_tree(doc)?.is_some();
+        Ok(parsed
+            .then(|| self.document(doc).ok()?.language.clone())
+            .flatten())
+    }
+    pub(crate) fn syntax_query(
+        &mut self,
+        doc: DocumentId,
+        source: &str,
+        range: Option<(u32, u32)>,
+    ) -> Result<Vec<crate::syntax::QueryMatch>, String> {
+        match self.syntax_tree(doc)? {
+            Some((tree, text)) => crate::syntax::query(tree, text, source, range),
+            None => Err(format!("document {doc} has no syntax tree")),
+        }
+    }
+    pub(crate) fn syntax_node_at(
+        &mut self,
+        doc: DocumentId,
+        from: u32,
+        to: u32,
+        named: bool,
+    ) -> Result<Option<crate::syntax::SyntaxNode>, String> {
+        Ok(self
+            .syntax_tree(doc)?
+            .and_then(|(tree, text)| crate::syntax::node_at(tree, text, from, to, named)))
+    }
+    pub(crate) fn syntax_root(
+        &mut self,
+        doc: DocumentId,
+    ) -> Result<Option<crate::syntax::SyntaxNode>, String> {
+        Ok(self
+            .syntax_tree(doc)?
+            .map(|(tree, text)| crate::syntax::root(tree, text)))
+    }
+    /// Run `f` on the tree of `doc`, which must have one.
+    pub(crate) fn with_syntax<T>(
+        &mut self,
+        doc: DocumentId,
+        f: impl FnOnce(&helix_core::tree_sitter::Tree, &helix_core::Rope) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self.syntax_tree(doc)? {
+            Some((tree, text)) => f(tree, text),
+            None => Err(format!("document {doc} has no syntax tree")),
+        }
+    }
     pub(crate) fn views(&mut self) -> Vec<ViewInfo> {
         self.snapshot.views.clone()
     }
@@ -1486,6 +1551,47 @@ impl State {
     }
 }
 
+impl State {
+    pub(crate) fn http_fetch(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body: Option<String>,
+        timeout: Option<u32>,
+    ) -> Result<u32, String> {
+        self.need(crate::Permission::Network)?;
+        if self.v05.network.is_empty() {
+            return Err(format!(
+                "HTTPS requests need allow-network = [\"host\", ...] under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        if self.context == crate::CallContext::Init {
+            return Err("http.fetch can't be used from init".into());
+        }
+        let in_flight = self
+            .pending
+            .values()
+            .filter(|kind| **kind == crate::PendingKind::Http)
+            .count();
+        if in_flight >= crate::http::MAX_IN_FLIGHT {
+            return Err(format!(
+                "at most {} requests at a time",
+                crate::http::MAX_IN_FLIGHT
+            ));
+        }
+        let request = crate::http::check(method, url, headers, body, timeout, &self.v05.network)?;
+        let id = self.request(crate::PendingKind::Http)?;
+        self.actions.push(crate::Action::HttpRequest {
+            plugin: self.plugin.clone(),
+            id,
+            request,
+        });
+        Ok(id)
+    }
+}
+
 /// Most watched paths per plugin.
 pub const MAX_WATCHES: usize = 16;
 
@@ -1850,6 +1956,7 @@ impl crate::PluginHost {
             Callback2::BatchDone { id, .. } => (*id, crate::PendingKind::Batch),
             Callback2::ServiceReply { id, .. } => (*id, crate::PendingKind::Service),
             Callback2::LspReply { id, .. } => (*id, crate::PendingKind::Lsp),
+            Callback2::HttpReply { id, .. } => (*id, crate::PendingKind::Http),
         };
         if plugin.store.data().pending.get(&id) != Some(&kind) {
             return Ok(Vec::new());
@@ -1947,6 +2054,9 @@ impl crate::PluginHost {
             if state.v05.lsp {
                 grants.push("allow-lsp".into());
             }
+            if !state.v05.network.is_empty() {
+                grants.push(format!("allow-network = {:?}", state.v05.network));
+            }
             let _ = writeln!(out, "- Granted in plugins.toml: {}", list(&grants));
             // Asked for but not granted: why calls fail.
             let mut missing = Vec::new();
@@ -1967,6 +2077,11 @@ impl crate::PluginHost {
                     "allow-listen",
                 ),
                 (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
+                (
+                    crate::Permission::Network,
+                    !state.v05.network.is_empty(),
+                    "allow-network",
+                ),
             ] {
                 if m.permissions.contains(&permission) && !granted {
                     missing.push(format!("{} (needs {setting})", permission.as_str()));

@@ -1,0 +1,17 @@
+name = "script"
+version = "0.1.0"
+api = "0.5"
+description = "Script the editor in Rhai, like init.lua: commands, keys and events in a few lines"
+permissions = ["read-buffers", "edit-buffers", "run-commands", "filesystem"]
+wasm = "plugin.wasm"
+
+# Set them under [script] in plugins.toml.
+[settings.source]
+type = "string"
+default = ""
+description = "A script to run at startup, inline"
+
+[settings.file]
+type = "string"
+default = ""
+description = "A script file to run at startup (default: init.rhai in the config directory); needs allow-files = \"read\" and the directory in allow-dirs"

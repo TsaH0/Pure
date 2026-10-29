@@ -55,6 +55,7 @@ Ready-made examples are in
 | `git-blame` | Like git-blame.nvim: who changed the cursor's line, when and why, at its end |
 | `illuminate` | Like vim-illuminate: highlights the other uses of the word under the cursor |
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
+| `script` | Like `init.lua`: script the editor in [Rhai](https://rhai.rs) from `plugins.toml` or `init.rhai` in the config directory: define commands, bind keys, react to events; `:script/eval <code>` runs a line (see below) |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
 ## Using plugins
@@ -122,8 +123,36 @@ show a **sidebar** (a file tree, an outline: `j`/`k` and `enter`
 in it, `esc` back to the editor, `q` closes it), open **scratch buffers**
 and buffers they own (`:w` goes to the plugin, as
 in `oil`), use **registers**, and rename, create or delete files through
-the editor so open buffers follow. Inside a plugin's own buffer its
+the editor so open buffers follow. They can read a document's **syntax
+tree** (tree-sitter queries, the node under the cursor), which is how the
+`outline` example finds symbols. Inside a plugin's own buffer its
 `[keys.buffer]` bindings apply; nowhere else.
+
+### Scripting with `script`
+
+For small customisations without writing a plugin, the `script` plugin runs
+a [Rhai](https://rhai.rs) script (a small Rust-like language) at startup:
+
+```toml
+# plugins.toml
+[script]
+source = '''
+define("upper", "Uppercase the selections", "upper");   // :script/upper
+bind("normal", "space u", "upper");
+on("save", "saved");
+fn upper() { replace_selections(selected().map(|s| s.to_upper())); }
+fn saved() { status(`saved ${path()}`); }
+'''
+```
+
+Or put the script in `init.rhai` in the config directory and let the
+plugin read it (`allow-files = "read"`, `allow-dirs = ["~/.config/helix"]`).
+Scripts can use `text()`, `path()`, `language()`, `mode()`,
+`selections()`, `set_selections()`, `selected()`, `replace_selections()`,
+`insert()`, `query()` (tree-sitter captures), `command(name, [args])`,
+`status()`, `error()`, `define()`, `bind()` and `on()` (`open`, `change`,
+`save`, `close`, `mode`, `idle`). `:script/eval <code>` runs a line and
+shows its value, like `:lua`; an endless loop is stopped, not the editor.
 
 ### Editing directories with `oil`
 
@@ -174,6 +203,9 @@ allow-key-override = true        # its keys may take precedence over yours
 
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
+
+[my-ai-tool]
+allow-network = ["api.example.com", "*.example.org"]  # HTTPS hosts it may reach
 ```
 
 Plugins that declare their settings have them checked when they load: a
@@ -186,6 +218,11 @@ without reloading it; changing what it is allowed (`allow-…`), its keys or
 machine, such as the Competitive Companion browser extension. It listens
 on 127.0.0.1 only and accepts only JSON requests addressed to `localhost`,
 so web pages can't reach it.
+
+`allow-network` lets a plugin send HTTPS requests to the hosts listed
+(`*.example.org` means its subdomains). The editor sends them with `curl`,
+which must be installed; it never follows redirects and never connects to
+your machine or local network, even if a name resolves there.
 
 Plugins with the `registers` permission can read your registers (never the
 clipboard) and write them.

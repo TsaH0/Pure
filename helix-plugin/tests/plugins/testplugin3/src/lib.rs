@@ -173,6 +173,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "set-mode",
                 "views",
                 "ui-state",
+                "syntax",
                 "count-commands",
                 "call",
                 "discover",
@@ -193,6 +194,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "watch",
                 "lsp-servers",
                 "lsp-request",
+                "http",
                 "config",
             ]
             .into_iter()
@@ -575,6 +577,45 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("views:{}", views.join(",")));
                 Ok(())
             }
+            // `syntax query [from to]`: the matches, then the node at
+            // `from..to`, its parent and named children.
+            "syntax" => {
+                use helix::plugin::syntax;
+                let doc = host::current_document().ok_or("no document")?;
+                let show = |node: &syntax::Node| format!("{}@{}-{}", node.kind, node.start, node.end);
+                let range = match &args[1..] {
+                    [from, to] => Some((from.parse().unwrap(), to.parse().unwrap())),
+                    _ => None,
+                };
+                let matches = syntax::query(doc, args.first().ok_or("a query")?, range)?;
+                let mut out = vec![format!(
+                    "lang={}",
+                    syntax::language(doc).unwrap_or_default()
+                )];
+                for found in &matches {
+                    for capture in &found.captures {
+                        out.push(format!("{}:{}={}", found.pattern, capture.name, show(&capture.node)));
+                    }
+                }
+                if let Some((from, to)) = range {
+                    if let Some(node) = syntax::node_at(doc, from, to, true) {
+                        out.push(format!("at={}", show(&node)));
+                        if let Some(parent) = syntax::parent(doc, &node)? {
+                            out.push(format!("parent={}", show(&parent)));
+                            let children = syntax::children(doc, &parent, true)?;
+                            out.push(format!(
+                                "children={}",
+                                children.iter().map(show).collect::<Vec<_>>().join("+")
+                            ));
+                        }
+                        if let Some(next) = syntax::next_sibling(doc, &node, true)? {
+                            out.push(format!("next={}", show(&next)));
+                        }
+                    }
+                }
+                host::set_status(&format!("syntax:{}", out.join(" ")));
+                Ok(())
+            }
             "ui-state" => {
                 let ui = helix::plugin::state::ui();
                 host::set_status(&format!(
@@ -748,6 +789,22 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 let doc = host::current_document().ok_or("no document")?;
                 let servers = helix::plugin::lsp::servers(doc)?;
                 host::set_status(&format!("servers:{}", servers.join(",")));
+                Ok(())
+            }
+            // `http method url [header-name header-value]`.
+            "http" => {
+                let headers = match &args[2..] {
+                    [name, value] => vec![helix::plugin::http::Header { name: name.clone(), value: value.clone() }],
+                    _ => Vec::new(),
+                };
+                let id = helix::plugin::http::fetch(&helix::plugin::http::Request {
+                    method: args[0].clone(),
+                    url: args[1].clone(),
+                    headers,
+                    body: (args[0] == "POST").then(|| "{\"a\":1}".to_string()),
+                    timeout: Some(20),
+                })?;
+                host::set_status(&format!("http:{id}"));
                 Ok(())
             }
             "lsp-request" => {

@@ -976,6 +976,91 @@ interface callbacks2 {
   on-lsp-reply: func(id: request-id, %result: result<string, string>);
 }
 
+/// API 0.5: documents' syntax trees (tree-sitter), for outlines, text
+/// objects, motions and structural edits. Needs `read-buffers`. Covers the
+/// document's own language, not languages injected into it. Positions are
+/// char offsets, like the rest of the API.
+interface syntax {
+  use types.{document-id};
+
+  record node {
+    /// The node's type ("function_item"), or for an anonymous node its
+    /// text ("fn"). Syntax errors are "ERROR".
+    kind: string,
+    named: bool,
+    start: u32,
+    end: u32,
+  }
+
+  record capture {
+    /// Without the "@".
+    name: string,
+    node: node,
+  }
+
+  record query-match {
+    /// Index of the matching pattern in the query.
+    pattern: u32,
+    captures: list<capture>,
+  }
+
+  /// The language the document was parsed as, or none without a tree.
+  language: func(doc: document-id) -> option<string>;
+  /// Matches of a tree-sitter query (with `#eq?`, `#match?`, `#any-of?`;
+  /// `#set!` is ignored), in document order, those within chars
+  /// `from..to` when given. Compiled queries are cached. At most 10000
+  /// matches.
+  query: func(doc: document-id, source: string, range: option<tuple<u32, u32>>) -> result<list<query-match>, string>;
+  /// The editor's query file `name` ("textobjects.scm", "highlights.scm")
+  /// for `language`, `; inherits` resolved; none when it has none. Lets a
+  /// plugin reuse the shipped text objects.
+  query-file: func(language: string, name: string) -> option<string>;
+  /// The smallest node spanning chars `from..to`; with `named`, the
+  /// smallest named one.
+  node-at: func(doc: document-id, %from: u32, to: u32, named: bool) -> option<node>;
+  /// The root node.
+  root: func(doc: document-id) -> option<node>;
+  /// The node's parent, children and siblings; a node is found again by
+  /// its kind and range, so an error means the tree changed.
+  parent: func(doc: document-id, node: node) -> result<option<node>, string>;
+  children: func(doc: document-id, node: node, named: bool) -> result<list<node>, string>;
+  next-sibling: func(doc: document-id, node: node, named: bool) -> result<option<node>, string>;
+  prev-sibling: func(doc: document-id, node: node, named: bool) -> result<option<node>, string>;
+  /// The tree under `node` as an S-expression, for debugging.
+  sexp: func(doc: document-id, node: node) -> result<string, string>;
+}
+
+/// API 0.5: HTTPS requests, only to hosts the user lists for the plugin
+/// (`allow-network = ["api.example.com", "*.example.org"]` in
+/// plugins.toml) and needing the `network` permission. Sent by the editor
+/// with the system's `curl`: no redirects, no addresses that aren't public
+/// (loopback, private, link-local...), checked after DNS too.
+interface http {
+  use types.{request-id};
+
+  record header { name: string, value: string }
+
+  record request {
+    /// GET, HEAD, POST, PUT, PATCH or DELETE.
+    method: string,
+    /// An `https://` URL.
+    url: string,
+    /// Not `Host`, `Content-Length` and the like: the editor sets those.
+    headers: list<header>,
+    /// At most 4 MiB.
+    body: option<string>,
+    /// Seconds, 1 to 120 (default 30).
+    timeout: option<u32>,
+  }
+
+  /// Send `request`; at most 8 at a time, not from `init`. The response
+  /// arrives as `callbacks2.on-service-reply(id, result)`: a JSON object
+  /// `{"status": 200, "headers": [["name", "value"], ...], "body": "..."}`
+  /// (the body as text, at most 16 MiB), or the error. Cancel with
+  /// `requests.cancel`.
+  fetch: func(request: request) -> result<request-id, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1005,6 +1090,8 @@ world helix-plugin {
   import progress;
   import watch;
   import lsp;
+  import syntax;
+  import http;
   export plugin;
   export callbacks;
   export events;

@@ -260,6 +260,139 @@ mod state_impl {
     }
 }
 
+mod http_impl {
+    use super::*;
+    use v0_5::helix::plugin::http::{Host, Request};
+
+    impl Host for State {
+        fn fetch(&mut self, request: Request) -> std::result::Result<u32, String> {
+            let headers = request
+                .headers
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect();
+            State::http_fetch(
+                self,
+                &request.method,
+                &request.url,
+                headers,
+                request.body,
+                request.timeout,
+            )
+        }
+    }
+}
+
+mod syntax_impl {
+    use super::*;
+    use crate::syntax::{self as syn, SyntaxNode};
+    use v0_5::helix::plugin::syntax::{Capture, Host, Node, QueryMatch};
+
+    fn node(node: SyntaxNode) -> Node {
+        Node {
+            kind: node.kind,
+            named: node.named,
+            start: node.start,
+            end: node.end,
+        }
+    }
+
+    fn from_node(node: Node) -> SyntaxNode {
+        SyntaxNode {
+            kind: node.kind,
+            named: node.named,
+            start: node.start,
+            end: node.end,
+        }
+    }
+
+    impl Host for State {
+        fn language(&mut self, doc: u32) -> Option<String> {
+            State::syntax_language(self, doc).ok().flatten()
+        }
+        fn query(
+            &mut self,
+            doc: u32,
+            source: String,
+            range: Option<(u32, u32)>,
+        ) -> std::result::Result<Vec<QueryMatch>, String> {
+            Ok(State::syntax_query(self, doc, &source, range)?
+                .into_iter()
+                .map(|found| QueryMatch {
+                    pattern: found.pattern,
+                    captures: found
+                        .captures
+                        .into_iter()
+                        .map(|(name, found)| Capture {
+                            name,
+                            node: node(found),
+                        })
+                        .collect(),
+                })
+                .collect())
+        }
+        fn query_file(&mut self, language: String, name: String) -> Option<String> {
+            syn::query_file(&language, &name)
+        }
+        fn node_at(&mut self, doc: u32, from: u32, to: u32, named: bool) -> Option<Node> {
+            State::syntax_node_at(self, doc, from, to, named)
+                .ok()
+                .flatten()
+                .map(node)
+        }
+        fn root(&mut self, doc: u32) -> Option<Node> {
+            State::syntax_root(self, doc).ok().flatten().map(node)
+        }
+        fn parent(&mut self, doc: u32, of: Node) -> std::result::Result<Option<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_syntax(doc, |tree, text| syn::parent(tree, text, &of))?
+                .map(node))
+        }
+        fn children(
+            &mut self,
+            doc: u32,
+            of: Node,
+            named: bool,
+        ) -> std::result::Result<Vec<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_syntax(doc, |tree, text| syn::children(tree, text, &of, named))?
+                .into_iter()
+                .map(node)
+                .collect())
+        }
+        fn next_sibling(
+            &mut self,
+            doc: u32,
+            of: Node,
+            named: bool,
+        ) -> std::result::Result<Option<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_syntax(doc, |tree, text| syn::sibling(tree, text, &of, named, true))?
+                .map(node))
+        }
+        fn prev_sibling(
+            &mut self,
+            doc: u32,
+            of: Node,
+            named: bool,
+        ) -> std::result::Result<Option<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_syntax(doc, |tree, text| {
+                    syn::sibling(tree, text, &of, named, false)
+                })?
+                .map(node))
+        }
+        fn sexp(&mut self, doc: u32, of: Node) -> std::result::Result<String, String> {
+            let of = from_node(of);
+            self.with_syntax(doc, |tree, text| syn::sexp(tree, text, &of))
+        }
+    }
+}
+
 mod services_impl {
     use super::*;
     use v0_5::helix::plugin::services::{Host, ServiceInfo};
@@ -605,6 +738,15 @@ pub(crate) async fn callback2(
             callbacks.call_on_batch_done(store, *id, results).await
         }
         v05::Callback2::ServiceReply { id, result } => {
+            callbacks
+                .call_on_service_reply(
+                    store,
+                    *id,
+                    result.as_ref().map(String::as_str).map_err(String::as_str),
+                )
+                .await
+        }
+        v05::Callback2::HttpReply { id, result } => {
             callbacks
                 .call_on_service_reply(
                     store,

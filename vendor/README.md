@@ -60,9 +60,26 @@ can't guarantee the same result:
 - the cached locals captures were collected with different highlight scopes,
   for example before a theme change.
 
+### Faster query compilation (`tree-house`)
+
+Compiling a language's queries is most of the editor's startup: about 100 ms
+for Rust, then as much again for `rust-format-args-macro`, which Rust files
+inject into `format!` and friends and whose highlights and locals are Rust's.
+
+- `LanguageConfig::new` compiles the highlights, injections and locals
+  queries on threads of their own at the same time (for queries over 4 KiB;
+  smaller ones aren't worth a thread), then gives the threads' freed memory
+  back with `malloc_trim` (glibc keeps it otherwise).
+- Languages with the same grammar and the same highlights and locals share
+  one compiled `HighlightQuery` (an `Arc`), so `rust-format-args-macro` only
+  compiles its injections.
+
+Startup on a 257 KB Rust file went from 341 ms to 273 ms.
+
 ## Testing
 
 `helix-core/tests/incremental_syntax.rs` applies random edits to documents in
 several languages. It checks that the layers, syntax trees, locals and
 highlights after each edit are identical to the result of the original
 full-document queries (`tree_house::set_incremental_injections(false)`).
+`identical_highlight_queries_are_compiled_once` checks the sharing.

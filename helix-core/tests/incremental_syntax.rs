@@ -505,3 +505,27 @@ fn incremental_queries_match_full_queries() {
         }
     }
 }
+
+/// Languages with the same grammar and highlight queries (Rust and the Rust
+/// it injects into format macros) share one compiled highlight query.
+#[test]
+fn identical_highlight_queries_are_compiled_once() {
+    use tree_house::LanguageLoader;
+    let loader = helix_core::config::default_lang_loader();
+    let config = |name: &str| {
+        let language = loader.language_for_name(name.to_string()).unwrap();
+        loader
+            .get_config(language)
+            .expect("the Rust grammar is built")
+    };
+    let (rust, format_macro) = (config("rust"), config("rust-format-args-macro"));
+    assert!(std::sync::Arc::ptr_eq(
+        &rust.highlight_query,
+        &format_macro.highlight_query
+    ));
+    // Their injections differ, so those aren't shared.
+    assert!(!std::ptr::eq(
+        &rust.injection_query,
+        &format_macro.injection_query
+    ));
+}

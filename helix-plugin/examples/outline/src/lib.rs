@@ -1,7 +1,9 @@
 //! Example plugin: an outline of the current file in a panel on the right,
-//! like aerial.nvim. Functions, types, classes, headings... found line by
-//! line (no language server needed), indented by nesting. The symbol the
-//! cursor is in is selected as you move; enter jumps to a symbol.
+//! like aerial.nvim. Functions, types, classes, headings... found with the
+//! editor's tree-sitter symbol queries (`tags.scm`, shipped for ~80
+//! languages), or line by line where there is none; indented by nesting.
+//! No language server needed. The symbol the cursor is in is selected as
+//! you move; enter jumps to a symbol.
 //!
 //! `toggle` (`space O`) shows or hides it, `focus` gives it the keys.
 
@@ -10,7 +12,8 @@ use std::cell::RefCell;
 use helix_plugin_api::{
     editor,
     panels::{self, item, on_enter, Dock},
-    register_plugin, text, CommandInfo, DocumentId, EventKind, Plugin, Range, Registration,
+    register_plugin, syntax, text, CommandInfo, DocumentId, EventKind, Plugin, Range,
+    Registration,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +209,60 @@ fn symbols(language: &str, source: &str) -> Vec<Symbol> {
     out
 }
 
+/// The symbols of `doc` from its syntax tree and the language's `tags.scm`
+/// (`@definition.function` around `@name`...), nested by containment. None
+/// without a tree or a tags query.
+fn tree_symbols(doc: DocumentId, language: &str, source: &str) -> Option<Vec<Symbol>> {
+    let mut tags = syntax::query_file(language, "tags.scm")?;
+    if language == "rust" {
+        // Methods nest under their `impl`, which tags.scm leaves out.
+        tags.push_str("\n(impl_item type: (_) @name) @definition.impl\n");
+    }
+    let matches = syntax::query(doc, &tags, None).ok()?;
+    let starts = text::line_starts(source);
+    let line_of = |pos: u32| (starts.partition_point(|start| *start <= pos) as u32).saturating_sub(1);
+    // (start, end, kind, name), in document order.
+    let mut found: Vec<(u32, u32, &'static str, String)> = matches
+        .iter()
+        .filter_map(|found| {
+            let definition = found.captures.iter().find(|c| c.name.starts_with("definition."))?;
+            let name = found.captures.iter().find(|c| c.name == "name")?;
+            let kind = match &definition.name["definition.".len()..] {
+                "function" | "method" => "fn",
+                "impl" => "impl",
+                "macro" => "macro",
+                "module" | "namespace" => "mod",
+                "constant" => "const",
+                "struct" => "struct",
+                "enum" => "enum",
+                "interface" | "trait" => "trait",
+                "class" => "class",
+                "type" => "type",
+                _ => return None,
+            };
+            let name: String = source
+                .chars()
+                .skip(name.node.start as usize)
+                .take((name.node.end - name.node.start) as usize)
+                .collect();
+            Some((definition.node.start, definition.node.end, kind, name))
+        })
+        .collect();
+    found.sort_by_key(|(start, end, ..)| (*start, std::cmp::Reverse(*end)));
+    found.dedup_by_key(|(start, ..)| *start);
+    let mut out = Vec::new();
+    // Ends of the enclosing definitions.
+    let mut stack: Vec<u32> = Vec::new();
+    for (start, end, kind, name) in found {
+        while stack.last().is_some_and(|outer| *outer <= start) {
+            stack.pop();
+        }
+        out.push(Symbol { line: line_of(start), kind, name, depth: stack.len() as u32 });
+        stack.push(end);
+    }
+    Some(out)
+}
+
 /// The symbol the cursor's `line` is in: the last one starting at or before it.
 fn symbol_at(symbols: &[Symbol], line: u32) -> Option<usize> {
     symbols.iter().rposition(|s| s.line <= line)
@@ -222,7 +279,7 @@ fn refresh() -> Result<(), String> {
     // Plugin buffers (ours aside) and the like have nothing to outline.
     let language = editor::document_language(doc)?.unwrap_or_default();
     let source = editor::text(doc)?;
-    let found = symbols(&language, &source);
+    let found = tree_symbols(doc, &language, &source).unwrap_or_else(|| symbols(&language, &source));
     STATE.with_borrow_mut(|state| {
         state.doc = Some(doc);
         state.symbols = found;
@@ -249,6 +306,7 @@ fn show(doc: DocumentId, source: &str) -> Result<(), String> {
                     "fn" | "def" | "function" | "func" | "macro" => "function",
                     "#" => "markup.heading",
                     "impl" | "mod" | "namespace" | "[]" => "namespace",
+                    "trait" | "class" | "interface" => "type",
                     "const" | "static" => "constant",
                     _ => "type",
                 };

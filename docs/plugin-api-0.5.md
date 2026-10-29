@@ -25,6 +25,16 @@ Each line names the tests that cover it (host tests in
 | 7. Async | Done: sessions, progress, file watching, LSP requests (`plugin_sessions_*`, `plugin_session_input_is_bounded`, `plugin_progress_*`, `plugins_watch_paths_they_may_read`, `plugin_lsp_requests_need_the_grant`) | `lsp` also needs the user's `allow-lsp`; the editor's lifecycle methods (`initialize`, `shutdown`, `exit`, `$/…`) are refused. The statusline shows plugins' text by default now, so progress is visible |
 | 8. Configuration and tooling | Done: settings schemas, `config-change` on `:config-reload`, `:plugin-doctor`, `:plugin-trace`, 0.5 capabilities (`api_05_settings_*`, `api_05_plugins_hear_about_settings_changes`, `api_05_tracing_and_the_doctor_report`, `lens_example_*`, `plugin_settings_schemas_are_checked_at_load`, `plugin_doctor_and_trace_report_what_plugins_do`) | Setting types are `boolean`, `string`, `integer`, `number`, `string-list` and `enum`. A grant, key or `enabled` change reloads the plugins instead. The doctor (not `:plugin-list`) shows settings. Tracing logs each call into the plugin with its time and number of actions, not each host function |
 
+Added after the eight areas: **syntax trees** (`syntax` interface;
+`api_05_syntax_*`, `plugins_query_the_syntax_tree`). Plugins run
+tree-sitter queries over a document's tree, find the node at a position and
+walk to parents, children and siblings, and read the editor's own query
+files (`tags.scm`, `textobjects.scm`...). The snapshot carries a copy of the
+root tree (a reference count, no copying) only while an API 0.5 plugin is
+loaded. Injected languages aren't covered. The `outline` example uses it:
+symbols come from `tags.scm` (about 80 languages), with the line-by-line
+scan as the fallback.
+
 The `lens` example (`helix-plugin/examples/lens`) uses most of it: a
 settings schema, `config-change`, a key bound to a closure, filtered
 subscriptions, virtual lines and a service.
@@ -299,7 +309,7 @@ revisions for stale results, local HTTP listeners.
 | Stale results | `revisions` (0.4); `requests.cancel`; every async result names its request id |
 | File watching | `watch.add(path, recursive) -> id` (needs the `filesystem` permission and a path inside the granted roots); changes arrive as `file-change(id, paths)` events, coalesced (100 ms); event-driven (inotify/FSEvents through `notify`), no polling |
 | LSP | `lsp.servers(doc)` and `lsp.request(doc, server, method, params) -> request-id` with `on-lsp-reply`; needs the `lsp` permission. Only requests (no notifications that change server state), methods the server advertises |
-| Network | Not added. Outgoing network access would need a permission naming hosts (`allow-network = ["api.github.com"]`), TLS only, size and time limits, and no access to private address ranges, so a plugin can't reach local services or exfiltrate workspace files to arbitrary hosts. Until then: run a program with `allow-process`, or receive on a local port with `listen` |
+| Network | Added (2026-10-29) as the `http` interface: `http.fetch(request) -> request-id`, the response through `on-service-reply` (0.5 can't gain exports). Needs the `network` permission and the user's `allow-network = ["api.github.com", "*.example.org"]`. HTTPS only, no redirects, no user info in URLs, editor-set headers (`Host`, `Content-Length`...) refused, 4 MiB bodies, 16 MiB responses, 1–120 s timeouts, 8 in flight. The editor sends it with the system's `curl` (`-q`, a cleaned environment, `--proto =https`, `--globoff`) and pins it with `--resolve` to an address it checked is public (no loopback, private, link-local, CGNAT, NAT64...), so DNS can't redirect it to a local service. Through a configured proxy, a name the editor can't resolve is left to the proxy. Tests: `api_05_http_*`, `plugin_https_requests_never_reach_local_addresses`, `helix_plugin::http` unit tests |
 
 ## 8. Configuration and developer tooling
 

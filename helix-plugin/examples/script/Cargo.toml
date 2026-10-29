@@ -1,0 +1,21 @@
+[package]
+name = "script"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+helix-plugin-api = { path = "../../sdk" }
+rhai = { version = "1", default-features = false, features = ["std", "only_i64", "no_float", "no_module", "no_custom_syntax", "no_time"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
+
+[workspace]

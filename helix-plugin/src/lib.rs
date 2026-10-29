@@ -30,7 +30,9 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 
 mod api;
+pub mod http;
 pub mod settings;
+pub mod syntax;
 pub mod v05;
 
 use api::{v0_1, v0_2, v0_3, v0_4, v0_5, Instance};
@@ -72,6 +74,9 @@ pub enum Permission {
     /// Send requests to language servers (API 0.5 `lsp`). The user must
     /// also grant it with `allow-lsp`.
     Lsp,
+    /// Send HTTPS requests (API 0.5 `http`), only to the hosts the user
+    /// lists in `allow-network`.
+    Network,
 }
 
 impl Permission {
@@ -86,6 +91,7 @@ impl Permission {
             Permission::Registers => "registers",
             Permission::Listen => "listen",
             Permission::Lsp => "lsp",
+            Permission::Network => "network",
         }
     }
 }
@@ -150,6 +156,9 @@ pub struct PluginSettings {
     pub key_override: bool,
     /// Requests to language servers (`allow-lsp`).
     pub lsp: bool,
+    /// Hosts HTTPS requests may go to (`allow-network`): names, IP
+    /// addresses or `*.domain`.
+    pub network: Vec<String>,
 }
 
 impl PluginSettings {
@@ -344,6 +353,8 @@ pub const CAPABILITIES_05: &[&str] = &[
     "watch",
     "lsp",
     "settings-schema",
+    "syntax",
+    "http",
 ];
 
 /// Most decorations in one layer.
@@ -472,6 +483,9 @@ pub struct DocumentSnapshot {
     pub revision: u64,
     /// The language servers attached to it (API 0.5 `lsp.servers`).
     pub language_servers: Vec<String>,
+    /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
+    /// plugin is loaded. A copy shares the tree, so it is cheap.
+    pub syntax: Option<helix_core::tree_sitter::Tree>,
 }
 
 /// The editor state a plugin call can read.
@@ -581,6 +595,17 @@ pub enum Action {
         server: Option<String>,
         method: String,
         params: String,
+    },
+    /// Send an HTTPS request and deliver the response (API 0.5 `http`).
+    HttpRequest {
+        plugin: String,
+        id: u32,
+        request: http::HttpRequest,
+    },
+    /// Stop an `HttpRequest`.
+    CancelHttp {
+        plugin: String,
+        id: u32,
     },
     /// Kill a program started with `Spawn`.
     Kill {
@@ -809,6 +834,8 @@ pub enum PendingKind {
     Lsp,
     /// A watched path (API 0.5 `watch`).
     Watch,
+    /// API 0.5 `http.fetch`.
+    Http,
 }
 
 /// A result delivered after the original plugin call returned.
@@ -2078,6 +2105,7 @@ impl State {
             Some(PendingKind::Files) => self.actions.push(Action::CancelFiles { plugin, id }),
             Some(PendingKind::Listen) => self.actions.push(Action::StopListen { plugin, id }),
             Some(PendingKind::Watch) => self.actions.push(Action::Unwatch { plugin, id }),
+            Some(PendingKind::Http) => self.actions.push(Action::CancelHttp { plugin, id }),
             Some(PendingKind::Completion) => self.actions.push(Action::Completions {
                 plugin,
                 id,
@@ -3016,6 +3044,7 @@ impl PluginHost {
             v05: v05::V05 {
                 key_override: settings.key_override,
                 lsp: settings.lsp,
+                network: settings.network,
                 editor: self.editor_fns,
                 marks: self.marks.clone(),
                 ..Default::default()

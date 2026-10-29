@@ -21,6 +21,7 @@
 pub mod install;
 pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
+mod http;
 mod listen;
 mod picker;
 mod popup;
@@ -127,6 +128,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     abort_timers(Some(plugin));
     listen::stop_plugin(Some(plugin));
     watch::stop_plugin(Some(plugin));
+    http::stop_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -704,6 +706,7 @@ fn install(
     abort_timers(None);
     listen::stop_plugin(None);
     watch::stop_plugin(None);
+    http::stop_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -865,6 +868,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-listen");
     table.remove("allow-key-override");
     table.remove("allow-lsp");
+    table.remove("allow-network");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -876,6 +880,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             listen: allowed_ports(settings, name)?,
             key_override: flag(settings, name, "allow-key-override")?,
             lsp: flag(settings, name, "allow-lsp")?,
+            network: allowed_hosts(settings, name)?,
         })
     })())
 }
@@ -1032,6 +1037,32 @@ fn allowed_ports(settings: &toml::Table, name: &str) -> anyhow::Result<Vec<u16>>
             port.as_integer()
                 .and_then(|port| u16::try_from(port).ok())
                 .filter(|port| *port != 0)
+                .ok_or_else(error)
+        })
+        .collect()
+}
+
+/// `allow-network` for plugin `name`: the hosts it may send HTTPS requests to.
+fn allowed_hosts(settings: &toml::Table, name: &str) -> anyhow::Result<Vec<String>> {
+    let Some(value) = settings
+        .get(name)
+        .and_then(|table| table.get("allow-network"))
+    else {
+        return Ok(Vec::new());
+    };
+    let error = || {
+        anyhow::anyhow!(
+            "[{name}] allow-network: expected a list of hosts (\"api.example.com\", \"*.example.org\")"
+        )
+    };
+    value
+        .as_array()
+        .ok_or_else(error)?
+        .iter()
+        .map(|host| {
+            host.as_str()
+                .filter(|host| helix_plugin::http::valid_pattern(host))
+                .map(str::to_owned)
                 .ok_or_else(error)
         })
         .collect()
@@ -1586,6 +1617,11 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                         .language_servers()
                         .map(|server| server.name().to_string())
                         .collect(),
+                    syntax: if HAS_V05.load(Ordering::Relaxed) {
+                        doc.syntax().map(|syntax| syntax.tree().clone())
+                    } else {
+                        None
+                    },
                     owner: doc
                         .plugin_owner
                         .clone()
@@ -1828,6 +1864,12 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::Unwatch { plugin, id } => watch::stop(&plugin, id),
+            Action::HttpRequest {
+                plugin,
+                id,
+                request,
+            } => http::fetch(plugin, id, request),
+            Action::CancelHttp { plugin, id } => http::cancel(&plugin, id),
             Action::LspRequest {
                 plugin,
                 id,

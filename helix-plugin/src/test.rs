@@ -73,6 +73,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             owner: None,
             revision: 0,
             language_servers: Vec::new(),
+            syntax: None,
         },
     );
     Snapshot {
@@ -156,7 +157,7 @@ fn manifest_parsing() {
         err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nunknown = 1").contains("unknown field")
     );
     assert!(
-        err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\npermissions = [\"network\"]")
+        err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\npermissions = [\"telepathy\"]")
             .contains("unknown variant")
     );
     assert!(err("version = \"1\"\napi = \"0.1\"").contains("missing field"));
@@ -1096,7 +1097,8 @@ fn arm_request(host: &mut PluginHost, kind: PendingKind) -> anyhow::Result<u32> 
         | PendingKind::Batch
         | PendingKind::Service
         | PendingKind::Lsp
-        | PendingKind::Watch => unreachable!(),
+        | PendingKind::Watch
+        | PendingKind::Http => unreachable!(),
     };
     host.run_command(
         "testplugin2",
@@ -4246,6 +4248,7 @@ fn conceals_are_checked_against_the_text() {
             owner: None,
             revision: 0,
             language_servers: Vec::new(),
+            syntax: None,
         },
     );
     state
@@ -5290,4 +5293,206 @@ fn api_05_tracing_and_the_doctor_report() {
     ] {
         assert!(report.contains(part), "{part} not in:\n{report}");
     }
+}
+
+/// A snapshot of `text` parsed as Rust (the grammar must be built).
+fn rust_snapshot(text: &str) -> Snapshot {
+    let loader = helix_core::config::default_lang_loader();
+    let language = loader.language_for_name("rust".to_string()).unwrap();
+    let rope = Rope::from(text);
+    let syntax = helix_core::syntax::Syntax::new(rope.slice(..), language, &loader)
+        .expect("the Rust grammar is built");
+    let mut snapshot = snapshot(text, 0, 0);
+    let doc = snapshot.documents.get_mut(&1).unwrap();
+    doc.syntax = Some(syntax.tree().clone());
+    snapshot
+}
+
+#[test]
+fn api_05_syntax_queries_and_walks_the_tree() {
+    let (mut host, _root) = v5_with(PluginSettings::new("{}"));
+    // Positions are chars: the "é" is two bytes.
+    let text = "// é\nfn main() { let x = 1; }\n";
+    let run = |host: &mut PluginHost, args: &[&str]| {
+        host.run_command(
+            "testplugin3",
+            "syntax",
+            args.iter().map(|a| a.to_string()).collect(),
+            rust_snapshot(text),
+        )
+    };
+    let actions = run(
+        &mut host,
+        &[
+            "(function_item name: (identifier) @name) (integer_literal) @int",
+            "17",
+            "26",
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        statuses(&actions),
+        [
+            "syntax:lang=rust 0:name=identifier@8-12 1:int=integer_literal@25-26 \
+          at=let_declaration@17-27 parent=block@15-29 children=let_declaration@17-27"
+        ]
+    );
+    // Predicates work; the range limits the matches.
+    let actions = run(&mut host, &[r#"((identifier) @id (#eq? @id "x"))"#]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["syntax:lang=rust 0:id=identifier@21-22"]
+    );
+    let actions = run(&mut host, &["(identifier) @id", "0", "13"]).unwrap();
+    assert_eq!(
+        statuses(&actions),
+        ["syntax:lang=rust 0:id=identifier@8-12 at=source_file@0-30"]
+    );
+
+    // Bad queries are errors, not crashes.
+    let err = run(&mut host, &["(no_such_node) @x"]).unwrap_err();
+    assert!(err.to_string().contains("invalid query"), "{err}");
+    let err = run(&mut host, &["(identifier) @x", "5", "999"]).unwrap_err();
+    assert!(err.to_string().contains("past the end"), "{err}");
+
+    // Without a tree there is nothing to query.
+    let err = host
+        .run_command(
+            "testplugin3",
+            "syntax",
+            vec!["(identifier) @id".into()],
+            snapshot(text, 0, 0),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no syntax tree"), "{err}");
+}
+
+#[test]
+fn api_05_syntax_query_files_are_only_runtime_queries() {
+    let textobjects = crate::syntax::query_file("rust", "textobjects.scm").unwrap();
+    assert!(textobjects.contains("function.around"));
+    // `; inherits` is resolved.
+    let inherited = crate::syntax::query_file("rust-format-args-macro", "highlights.scm").unwrap();
+    assert!(!inherited.contains("inherits"));
+    for (language, name) in [
+        ("rust", "../../../etc/passwd"),
+        ("../rust", "highlights.scm"),
+        ("rust", "highlights"),
+        ("rust", "/highlights.scm"),
+        ("Rust", "highlights.scm"),
+        ("rust", "no-such-file.scm"),
+    ] {
+        assert_eq!(
+            crate::syntax::query_file(language, name),
+            None,
+            "{language} {name}"
+        );
+    }
+}
+
+#[test]
+fn api_05_syntax_needs_read_buffers() {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        &["run-commands"],
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(&dir, PluginSettings::new("{}")).unwrap();
+    let err = host
+        .run_command(
+            "testplugin3",
+            "syntax",
+            vec!["(identifier) @id".into()],
+            rust_snapshot("fn a() {}\n"),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("read-buffers"), "{err}");
+}
+
+/// testplugin3 on API 0.5 with `permissions` and `settings`.
+fn v5_granted(permissions: &[&str], settings: PluginSettings) -> (PluginHost, tempfile::TempDir) {
+    let mut host = host();
+    let root = tempfile::tempdir().unwrap();
+    let dir = plugin_dir(
+        root.path(),
+        "testplugin3",
+        &fixture("tests/fixtures/testplugin3.wasm"),
+        permissions,
+    );
+    let path = dir.join("plugin.toml");
+    let manifest = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("api = \"0.1\"", "api = \"0.5\"");
+    std::fs::write(path, manifest).unwrap();
+    host.load_with(&dir, settings).unwrap();
+    (host, root)
+}
+
+#[test]
+fn api_05_http_needs_the_permission_and_an_allowed_host() {
+    let allowed = PluginSettings {
+        network: vec!["api.example.com".into(), "*.example.org".into()],
+        ..PluginSettings::new("{}")
+    };
+    // Asked for, but the user allows no hosts.
+    let (mut host, _root) = v5_granted(&["network"], PluginSettings::new("{}"));
+    let err = v5_run(&mut host, "http", &["GET", "https://api.example.com/"]).unwrap_err();
+    assert!(err.to_string().contains("allow-network"), "{err}");
+    // Allowed hosts, but not asked for.
+    let (mut host, _root) = v5_granted(&["read-buffers"], allowed.clone());
+    let err = v5_run(&mut host, "http", &["GET", "https://api.example.com/"]).unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    let (mut host, _root) = v5_granted(&["network"], allowed);
+    let actions = v5_run(
+        &mut host,
+        "http",
+        &[
+            "POST",
+            "https://a.example.org/x?y=1",
+            "Accept",
+            "text/plain",
+        ],
+    )
+    .unwrap();
+    let request = actions
+        .iter()
+        .find_map(|action| match action {
+            Action::HttpRequest { request, .. } => Some(request.clone()),
+            _ => None,
+        })
+        .expect("a request");
+    assert_eq!(request.host, "a.example.org");
+    assert_eq!(
+        request.headers,
+        [("Accept".to_string(), "text/plain".to_string())]
+    );
+    assert_eq!(request.body.as_deref(), Some("{\"a\":1}"));
+    for (url, why) in [
+        ("https://example.com/", "allow-network"),
+        ("http://api.example.com/", "only https"),
+        ("https://127.0.0.1/", "allow-network"),
+    ] {
+        let err = v5_run(&mut host, "http", &["GET", url]).unwrap_err();
+        assert!(err.to_string().contains(why), "{url}: {err}");
+    }
+    let err = v5_run(
+        &mut host,
+        "http",
+        &["GET", "https://api.example.com/", "Host", "x"],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("set by the editor"), "{err}");
+    // The doctor shows the grant.
+    assert!(host
+        .doctor()
+        .contains("allow-network = [\"api.example.com\", \"*.example.org\"]"));
 }

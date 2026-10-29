@@ -61,7 +61,8 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`lint`](examples/lint) | diagnostics for trailing space, long lines, mixed indentation, conflict markers | `[lint]` `max-line = 100` |
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
 | [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase; `space u t` receives testcases from the Competitive Companion browser extension (`receive problem` / `receive contest` make new files from a template) | `[competitest]` `allow-process = true`, `allow-files = "write"`, `allow-listen = [27121]` |
-| [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps | – |
+| [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps. Symbols come from the syntax tree (`tags.scm`) | – |
+| [`script`](examples/script) | like `init.lua`: a [Rhai](https://rhai.rs) script from `plugins.toml` (or `init.rhai`) defines commands, binds keys and handles events; `:script/eval` runs a line. The engine is compiled into the plugin (1.7 MB) | `allow-files = "read"` and `allow-dirs` only to read `init.rhai` |
 | [`harpoon`](examples/harpoon) | like harpoon: `space +` marks a file, `space 1`–`4` jump, `space =` edits the marks | – |
 | [`git-blame`](examples/git-blame) | like git-blame.nvim: the cursor line's author, age and commit at its end | `[git-blame]` `allow-process = ["git"]` |
 | [`illuminate`](examples/illuminate) | like vim-illuminate: highlights the other uses of the word under the cursor | – |
@@ -266,7 +267,7 @@ functions (imports: old components don't use them), never exports.
 0.5 adds key callbacks, completion-menu control, filtered subscriptions and
 hooks, structured commands, editor state, services between plugins, floats,
 marks, virtual lines, process sessions, progress, file watches, language
-server requests and settings schemas. The design, with what each feature
+server requests, settings schemas, syntax trees and HTTPS requests. The design, with what each feature
 guarantees, is [`docs/plugin-api-0.5.md`](../docs/plugin-api-0.5.md); the
 WIT is [`wit/v0.5/`](wit/v0.5/). [`examples/lens`](examples/lens) uses
 most of it. In the SDK:
@@ -295,6 +296,8 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 | `services` | register from `init`, discover, call with JSON (1 MiB); versions, allowed callers, no cycles, at most four plugins deep; `dependencies` in `plugin.toml` load first | – |
 | `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
 | `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |
+| `http` | HTTPS requests (`http::get(url, reply)`, `http::fetch`); the reply is JSON with `status`, `headers` and `body`. HTTPS only, no redirects, never to local or private addresses (checked after DNS), sent with the system's `curl` | `network` + `allow-network` (the hosts) |
+| `syntax` | the document's tree-sitter tree: queries (with `#eq?`, `#match?`; compiled once and cached; at most 10000 matches), the node at a position, parents, children, siblings, S-expressions; the editor's own query files (`query-file("rust", "textobjects.scm")`) to reuse its text objects and symbol queries. The document's language only, not injected ones | `read-buffers` |
 
 **Settings schemas.** Declare settings in `plugin.toml`; the editor checks
 the user's against them before `init` (unknown names, wrong types and
