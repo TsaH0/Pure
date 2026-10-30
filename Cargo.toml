@@ -71,7 +71,7 @@ quickcheck = { version = "1", default-features = false }
 version = "0.1.0"
 edition = "2021"
 authors = ["Blaž Hrastnik <blaz@mxxn.io>"]
-categories = ["editor"]
+categories = ["text-editors"]
 repository = "https://github.com/TsaH0/Pure"
 homepage = "https://github.com/TsaH0/Pure"
 license = "MPL-2.0"
