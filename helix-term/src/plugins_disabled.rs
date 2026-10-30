@@ -167,3 +167,13 @@ pub fn block_programs(_blocked: bool) -> impl Drop {
 pub fn starts_program(_command: &str) -> bool {
     false
 }
+
+pub fn pre_command_with(
+    _editor: &mut Editor,
+    _jobs: &mut Jobs,
+    _command: &str,
+    _register: Option<char>,
+    _count: Option<std::num::NonZeroUsize>,
+) -> Result<(), String> {
+    Ok(())
+}

@@ -35,6 +35,16 @@ loaded. Injected languages aren't covered. The `outline` example uses it:
 symbols come from `tags.scm` (about 80 languages), with the line-by-line
 scan as the fallback.
 
+Also added (2026-10-30), so plugins can change built-in behaviour:
+`commands.feed-keys` (keys as if typed, through every keymap; an
+unfinished command is abandoned; program-starting commands the keys run
+need `allow-process`; keys being fed can't feed more), `keymaps.next-key`
+(the next key goes to `on-key`, as after `f`), and `state.command-register`
+/ `command-count` for `pre-command` hooks (`plugins_feed_keys_and_take_the_next_key`,
+`pre_command_hooks_see_and_may_cancel_commands`). The `find-char` and
+`vim-registers` examples use them (`find_char_example_replaces_f_and_t`,
+`vim_registers_example_fills_numbered_registers`).
+
 The `lens` example (`helix-plugin/examples/lens`) uses most of it: a
 settings schema, `config-change`, a key bound to a closure, filtered
 subscriptions, virtual lines and a service.

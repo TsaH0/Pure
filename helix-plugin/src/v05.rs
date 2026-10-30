@@ -138,6 +138,9 @@ pub struct UiState {
     pub popup: bool,
     pub focused_panel: Option<String>,
     pub pending_keys: String,
+    /// The register and count of the command about to run (`pre-command`).
+    pub command_register: Option<char>,
+    pub command_count: Option<u32>,
 }
 
 impl Default for UiState {
@@ -150,6 +153,8 @@ impl Default for UiState {
             popup: false,
             focused_panel: None,
             pending_keys: String::new(),
+            command_register: None,
+            command_count: None,
         }
     }
 }
@@ -998,6 +1003,36 @@ impl State {
             steps,
         });
         Ok(id)
+    }
+    pub(crate) fn feed_keys(&mut self, keys: String) -> Result<(), String> {
+        self.need(crate::Permission::RunCommands)?;
+        self.need_ui("commands.feed-keys")?;
+        if keys.is_empty() || keys.len() > 64 << 10 {
+            return Err("keys of 1 byte to 64 KiB".into());
+        }
+        self.actions.push(crate::Action::FeedKeys {
+            plugin: self.plugin.clone(),
+            keys,
+            may_start_programs: self.process == crate::ProcessGrant::Any,
+        });
+        Ok(())
+    }
+    pub(crate) fn next_key(&mut self, name: String) -> Result<(), String> {
+        self.need_ui("keymaps.next-key")?;
+        if name.is_empty() || name.len() > 128 {
+            return Err("a name of 1 to 128 bytes".into());
+        }
+        self.actions.push(crate::Action::NextKey {
+            plugin: self.plugin.clone(),
+            name,
+        });
+        Ok(())
+    }
+    pub(crate) fn command_register(&mut self) -> Option<char> {
+        self.snapshot.ui.command_register
+    }
+    pub(crate) fn command_count(&mut self) -> Option<u32> {
+        self.snapshot.ui.command_count
     }
     pub(crate) fn set_mode(&mut self, mode: Mode) -> Result<(), String> {
         self.need_ui("commands.set-mode")?;

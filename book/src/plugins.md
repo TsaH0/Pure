@@ -55,6 +55,8 @@ Ready-made examples are in
 | `git-blame` | Like git-blame.nvim: who changed the cursor's line, when and why, at its end |
 | `illuminate` | Like vim-illuminate: highlights the other uses of the word under the cursor |
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
+| `find-char` | `f`, `F`, `t`, `T` like Vim's: on the cursor's line, optional smart case; `repeat` and `repeat-reverse` (bind them to `;` and `,` if you like) |
+| `vim-registers` | Vim's numbered registers (`"0`, `"1`–`"9`, `"-`), done by a plugin; the same as `editor.registers = "vim"` |
 | `script` | Like `init.lua`: script the editor in [Rhai](https://rhai.rs) from `plugins.toml` or `init.rhai` in the config directory: define commands, bind keys, react to events; `:script/eval <code>` runs a line (see below) |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
@@ -127,6 +129,19 @@ the editor so open buffers follow. They can read a document's **syntax
 tree** (tree-sitter queries, the node under the cursor), which is how the
 `outline` example finds symbols. Inside a plugin's own buffer its
 `[keys.buffer]` bindings apply; nowhere else.
+
+### Changing built-in behaviour
+
+Plugins can replace what Pure's own keys and commands do, without changing
+Pure: they can bind any key above the defaults (`find-char` replaces
+`f`/`F`/`t`/`T`), take the key typed after theirs, run commands or play
+keys as if typed (like `:normal`), and see each command before it runs,
+with its register and count, to add to it or cancel it (`vim-registers`).
+Keys that open a menu of their own (`g`, `z`, `Z`, `space`...) can't be
+taken over as a whole, only the keys within them.
+
+`:normal keys` (`:norm`) plays keys as if typed, like Vim's:
+`:normal dd`, `:normal ihello<esc>`.
 
 ### Scripting with `script`
 

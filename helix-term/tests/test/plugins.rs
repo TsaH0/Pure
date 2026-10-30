@@ -3195,14 +3195,25 @@ async fn pre_command_hooks_see_and_may_cancel_commands() -> anyhow::Result<()> {
     assert_eq!(cursor(&app), 1);
     let log = helix_term::plugins::log_lines("testplugin3")?;
     assert!(
-        log.iter().any(|l| l == "event:pre-command:move_char_right"),
+        log.iter()
+            .any(|l| l == "event:pre-command:move_char_right:None:None"),
         "{log:?}"
     );
+    // With the register and count it was given.
+    keys(&mut app, "\"a2l").await;
+    let log = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        log.iter()
+            .any(|l| l == "event:pre-command:move_char_right:Some('a'):Some(2)"),
+        "{log:?}"
+    );
+    keys(&mut app, "2h").await;
     // Other commands don't ask the plugin.
     keys(&mut app, "h").await;
     let log = helix_term::plugins::log_lines("testplugin3")?;
     assert!(
-        !log.iter().any(|l| l == "event:pre-command:move_char_left"),
+        !log.iter()
+            .any(|l| l.starts_with("event:pre-command:move_char_left")),
         "{log:?}"
     );
     // Cancelled: the motion doesn't happen, nor the typable command.
@@ -4201,5 +4212,122 @@ fn saved() { status(`saved ${text().len()} chars`); }
     assert!(message.contains("Too many operations"), "{message}");
     keys(&mut app, ":script/eval 1 + 1<ret>").await;
     assert_eq!(status(&app).0, "2");
+    Ok(())
+}
+
+/// API 0.5 `commands.feed-keys` and `keymaps.next-key`: plugins play keys
+/// as if typed, and take the key after theirs (as `f` and `r` do).
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_feed_keys_and_take_the_next_key() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    // Keys go through the keymap: `w` then `d`.
+    keys(&mut app, ":plugin-run testplugin3/feed wd<ret>").await;
+    assert_eq!(text(&app), "two\n");
+    // Insert mode is left at the end.
+    keys(&mut app, ":plugin-run testplugin3/feed iX<ret>").await;
+    assert_eq!(text(&app), "Xtwo\n");
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Normal);
+    // A program-starting command in fed keys needs allow-process.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/feed-ret :sh<space>true<ret>",
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("allow-process"),
+        "{}",
+        status(&app).0
+    );
+    // A command line the keys leave open is closed: the next key edits.
+    keys(&mut app, ":plugin-run testplugin3/feed :echo<space>hi<ret>").await;
+    keys(&mut app, "gg;d").await;
+    assert_eq!(text(&app), "two\n");
+    keys(&mut app, "u").await;
+    // Keys being fed can't feed more: `K` asks to feed `x`.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin feed:x normal K<ret>",
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin3/feed K<ret>").await;
+    assert!(
+        status(&app).0.contains("can't feed more keys"),
+        "{}",
+        status(&app).0
+    );
+
+    // A key bound to `then-next` asks for the next key; that one goes to
+    // the plugin, not the keymap.
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin then-next normal Q<ret>",
+    )
+    .await;
+    keys(&mut app, "Q").await;
+    keys(&mut app, "d").await;
+    assert_eq!(status(&app).0, "key:next:d:None");
+    assert_eq!(text(&app), "Xtwo\n");
+    keys(&mut app, "Q<esc>").await;
+    assert_eq!(status(&app).0, "key:next:esc:None");
+    keys(&mut app, "QA").await;
+    assert_eq!(status(&app).0, "key:next:A:None");
+    Ok(())
+}
+
+/// The `find-char` example: `f`/`F`/`t`/`T` replaced by a plugin, staying
+/// on the line like Vim's, with repeat.
+#[tokio::test(flavor = "multi_thread")]
+async fn find_char_example_replaces_f_and_t() -> anyhow::Result<()> {
+    let file = helpers::temp_file_with_contents("a,b,c\nx,y\n")?;
+    let (mut app, _dir) = app_with_example_on("find-char", file.path(), "");
+    let selection = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let range = doc.selection(view.id).primary();
+        (range.anchor, range.head)
+    };
+    // From `a` to the first `,` (inclusive, as Helix's `f`).
+    keys(&mut app, "f,").await;
+    assert_eq!(selection(&app), (0, 2));
+    // A count: the second `,`; `t` stops before it.
+    keys(&mut app, "gg2t,").await;
+    assert_eq!(selection(&app), (0, 3));
+    // Only on the line: there is no `y` on the first one.
+    keys(&mut app, "ggfy").await;
+    assert_eq!(selection(&app), (0, 1));
+    // Repeat goes on from the last find; backward with `F`.
+    keys(&mut app, "ggf,:find-char/repeat<ret>").await;
+    assert_eq!(selection(&app), (1, 4));
+    keys(&mut app, "F,").await;
+    assert_eq!(selection(&app), (4, 1));
+    // Escape cancels.
+    keys(&mut app, "ggf<esc>").await;
+    assert_eq!(selection(&app), (0, 1));
+    Ok(())
+}
+
+/// The `vim-registers` example: Vim's numbered registers from a plugin.
+#[tokio::test(flavor = "multi_thread")]
+async fn vim_registers_example_fills_numbered_registers() -> anyhow::Result<()> {
+    let file = helpers::temp_file_with_contents("one\ntwo\nthree four\n")?;
+    let (mut app, _dir) = app_with_example_on("vim-registers", file.path(), "");
+    let register = |app: &Application, name: char| -> Vec<String> {
+        app.editor
+            .registers
+            .read(name, &app.editor)
+            .map(|values| values.map(|v| v.into_owned()).collect())
+            .unwrap_or_default()
+    };
+    keys(&mut app, "xy;").await;
+    assert_eq!(register(&app, '0'), ["one\n"]);
+    keys(&mut app, "xd").await;
+    keys(&mut app, "xd").await;
+    assert_eq!(register(&app, '1'), ["two\n"]);
+    assert_eq!(register(&app, '2'), ["one\n"]);
+    keys(&mut app, "ed").await;
+    assert_eq!(register(&app, '-'), ["three"]);
+    // A named register leaves them alone.
+    keys(&mut app, "x\"ad").await;
+    assert_eq!(register(&app, 'a'), [" four\n"]);
+    assert_eq!(register(&app, '1'), ["two\n"]);
     Ok(())
 }

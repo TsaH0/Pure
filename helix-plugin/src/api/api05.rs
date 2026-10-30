@@ -87,6 +87,9 @@ mod keymaps_impl {
                 })
                 .collect()
         }
+        fn next_key(&mut self, name: String) -> std::result::Result<(), String> {
+            State::next_key(self, name)
+        }
     }
 }
 
@@ -216,6 +219,9 @@ mod commands_impl {
         fn set_mode(&mut self, m: M5) -> std::result::Result<(), String> {
             State::set_mode(self, mode(m))
         }
+        fn feed_keys(&mut self, keys: String) -> std::result::Result<(), String> {
+            State::feed_keys(self, keys)
+        }
     }
 }
 
@@ -256,6 +262,12 @@ mod state_impl {
         }
         fn close_buffer(&mut self, doc: u32) -> std::result::Result<(), String> {
             State::close_buffer(self, doc)
+        }
+        fn command_register(&mut self) -> Option<char> {
+            State::command_register(self)
+        }
+        fn command_count(&mut self) -> Option<u32> {
+            State::command_count(self)
         }
     }
 }

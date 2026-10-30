@@ -1,0 +1,19 @@
+name = "find-char"
+version = "0.1.0"
+api = "0.5"
+description = "f, F, t and T like Vim's: on the current line, with repeat commands (; and , in Vim)"
+permissions = ["read-buffers", "edit-buffers"]
+wasm = "plugin.wasm"
+
+[settings.same-line]
+type = "boolean"
+default = true
+description = "Only search the cursor's line, like Vim (Helix searches the whole file)"
+
+[settings.smart-case]
+type = "boolean"
+default = false
+description = "A lowercase letter also finds its uppercase"
+
+# Repeating the last find. Unbound by default (Helix uses ; and , for
+# selections); bind them, for example: [keys.normal] ";" = "find-char/repeat"

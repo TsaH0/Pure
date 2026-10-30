@@ -24,6 +24,7 @@ type WatchHandler = Box<dyn FnMut(&[String]) -> Result<(), String>>;
 type Reply<T> = Box<dyn FnOnce(T) -> Result<(), String>>;
 
 thread_local! {
+    static NEXT_KEY: RefCell<Option<Box<dyn FnOnce(&str) -> Result<(), String>>>> = RefCell::new(None);
     static KEYS: RefCell<HashMap<String, KeyHandler>> = RefCell::new(HashMap::new());
     static SERVICES: RefCell<HashMap<String, ServiceHandler>> = RefCell::new(HashMap::new());
     static WATCHES: RefCell<HashMap<RequestId, WatchHandler>> = RefCell::new(HashMap::new());
@@ -41,7 +42,7 @@ fn report(result: Result<(), String>) {
 /// Bind keys to plugin callbacks.
 pub mod keymaps {
     use super::*;
-    pub use plugin::keymaps::{list, set, unset, Binding, Layer};
+    pub use plugin::keymaps::{list, next_key, set, unset, Binding, Layer};
 
     /// A binding of `keys` in `mode` to `name`, in the `plugin` layer (above
     /// Pure's defaults, below the user's keys), everywhere.
@@ -71,9 +72,27 @@ pub mod keymaps {
         Ok(())
     }
 
+    /// The name [`then_next_key`] asks for the next key under.
+    const NEXT: &str = "__next-key";
+
+    /// Run `handler` with the next key typed ("x", "A", "esc", "ret",
+    /// "space", "C-c"), which then does nothing else: like the key after
+    /// `f` or `r`. Only from commands, key handlers and callbacks.
+    pub fn then_next_key(
+        handler: impl FnOnce(&str) -> Result<(), String> + 'static,
+    ) -> Result<(), String> {
+        next_key(NEXT)?;
+        NEXT_KEY.with_borrow_mut(|next| *next = Some(Box::new(handler)));
+        Ok(())
+    }
+
     /// The handler for binding `name`, if [`bind`] set one.
     #[doc(hidden)]
     pub fn handle(name: &str, keys: &str, count: Option<u32>) -> Option<Result<KeyOutcome, String>> {
+        if name == NEXT {
+            let handler = NEXT_KEY.with_borrow_mut(Option::take)?;
+            return Some(handler(keys).map(|()| KeyOutcome::Handled));
+        }
         let mut handler = KEYS.with_borrow_mut(|handlers| handlers.remove(name))?;
         let result = handler(keys, count);
         KEYS.with_borrow_mut(|handlers| {
@@ -106,7 +125,7 @@ pub mod subscriptions {
 /// Commands by name, mode changes and ordered batches.
 pub mod commands {
     use super::*;
-    pub use plugin::commands::{list, set_mode, Command, CommandKind, Step};
+    pub use plugin::commands::{feed_keys, list, set_mode, Command, CommandKind, Step};
 
     /// Run command `name` (native, typable or "plugin/command") after this
     /// call, then `done` with its result.

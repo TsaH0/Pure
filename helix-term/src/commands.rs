@@ -259,7 +259,9 @@ impl MappableCommand {
                 ));
                 return;
             }
-            if let Err(reason) = crate::plugins::pre_command(cx.editor, cx.jobs, name) {
+            if let Err(reason) =
+                crate::plugins::pre_command_with(cx.editor, cx.jobs, name, cx.register, cx.count)
+            {
                 cx.editor
                     .set_error(format!("'{name}' cancelled by {reason}"));
                 return;
@@ -7264,6 +7266,11 @@ fn record_macro(cx: &mut Context) {
 /// Marks keys being fed in `macro_replaying`, so fed keys can't feed more.
 const FEEDING: char = '\u{e000}';
 
+/// Whether keys are being fed now (`feed_keys`).
+pub fn feeding(editor: &Editor) -> bool {
+    editor.macro_replaying.contains(&FEEDING)
+}
+
 /// Most keys one `:normal` or plugin feed plays.
 pub const MAX_FED_KEYS: usize = 4096;
 
@@ -7286,20 +7293,26 @@ pub fn feed_keys(
     }
     cx.editor.macro_replaying.push(FEEDING);
     let _blocked = crate::plugins::block_programs(programs_blocked);
+    let layers = compositor.layer_count();
     for &key in keys {
         compositor.handle_event(&compositor::Event::Key(key), cx);
+    }
+    let esc = KeyEvent {
+        code: KeyCode::Esc,
+        modifiers: helix_view::keyboard::KeyModifiers::NONE,
+    };
+    // A command line, picker or popup the keys left open is closed.
+    for _ in 0..8 {
+        if compositor.layer_count() <= layers {
+            break;
+        }
+        compositor.handle_event(&compositor::Event::Key(esc), cx);
     }
     let pending = compositor
         .find::<ui::EditorView>()
         .is_some_and(|view| !view.keymaps.pending().is_empty());
     if pending || cx.editor.mode == Mode::Insert {
-        compositor.handle_event(
-            &compositor::Event::Key(KeyEvent {
-                code: KeyCode::Esc,
-                modifiers: helix_view::keyboard::KeyModifiers::NONE,
-            }),
-            cx,
-        );
+        compositor.handle_event(&compositor::Event::Key(esc), cx);
     }
     cx.editor.macro_replaying.retain(|reg| *reg != FEEDING);
     Ok(())

@@ -297,6 +297,24 @@ fn finish_hook(
 /// the plugins hooked to it may cancel it (`Err`). Commands plugins run
 /// themselves aren't hooked.
 pub fn pre_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) -> Result<(), String> {
+    pre_command_with(editor, jobs, command, None, None)
+}
+
+runtime_local! {
+    /// The register and count of the command `pre-command` hooks are asked
+    /// about (`state.command-register` and `command-count`).
+    static COMMAND_ARGS: parking_lot::Mutex<(Option<char>, Option<u32>)> =
+        parking_lot::Mutex::new((None, None));
+}
+
+/// [`pre_command`] for a command given `register` and `count`.
+pub fn pre_command_with(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    command: &str,
+    register: Option<char>,
+    count: Option<std::num::NonZeroUsize>,
+) -> Result<(), String> {
     use helix_plugin::v05::SubscriptionEvent;
     if !wants2(SubscriptionEvent::PreCommand)
         || APPLYING.load(Ordering::Relaxed) > 0
@@ -304,7 +322,9 @@ pub fn pre_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) -> Resul
     {
         return Ok(());
     }
+    *COMMAND_ARGS.lock() = (register, count.map(|count| count.get() as u32));
     let snapshot = snapshot(editor);
+    *COMMAND_ARGS.lock() = (None, None);
     let Some(result) = with_host(|host| host.pre_command(command, &snapshot)) else {
         return Ok(());
     };
@@ -1229,6 +1249,7 @@ fn views_and_ui(editor: &Editor) -> (Vec<helix_plugin::v05::ViewInfo>, helix_plu
         .collect();
     let flags = UI.lock();
     let pending: Vec<String> = flags.pending.iter().map(|key| key.to_string()).collect();
+    let (command_register, command_count) = *COMMAND_ARGS.lock();
     let ui = helix_plugin::v05::UiState {
         mode: plugin_mode(editor.mode()),
         completion_menu: crate::ui::completion::menu_events::is_open(),
@@ -1249,6 +1270,8 @@ fn views_and_ui(editor: &Editor) -> (Vec<helix_plugin::v05::ViewInfo>, helix_plu
                 .to_string()
             }),
         pending_keys: pending.join(" "),
+        command_register,
+        command_count,
     };
     (views, ui)
 }
@@ -1833,6 +1856,34 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                         let _ = editor.close_document(doc_id, false);
                     }
                 }
+            }
+            Action::FeedKeys {
+                plugin,
+                keys,
+                may_start_programs,
+            } => match helix_view::input::parse_macro(&keys) {
+                // Asked by keys being fed: they would play after these,
+                // and could keep feeding each other.
+                Ok(_) if commands::feeding(editor) => {
+                    editor.set_error(format!("{plugin}: keys being fed can't feed more keys"))
+                }
+                Ok(keys) => crate::compositor::defer_ui(crate::compositor::DeferredUi::Callback(
+                    Box::new(move |compositor, cx| {
+                        let fed = commands::feed_keys(compositor, cx, &keys, !may_start_programs);
+                        if let Err(err) = fed {
+                            cx.editor.set_error(format!("{plugin}: {err}"));
+                        }
+                    }),
+                )),
+                Err(err) => editor.set_error(format!("{plugin}: invalid keys: {err}")),
+            },
+            Action::NextKey { plugin, name } => {
+                crate::compositor::defer_ui(crate::compositor::DeferredUi::NextKey(
+                    Box::new(move |cx, event| {
+                        key(cx.editor, cx.jobs, &plugin, &name, &event.to_string(), None);
+                    }),
+                    commands::OnKeyCallbackKind::PseudoPending,
+                ));
             }
             Action::SetMode(mode) => {
                 if let Some(jobs) = jobs.as_deref_mut() {
