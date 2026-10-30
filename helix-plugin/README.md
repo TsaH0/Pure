@@ -291,7 +291,7 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 
 | Interface | What it does | Needs |
 | --- | --- | --- |
-| `keymaps` | bind keys to `on-key` (or closures); take the next key typed, as `f` and `r` do (`keymaps::then_next_key(|key| ...)`); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
+| `keymaps` | bind keys to `on-key` (or closures); take the next key typed, as `f` and `r` do (`keymaps::then_next_key(|key| ...)`); layers `override` (with `allow-key-override`), `plugin` (above Pure's keys, whole menus like `g` included, below the user's), `fallback`; per document or language; return pass-through to let the keys do what they would | – |
 | `completion-menu` | the open menu's items and selection; select, next, previous, confirm, abort (drops the preview), close (keeps it); `completion-menu` events say why it closed | – |
 | `subscriptions`, `hooks` | subscribe and unsubscribe at any time, filtered by language, path glob, document or command; `pre-command` and `pre-save` may cancel (and `pre-save` may edit) | – |
 | `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; play keys as if typed (`commands.feed-keys("dw")`, like Vim's `:normal`); views and what the UI shows; in a `pre-command` hook, the register and count the command was given (`state.command-register`, `command-count`); close your own buffers you moved away from (`state.close-buffer`, kept while shown or modified) | `run-commands` (and `allow-process` for commands that start programs, also when fed keys run them) |

@@ -137,8 +137,9 @@ Pure: they can bind any key above the defaults (`find-char` replaces
 `f`/`F`/`t`/`T`), take the key typed after theirs, run commands or play
 keys as if typed (like `:normal`), and see each command before it runs,
 with its register and count, to add to it or cancel it (`vim-registers`).
-Keys that open a menu of their own (`g`, `z`, `Z`, `space`...) can't be
-taken over as a whole, only the keys within them.
+A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
+unless you have bound something in that menu yourself: then your menu
+stays.
 
 `:normal keys` (`:norm`) plays keys as if typed, like Vim's:
 `:normal dd`, `:normal ihello<esc>`.

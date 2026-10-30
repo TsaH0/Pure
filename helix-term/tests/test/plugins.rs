@@ -4433,3 +4433,21 @@ async fn tree_example_colours_each_icon() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// A plugin key can replace one of Pure's whole menus (`Z`, here), as long
+/// as the user hasn't bound anything in it.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_keys_replace_whole_menus() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin menu normal Z<ret>",
+    )
+    .await;
+    keys(&mut app, "Z").await;
+    assert_eq!(status(&app).0, "key:menu:Z:None");
+    // The rest of the keys are as before.
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 1);
+    Ok(())
+}
