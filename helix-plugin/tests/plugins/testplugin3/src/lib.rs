@@ -174,6 +174,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "views",
                 "ui-state",
                 "syntax",
+                "feed",
+                "feed-ret",
+                "next-key",
                 "count-commands",
                 "call",
                 "discover",
@@ -616,6 +619,10 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("syntax:{}", out.join(" ")));
                 Ok(())
             }
+            // `feed-ret keys`: the keys and then enter.
+            "feed" => helix::plugin::commands::feed_keys(&args.join(" ")),
+            "feed-ret" => helix::plugin::commands::feed_keys(&format!("{}<ret>", args.join(" "))),
+            "next-key" => helix::plugin::keymaps::next_key(args.first().ok_or("a name")?),
             "ui-state" => {
                 let ui = helix::plugin::state::ui();
                 host::set_status(&format!(
@@ -1073,6 +1080,18 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         use exports::helix::plugin::hooks::KeyOutcome;
         record(format!("key:{name}:{keys}:{count:?}"));
         host::set_status(&format!("key:{name}:{keys}:{count:?}"));
+        // `then-next`: also take the next key (as `next`).
+        if name == "then-next" {
+            if let Err(err) = helix::plugin::keymaps::next_key("next") {
+                host::set_error(&err);
+            }
+        }
+        // `feed:<keys>`: play keys.
+        if let Some(keys) = name.strip_prefix("feed:") {
+            if let Err(err) = helix::plugin::commands::feed_keys(keys) {
+                host::set_error(&err);
+            }
+        }
         // Keys driving the completion menu.
         if let Some(action) = name.strip_prefix("menu-") {
             use helix::plugin::completion_menu as menu;
@@ -1127,7 +1146,11 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
     }
     fn on_pre_command(command: String) -> exports::helix::plugin::hooks::HookOutcome {
         use exports::helix::plugin::hooks::HookOutcome;
-        record(format!("pre-command:{command}"));
+        record(format!(
+            "pre-command:{command}:{:?}:{:?}",
+            helix::plugin::state::command_register(),
+            helix::plugin::state::command_count()
+        ));
         if CANCEL_COMMANDS.get() {
             HookOutcome::Cancel(format!("no {command}"))
         } else {

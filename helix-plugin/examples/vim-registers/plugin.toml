@@ -1,0 +1,6 @@
+name = "vim-registers"
+version = "0.1.0"
+api = "0.5"
+description = "Vim's numbered registers from a plugin: \"0 the last yank, \"1-\"9 the last deletes, \"- small deletes"
+permissions = ["read-buffers", "registers"]
+wasm = "plugin.wasm"

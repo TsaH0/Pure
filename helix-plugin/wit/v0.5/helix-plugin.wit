@@ -647,6 +647,10 @@ interface keymaps {
   unset: func(mode: mode, keys: string, document: option<document-id>) -> result<_, string>;
   /// This plugin's bindings.
   %list: func() -> list<binding>;
+  /// The next key typed goes to `hooks.on-key(name, key, none)` instead of
+  /// the keymap ("x", "A", "esc", "C-c"), like the key after `f` or `r`.
+  /// Only from commands, key callbacks and callbacks.
+  next-key: func(name: string) -> result<_, string>;
 }
 
 /// API 0.5: drive the completion menu (not a completion source: see
@@ -740,6 +744,12 @@ interface commands {
   batch: func(steps: list<step>) -> result<request-id, string>;
   /// Switch mode after this call, like the mode keys.
   set-mode: func(mode: mode) -> result<_, string>;
+  /// Play `keys` ("dw", "ihello<esc>", "<C-w>v") after this call as if
+  /// typed, like Vim's `:normal`: through every keymap, plugins' too. An
+  /// unfinished command is abandoned (insert mode is left). Needs
+  /// `run-commands`; commands the keys run that start programs also need
+  /// `allow-process = true`. Keys being fed can't feed more. At most 4096.
+  feed-keys: func(keys: string) -> result<_, string>;
 }
 
 /// API 0.5: views and UI state, as of this call.
@@ -773,6 +783,11 @@ interface state {
 
   views: func() -> list<view-info>;
   ui: func() -> ui-state;
+  /// In a `pre-command` hook: the register the command was given (`"a`),
+  /// if one was.
+  command-register: func() -> option<char>;
+  /// In a `pre-command` hook: the count the command was given, if any.
+  command-count: func() -> option<u32>;
   /// Close one of this plugin's buffers (`host.open-buffer`) after this
   /// call, unless a view still shows it or it has unsaved changes: then it
   /// stays open. For buffers a plugin moves away from (a directory

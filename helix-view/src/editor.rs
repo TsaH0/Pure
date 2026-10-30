@@ -292,6 +292,19 @@ where
     Ok(chars)
 }
 
+/// How yanks and deletes fill the registers (`editor.registers`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RegisterStyle {
+    /// Only the register a yank or delete uses (`"` by default).
+    #[default]
+    Helix,
+    /// Also like Vim: a yank into the default register goes to `"0` too; a
+    /// delete or change into it goes to `"1` (the older ones move to
+    /// `"2`-`"9`) when it spans lines, else to `"-`.
+    Vim,
+}
+
 /// What a key does to the open completion menu (`completion-keys`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -351,6 +364,10 @@ pub struct Config {
     pub auto_format: bool,
     /// Default register used for yank/paste. Defaults to '"'
     pub default_yank_register: char,
+    /// How yanks and deletes fill the numbered registers: like Helix (only
+    /// the register used) or like Vim (`"0` the last yank, `"1`-`"9` the
+    /// last deletes, `"-` the last small delete).
+    pub registers: RegisterStyle,
     /// Automatic save on focus lost and/or after delay.
     /// Time delay in milliseconds since last edit after which auto save timer triggers.
     /// Time delay defaults to false with 3000ms delay. Focus lost defaults to false.
@@ -1278,6 +1295,7 @@ impl Default for Config {
             word_completion: WordCompletion::default(),
             auto_format: true,
             default_yank_register: '"',
+            registers: RegisterStyle::Helix,
             auto_save: AutoSave::default(),
             idle_timeout: Duration::from_millis(250),
             completion_timeout: Duration::from_millis(250),

@@ -62,6 +62,8 @@ Copy an example's `plugin.toml` and `plugin.wasm` into
 | [`emoji`](examples/emoji) | completion source: `:smi` completes to 😄 | – |
 | [`competitest`](examples/competitest) | like competitest.nvim: `space u r` compiles and runs the current file on its testcases (`sol_input0.txt` / `sol_output0.txt`), verdicts in a bottom panel; `space u a` adds a testcase; `space u t` receives testcases from the Competitive Companion browser extension (`receive problem` / `receive contest` make new files from a template) | `[competitest]` `allow-process = true`, `allow-files = "write"`, `allow-listen = [27121]` |
 | [`outline`](examples/outline) | like aerial.nvim: `space O` shows the file's symbols in a right panel, following the cursor; enter jumps. Symbols come from the syntax tree (`tags.scm`) | – |
+| [`find-char`](examples/find-char) | `f` `F` `t` `T` replaced by a plugin: Vim-like (the cursor's line, optional smart case), with `repeat` / `repeat-reverse` for `;` and `,` | – |
+| [`vim-registers`](examples/vim-registers) | Vim's `"0`, `"1`–`"9` and `"-` filled by a plugin's `pre-command` hook (Pure has them built in too: `editor.registers = "vim"`) | – |
 | [`script`](examples/script) | like `init.lua`: a [Rhai](https://rhai.rs) script from `plugins.toml` (or `init.rhai`) defines commands, binds keys and handles events; `:script/eval` runs a line. The engine is compiled into the plugin (1.7 MB) | `allow-files = "read"` and `allow-dirs` only to read `init.rhai` |
 | [`harpoon`](examples/harpoon) | like harpoon: `space +` marks a file, `space 1`–`4` jump, `space =` edits the marks | – |
 | [`git-blame`](examples/git-blame) | like git-blame.nvim: the cursor line's author, age and commit at its end | `[git-blame]` `allow-process = ["git"]` |
@@ -289,10 +291,10 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 
 | Interface | What it does | Needs |
 | --- | --- | --- |
-| `keymaps` | bind keys to `on-key` (or closures); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
+| `keymaps` | bind keys to `on-key` (or closures); take the next key typed, as `f` and `r` do (`keymaps::then_next_key(|key| ...)`); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
 | `completion-menu` | the open menu's items and selection; select, next, previous, confirm, abort (drops the preview), close (keeps it); `completion-menu` events say why it closed | – |
 | `subscriptions`, `hooks` | subscribe and unsubscribe at any time, filtered by language, path glob, document or command; `pre-command` and `pre-save` may cancel (and `pre-save` may edit) | – |
-| `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; views and what the UI shows; close your own buffers you moved away from (`state.close-buffer`, kept while shown or modified) | `run-commands` (and `allow-process` for commands that start programs) |
+| `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; play keys as if typed (`commands.feed-keys("dw")`, like Vim's `:normal`); views and what the UI shows; in a `pre-command` hook, the register and count the command was given (`state.command-register`, `command-count`); close your own buffers you moved away from (`state.close-buffer`, kept while shown or modified) | `run-commands` (and `allow-process` for commands that start programs, also when fed keys run them) |
 | `services` | register from `init`, discover, call with JSON (1 MiB); versions, allowed callers, no cycles, at most four plugins deep; `dependencies` in `plugin.toml` load first | – |
 | `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
 | `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |

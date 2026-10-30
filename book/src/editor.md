@@ -34,6 +34,7 @@
 | `mouse-yank-register` | Which register to use for mouse yanks. | `*` |
 | `middle-click-paste` | Middle click paste support | `true` |
 | `default-yank-register` | Default register used for yank/paste | `'"'` |
+| `registers` | `"helix"`: a yank or delete only fills the register it uses. `"vim"`: also like Vim/Neovim when no register is named: a yank goes to `"0` too; a delete or change spanning lines goes to `"1` and the older ones move to `"2`–`"9`; a smaller one goes to `"-`. `""` still has the last yank or delete, `"_` discards, `"a`–`"z` and `"+` are as before | `"helix"` |
 | `scroll-lines` | Number of lines to scroll per scroll wheel step | `3` |
 | `shell` | Shell to use when running external commands | Unix: `["sh", "-c"]`<br/>Windows: `["cmd", "/C"]` |
 | `line-number` | Line number display: `absolute` simply shows each line's number, while `relative` shows the distance from the current line. When unfocused or in insert mode, `relative` will still show absolute line numbers | `"absolute"` |

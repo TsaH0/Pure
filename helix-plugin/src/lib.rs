@@ -642,6 +642,18 @@ pub enum Action {
     },
     /// Switch mode like the mode keys (API 0.5).
     SetMode(Mode),
+    /// Play keys as if typed (API 0.5 `commands.feed-keys`); while they
+    /// play, commands that start programs need `may_start_programs`.
+    FeedKeys {
+        plugin: String,
+        keys: String,
+        may_start_programs: bool,
+    },
+    /// Give `plugin` the next key typed, as `on-key(name, key)`.
+    NextKey {
+        plugin: String,
+        name: String,
+    },
     /// Close a plugin's buffer unless a view shows it or it is modified
     /// (API 0.5 `state.close-buffer`).
     CloseBuffer(DocumentId),

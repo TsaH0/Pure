@@ -88,6 +88,7 @@
 | `:pipe-to` | Pipe each selection to the shell command, ignoring output. |
 | `:run-shell-command`, `:sh`, `:!` | Run a shell command |
 | `:run-interactive`, `:term` | Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor. |
+| `:normal`, `:norm` | Play keys as if typed, like Vim's `:normal`: `:normal dd`, `:normal ihello<esc>`. An unfinished command is abandoned. |
 | `:substitute` | Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Patterns: Rust regex syntax or Vim's (`\(.*\)`, `\v`, `\{-}`, `\zs`/`\ze`, `\<\>`). Replacement: `\1`/`$1`/`${name}` groups, `&` the match, `\r` line break, `\u` `\U..\E` `\l` `\L` case. Flags: g (all per line), i, I, n (count), e (no error). |
 | `:copen`, `:cope`, `:cw`, `:cwindow` | Show the quickfix list in a picker. |
 | `:cnext`, `:cn` | Go to the next (or Nth next) quickfix entry. |
@@ -101,7 +102,16 @@
 | `:cclear` | Empty the quickfix list. |
 | `:plugin-run` | Run a plugin command: `:plugin-run <plugin>/<command> [args...]`. |
 | `:plugin-list` | Show the loaded plugins and their commands. |
+| `:plugin-doctor` | Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times. |
+| `:plugin-trace` | Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on|off]`. |
+| `:plugin-keys` | Show the plugins' key bindings, their layers and conflicts. |
+| `:plugin-key` | Run a plugin's key binding: <plugin> <binding>. |
+| `:plugin-install` | Install a plugin from a git URL or a directory (it must have a committed component); asks first. |
+| `:plugin-update` | Update plugins installed with :plugin-install (all, or the ones named); asks before new permissions. |
+| `:plugin-remove` | Remove a plugin (asks first). |
 | `:plugin-log` | Show the latest lines a plugin logged in a new buffer: `:plugin-log <plugin>`. |
+| `:panel-focus` | Give a plugin's panel the keys: left, right or bottom (esc gives them back). |
+| `:panel-close` | Close a plugin's panel: left, right or bottom (default: the focused one). |
 | `:plugin-reload` | Reload all plugins and plugins.toml. |
 | `:run-and-wait`, `:bang` | Run a shell command like Vim's :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again. |
 | `:compile` | Run a shell command like Emacs' M-x compile: its output streams into the *compilation* buffer. Without arguments, run the previous command again. |

@@ -49,7 +49,7 @@ use helix_core::{
 };
 use helix_view::{
     document::{FormatterError, Mode, SCRATCH_BUFFER_NAME},
-    editor::{Action, Motion},
+    editor::{Action, Motion, RegisterStyle},
     expansion,
     info::Info,
     input::KeyEvent,
@@ -253,7 +253,15 @@ impl MappableCommand {
         // Plugins hooked to this command may cancel it (typable commands
         // ask in `typed::execute_command`).
         if let Self::Static { name, .. } = self {
-            if let Err(reason) = crate::plugins::pre_command(cx.editor, cx.jobs, name) {
+            if crate::plugins::programs_blocked() && crate::plugins::starts_program(name) {
+                cx.editor.set_error(format!(
+                    "'{name}' starts a program: the plugin feeding these keys needs allow-process = true"
+                ));
+                return;
+            }
+            if let Err(reason) =
+                crate::plugins::pre_command_with(cx.editor, cx.jobs, name, cx.register, cx.count)
+            {
                 cx.editor
                     .set_error(format!("'{name}' cancelled by {reason}"));
                 return;
@@ -3111,6 +3119,9 @@ fn delete_selection_impl(cx: &mut Context, op: Operation, yank: YankAction) {
         let reg_name = cx
             .register
             .unwrap_or_else(|| cx.editor.config.load().default_yank_register);
+        if cx.register.is_none() && cx.editor.config.load().registers == RegisterStyle::Vim {
+            cx.editor.registers.record_delete(&values);
+        }
         if let Err(err) = cx.editor.registers.write(reg_name, values) {
             cx.editor.set_error(err.to_string());
             return;
@@ -5075,6 +5086,15 @@ fn yank(cx: &mut Context) {
         cx.register
             .unwrap_or(cx.editor.config().default_yank_register),
     );
+    if cx.register.is_none() && cx.editor.config().registers == RegisterStyle::Vim {
+        let (view, doc) = current_ref!(cx.editor);
+        let values: Vec<String> = doc
+            .selection(view.id)
+            .fragments(doc.text().slice(..))
+            .map(Cow::into_owned)
+            .collect();
+        cx.editor.registers.record_yank(&values);
+    }
     exit_select_mode(cx);
 }
 
@@ -7241,6 +7261,61 @@ fn record_macro(cx: &mut Context) {
         cx.editor
             .set_status(format!("Recording to register [{}]", reg));
     }
+}
+
+/// Marks keys being fed in `macro_replaying`, so fed keys can't feed more.
+const FEEDING: char = '\u{e000}';
+
+/// Whether keys are being fed now (`feed_keys`).
+pub fn feeding(editor: &Editor) -> bool {
+    editor.macro_replaying.contains(&FEEDING)
+}
+
+/// Most keys one `:normal` or plugin feed plays.
+pub const MAX_FED_KEYS: usize = 4096;
+
+/// Play `keys` as if typed, like Vim's `:normal` (plugin API 0.5
+/// `commands.feed-keys` too). Like there, an unfinished command is
+/// abandoned: keys still pending are dropped and insert mode is left.
+/// While `programs_blocked`, commands that start programs fail (see
+/// `crate::plugins::programs_blocked`).
+pub fn feed_keys(
+    compositor: &mut Compositor,
+    cx: &mut compositor::Context,
+    keys: &[KeyEvent],
+    programs_blocked: bool,
+) -> Result<(), String> {
+    if cx.editor.macro_replaying.contains(&FEEDING) {
+        return Err("keys being fed can't feed more keys".into());
+    }
+    if keys.len() > MAX_FED_KEYS {
+        return Err(format!("more than {MAX_FED_KEYS} keys"));
+    }
+    cx.editor.macro_replaying.push(FEEDING);
+    let _blocked = crate::plugins::block_programs(programs_blocked);
+    let layers = compositor.layer_count();
+    for &key in keys {
+        compositor.handle_event(&compositor::Event::Key(key), cx);
+    }
+    let esc = KeyEvent {
+        code: KeyCode::Esc,
+        modifiers: helix_view::keyboard::KeyModifiers::NONE,
+    };
+    // A command line, picker or popup the keys left open is closed.
+    for _ in 0..8 {
+        if compositor.layer_count() <= layers {
+            break;
+        }
+        compositor.handle_event(&compositor::Event::Key(esc), cx);
+    }
+    let pending = compositor
+        .find::<ui::EditorView>()
+        .is_some_and(|view| !view.keymaps.pending().is_empty());
+    if pending || cx.editor.mode == Mode::Insert {
+        compositor.handle_event(&compositor::Event::Key(esc), cx);
+    }
+    cx.editor.macro_replaying.retain(|reg| *reg != FEEDING);
+    Ok(())
 }
 
 fn replay_macro(cx: &mut Context) {
