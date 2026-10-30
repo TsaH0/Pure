@@ -200,6 +200,11 @@ pub mod http {
     }
 }
 
+/// Parts of panel items in styles of their own (an icon in its colour).
+pub mod panels2 {
+    pub use super::plugin::panels2::*;
+}
+
 /// Views and UI state.
 pub mod state {
     pub use super::plugin::state::*;

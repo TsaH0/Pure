@@ -1,7 +1,7 @@
 //! Drawing plugin panels (the sidebar is the left one) and handling their
 //! keys and mouse clicks.
 
-use helix_core::unicode::width::UnicodeWidthStr;
+use helix_core::unicode::width::{UnicodeWidthChar, UnicodeWidthStr};
 use helix_view::graphics::Rect;
 use helix_view::input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use helix_view::keyboard::{KeyCode, KeyModifiers};
@@ -185,7 +185,26 @@ pub fn render(editor: &mut Editor, dock: Dock, area: Rect, surface: &mut Surface
         } else {
             item.text.clone()
         };
-        surface.set_stringn(inner.x + indent as u16, y, &text, width, style);
+        let x = inner.x + indent as u16;
+        surface.set_stringn(x, y, &text, width, style);
+        // Parts in styles of their own (icons, matches).
+        let first = panel.spans.partition_point(|(item, _, _)| *item < index);
+        for (_, chars, scope) in panel.spans[first..]
+            .iter()
+            .take_while(|(item, _, _)| *item == index)
+        {
+            let column = |end: usize| -> usize {
+                text.chars().take(end).map(|c| c.width().unwrap_or(0)).sum()
+            };
+            let (start, end) = (column(chars.start).min(width), column(chars.end).min(width));
+            if end > start {
+                let style = theme.get(scope);
+                surface.set_style(
+                    Rect::new(x + start as u16, y, (end - start) as u16, 1),
+                    style,
+                );
+            }
+        }
         if index == panel.selected {
             surface.set_style(Rect::new(inner.x, y, inner.width, 1), selected_style);
         }

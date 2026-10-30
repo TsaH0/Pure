@@ -1076,6 +1076,27 @@ interface http {
   fetch: func(request: request) -> result<request-id, string>;
 }
 
+/// API 0.5: more for panels.
+interface panels2 {
+  use panels.{dock};
+
+  /// Part of a panel item in a style of its own.
+  record span {
+    /// The item's index.
+    item: u32,
+    /// Chars `start..end` of its text.
+    start: u32,
+    end: u32,
+    /// A theme scope or a style written out: "#ff8800",
+    /// "fg:#ff8800 bg:#202020 bold", "function italic".
+    scope: string,
+  }
+
+  /// Style parts of the items of this plugin's panel at `dock`, until it
+  /// is shown again. At most 10000 spans.
+  style-spans: func(dock: dock, spans: list<span>) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1107,6 +1128,7 @@ world helix-plugin {
   import lsp;
   import syntax;
   import http;
+  import panels2;
   export plugin;
   export callbacks;
   export events;

@@ -551,8 +551,13 @@ decorations::set_signs(doc, "lines", &[sign(0, "●", "warning")])?;
 decorations::set_statusline("count", "3 todos")?;
 ```
 
-- Highlights use theme scopes (`warning`, `diff.plus`, ...). Overlapping
-  ones in one layer: the first wins.
+- Highlights use theme scopes (`warning`, `diff.plus`, ...) or styles of
+  their own, anywhere a scope goes (decorations, signs, statusline, panel
+  items): `#ff8800` (the text's colour), `fg:#ff8800 bg:#202020 bold
+  italic underline`, or a theme scope changed (`function bold`). Panel items
+  can have parts in styles of their own (`panels2::style_spans`: the tree's
+  icons in their file type's colour). Overlapping highlights in one layer:
+  the first wins.
 - Virtual text goes before the char at its position; the offset of a line's
   line break puts it at the end of the line. No line breaks in the text.
 - Overlays (`set_overlays`, `decorations::overlay`) draw other characters

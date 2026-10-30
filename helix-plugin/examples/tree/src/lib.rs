@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use helix_plugin_api::{
-    editor, register_plugin,
+    editor, panels, panels2, register_plugin,
     sidebar::{self, item, on_enter, SidebarItem, SidebarView},
     CommandInfo, DocumentId, EventKind, OpenAction, Plugin, Registration,
 };
@@ -77,49 +77,53 @@ fn entries(dir: &Path, hidden: bool) -> Vec<(String, bool)> {
     entries
 }
 
-/// The Nerd Font icon of a file or folder, and a space.
-fn icon(name: &str, is_dir: bool, open: bool) -> &'static str {
+/// The Nerd Font icon of a file or folder (and a space), and its colour,
+/// like nvim-web-devicons.
+fn icon(name: &str, is_dir: bool, open: bool) -> (&'static str, &'static str) {
     if is_dir {
-        return if open { "\u{f07c} " } else { "\u{f07b} " };
+        return (if open { "\u{f07c} " } else { "\u{f07b} " }, "#7ebae4");
     }
     let extension = name.rsplit_once('.').map_or("", |(_, ext)| ext);
     match (name, extension.to_ascii_lowercase().as_str()) {
-        ("Cargo.toml" | "Cargo.lock", _) | (_, "rs") => "\u{e7a8} ",
-        (".gitignore" | ".gitattributes" | ".gitmodules", _) => "\u{e702} ",
-        ("Makefile", _) => "\u{e779} ",
-        (_, "py") => "\u{e606} ",
-        (_, "js" | "mjs") => "\u{e74e} ",
-        (_, "ts") => "\u{e628} ",
-        (_, "jsx" | "tsx") => "\u{e7ba} ",
-        (_, "json") => "\u{e60b} ",
-        (_, "toml") => "\u{e6b2} ",
-        (_, "yaml" | "yml") => "\u{e6a8} ",
-        (_, "md") => "\u{e73e} ",
-        (_, "lua") => "\u{e620} ",
-        (_, "go") => "\u{e627} ",
-        (_, "c" | "h") => "\u{e61e} ",
-        (_, "cpp" | "cc" | "hpp") => "\u{e61d} ",
-        (_, "java") => "\u{e738} ",
-        (_, "sh" | "bash" | "zsh" | "fish") => "\u{e795} ",
-        (_, "html") => "\u{e736} ",
-        (_, "css") => "\u{e749} ",
-        (_, "nix") => "\u{f313} ",
-        (_, "wasm" | "wit") => "\u{e6a1} ",
-        (_, "png" | "jpg" | "jpeg" | "gif" | "svg") => "\u{e60d} ",
-        (_, "lock") => "\u{f023} ",
-        _ => "\u{f15b} ",
+        ("Cargo.toml" | "Cargo.lock", _) | (_, "rs") => ("\u{e7a8} ", "#dea584"),
+        (".gitignore" | ".gitattributes" | ".gitmodules", _) => ("\u{e702} ", "#f54d27"),
+        ("Makefile", _) => ("\u{e779} ", "#6d8086"),
+        (_, "py") => ("\u{e606} ", "#ffbc03"),
+        (_, "js" | "mjs") => ("\u{e74e} ", "#cbcb41"),
+        (_, "ts") => ("\u{e628} ", "#519aba"),
+        (_, "jsx" | "tsx") => ("\u{e7ba} ", "#20c2e3"),
+        (_, "json") => ("\u{e60b} ", "#cbcb41"),
+        (_, "toml") => ("\u{e6b2} ", "#9c4221"),
+        (_, "yaml" | "yml") => ("\u{e6a8} ", "#6d8086"),
+        (_, "md") => ("\u{e73e} ", "#dddddd"),
+        (_, "lua") => ("\u{e620} ", "#51a0cf"),
+        (_, "go") => ("\u{e627} ", "#00add8"),
+        (_, "c" | "h") => ("\u{e61e} ", "#599eff"),
+        (_, "cpp" | "cc" | "hpp") => ("\u{e61d} ", "#f34b7d"),
+        (_, "java") => ("\u{e738} ", "#cc3e44"),
+        (_, "sh" | "bash" | "zsh" | "fish") => ("\u{e795} ", "#89e051"),
+        (_, "html") => ("\u{e736} ", "#e44d26"),
+        (_, "css") => ("\u{e749} ", "#42a5f5"),
+        (_, "nix") => ("\u{f313} ", "#7ebae4"),
+        (_, "wasm" | "wit") => ("\u{e6a1} ", "#5c4cdb"),
+        (_, "png" | "jpg" | "jpeg" | "gif" | "svg") => ("\u{e60d} ", "#a074c4"),
+        (_, "lock") => ("\u{f023} ", "#bbbbbb"),
+        _ => ("\u{f15b} ", "#6d8086"),
     }
 }
 
-/// The visible rows: `(item, path)`.
-fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<(SidebarItem, PathBuf)> {
+/// A row: the item, its path, and its icon's colour.
+type Row = (SidebarItem, PathBuf, Option<&'static str>);
+
+/// The visible rows.
+fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<Row> {
     fn walk(
         dir: &Path,
         depth: u32,
         open: &BTreeSet<PathBuf>,
         hidden: bool,
         icons: bool,
-        out: &mut Vec<(SidebarItem, PathBuf)>,
+        out: &mut Vec<Row>,
     ) {
         for (name, is_dir) in entries(dir, hidden) {
             let path = dir.join(&name);
@@ -127,25 +131,30 @@ fn rows(root: &Path, open: &BTreeSet<PathBuf>, hidden: bool) -> Vec<(SidebarItem
             if is_dir {
                 let is_open = open.contains(&path);
                 let marker = if is_open { "▾ " } else { "▸ " };
-                let glyph = if icons {
+                let (glyph, colour) = if icons {
                     icon(&name, true, is_open)
                 } else {
-                    ""
+                    ("", "")
                 };
                 let row = item(
                     format!("{marker}{glyph}{name}/"),
                     "ui.text.directory",
                     depth,
                 );
-                out.push((on_enter(row, "fold", arg), path.clone()));
+                let colour = icons.then_some(colour);
+                out.push((on_enter(row, "fold", arg), path.clone(), colour));
                 if is_open {
                     walk(&path, depth + 1, open, hidden, icons, out);
                 }
             } else {
                 let scope = if name.starts_with('.') { "comment" } else { "" };
-                let glyph = if icons { icon(&name, false, false) } else { "" };
+                let (glyph, colour) = if icons {
+                    icon(&name, false, false)
+                } else {
+                    ("", "")
+                };
                 let row = item(format!("  {glyph}{name}"), scope, depth);
-                out.push((on_enter(row, "open", arg), path));
+                out.push((on_enter(row, "open", arg), path, icons.then_some(colour)));
             }
         }
     }
@@ -161,12 +170,26 @@ fn show(select: Option<&Path>) -> Result<(), String> {
     let (open, hidden, width) =
         TREE.with_borrow(|tree| (tree.open.clone(), tree.hidden, tree.width));
     let rows = rows(&root, &open, hidden);
-    let selected = select.and_then(|path| rows.iter().position(|(_, p)| p == path));
+    let selected = select.and_then(|path| rows.iter().position(|(_, p, _)| p == path));
+    // Each icon (after the two-column marker) in its own colour.
+    let spans: Vec<panels2::Span> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (_, _, colour))| {
+            Some(panels2::Span {
+                item: i as u32,
+                start: 2,
+                end: 3,
+                scope: (*colour)?.to_string(),
+            })
+        })
+        .collect();
     let title = root.file_name().map_or_else(
         || root.to_string_lossy().into_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let (items, paths): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
+    let (items, paths): (Vec<_>, Vec<_>) =
+        rows.into_iter().map(|(item, path, _)| (item, path)).unzip();
     TREE.with_borrow_mut(|tree| {
         tree.shown = true;
         tree.paths = paths;
@@ -176,7 +199,11 @@ fn show(select: Option<&Path>) -> Result<(), String> {
         items,
         width,
         selected: selected.map(|i| i as u32),
-    })
+    })?;
+    if spans.is_empty() {
+        return Ok(());
+    }
+    panels2::style_spans(panels::Dock::Left, &spans)
 }
 
 /// Open the folders down to `path` and select it.

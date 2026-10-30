@@ -272,6 +272,27 @@ mod state_impl {
     }
 }
 
+mod panels2_impl {
+    use super::*;
+    use v0_5::helix::plugin::panels::Dock as D;
+    use v0_5::helix::plugin::panels2::{Host, Span};
+
+    impl Host for State {
+        fn style_spans(&mut self, dock: D, spans: Vec<Span>) -> std::result::Result<(), String> {
+            let dock = match dock {
+                D::Left => crate::Dock::Left,
+                D::Right => crate::Dock::Right,
+                D::Bottom => crate::Dock::Bottom,
+            };
+            let spans = spans
+                .into_iter()
+                .map(|span| (span.item, span.start, span.end, span.scope))
+                .collect();
+            State::style_spans(self, dock, spans)
+        }
+    }
+}
+
 mod http_impl {
     use super::*;
     use v0_5::helix::plugin::http::{Host, Request};

@@ -4375,3 +4375,61 @@ async fn vim_registers_example_fills_numbered_registers() -> anyhow::Result<()> 
     assert_eq!(register(&app, '1'), ["two\n"]);
     Ok(())
 }
+
+/// The tree example's icons each get their file type's colour (panel
+/// spans with styles written out, API 0.5 `panels2`).
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_example_colours_each_icon() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("main.rs"), "fn main() {}\n")?;
+    std::fs::write(work.join("notes.md"), "hi\n")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("notes.md"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("tree");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/tree").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[tree]\nicons = true\nallow-files = \"read\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    // The tree shows the workspace: the repository, in tests.
+    keys(&mut app, ":tree/toggle<ret>").await;
+    let sidebar = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
+    let colour_of = |name: &str| {
+        let index = sidebar
+            .items
+            .iter()
+            .position(|item| item.text.ends_with(name))
+            .unwrap_or_else(|| panic!("no {name}: {:?}", sidebar.items));
+        sidebar
+            .spans
+            .iter()
+            .find(|(item, _, _)| *item == index)
+            .map(|(_, chars, scope)| (chars.clone(), scope.clone()))
+    };
+    assert_eq!(
+        colour_of(" Cargo.toml"),
+        Some((2..3, "#dea584".to_string()))
+    );
+    assert_eq!(colour_of(" README.md"), Some((2..3, "#dddddd".to_string())));
+    // The colour reaches the screen as RGB.
+    let style = app.editor.theme.get("#dea584");
+    assert_eq!(
+        style.fg,
+        Some(helix_view::graphics::Color::Rgb(0xde, 0xa5, 0x84))
+    );
+    Ok(())
+}

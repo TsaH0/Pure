@@ -602,6 +602,13 @@ pub enum Action {
         id: u32,
         request: http::HttpRequest,
     },
+    /// Style parts of the items of `plugin`'s panel at `dock` (API 0.5).
+    StyleSpans {
+        plugin: String,
+        dock: Dock,
+        /// `(item, chars, scope)`.
+        spans: Vec<(usize, std::ops::Range<usize>, String)>,
+    },
     /// Stop an `HttpRequest`.
     CancelHttp {
         plugin: String,

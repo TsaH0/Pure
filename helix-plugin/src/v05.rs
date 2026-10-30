@@ -1028,6 +1028,30 @@ impl State {
         });
         Ok(())
     }
+    pub(crate) fn style_spans(
+        &mut self,
+        dock: crate::Dock,
+        spans: Vec<(u32, u32, u32, String)>,
+    ) -> Result<(), String> {
+        if spans.len() > 10_000 {
+            return Err("at most 10000 spans".into());
+        }
+        let spans = spans
+            .into_iter()
+            .map(|(item, start, end, scope)| {
+                if start > end || scope.len() > 256 {
+                    return Err(format!("invalid span {start}..{end} of item {item}"));
+                }
+                Ok((item as usize, start as usize..end as usize, scope))
+            })
+            .collect::<Result<_, String>>()?;
+        self.actions.push(crate::Action::StyleSpans {
+            plugin: self.plugin.clone(),
+            dock,
+            spans,
+        });
+        Ok(())
+    }
     pub(crate) fn command_register(&mut self) -> Option<char> {
         self.snapshot.ui.command_register
     }

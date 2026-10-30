@@ -2194,8 +2194,23 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     scroll,
                     focused,
                     float,
+                    spans: Vec::new(),
                 });
                 helix_event::request_redraw();
+            }
+            Action::StyleSpans {
+                plugin,
+                dock,
+                spans,
+            } => {
+                let dock = view_dock(dock);
+                if let Some(panel) = editor.panel_mut(dock).filter(|panel| panel.owner == plugin) {
+                    panel.spans = spans;
+                    panel
+                        .spans
+                        .sort_by_key(|(item, chars, _)| (*item, chars.start));
+                    helix_event::request_redraw();
+                }
             }
             Action::CloseSidebar { plugin, dock } => {
                 let dock = view_dock(dock);
