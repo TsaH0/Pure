@@ -2890,6 +2890,50 @@ async fn plugin_key_bindings_replace_defaults_and_get_the_count() -> anyhow::Res
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_input_bindings_receive_digits_and_dot() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    for (key, name) in [("1", "digit"), (".", "dot")] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bind plugin {name} normal {key}<ret>"),
+        )
+        .await;
+        keys(&mut app, key).await;
+        assert_eq!(status(&app).0, format!("key:{name}:{key}:None"));
+        assert_eq!(cursor(&app), 0);
+        assert_eq!(text(&app), "one two\n");
+    }
+    // An unbound digit still starts an ordinary count.
+    keys(&mut app, "2w").await;
+    assert!(cursor(&app) > 0);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn scoped_plugin_input_bindings_receive_digits_and_dot() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne two\n",
+        None,
+        "[testplugin3]\nallow-key-override = true\n",
+    );
+    for (key, name) in [("1", "digit"), (".", "dot")] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bind override {name} select @doc {key}<ret>"),
+        )
+        .await;
+    }
+    keys(&mut app, "v").await;
+    for (key, name) in [("1", "digit"), (".", "dot")] {
+        keys(&mut app, key).await;
+        assert_eq!(status(&app).0, format!("key:{name}:{key}:None"));
+        assert_eq!(cursor(&app), 0);
+        assert_eq!(text(&app), "one two\n");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn passed_through_keys_do_what_they_would_without_the_binding() -> anyhow::Result<()> {
     let (mut app, _dir) = app_v5("#[o|]#ne two\nthree\n", None, "");
     keys(

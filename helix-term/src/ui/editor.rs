@@ -1232,6 +1232,21 @@ impl EditorView {
     }
 
     fn command_mode(&mut self, mode: Mode, cxt: &mut commands::Context, event: KeyEvent) {
+        // Digit and dot bindings must get the same scoped plugin precedence
+        // as other keys. Otherwise transient character-input bindings lose to
+        // the count/repeat shortcuts before reaching handle_keymap_event.
+        let plugin_special_key = matches!(event, key!('1'..='9') | key!('.'))
+            && crate::keymap::plugin_layers::has_bindings()
+            && {
+                let doc = doc!(cxt.editor);
+                let language = doc.language_name();
+                let scope = crate::keymap::plugin_layers::KeyScope {
+                    owner: doc.plugin_owner.as_deref(),
+                    document: Some(doc.id()),
+                    language,
+                };
+                self.keymaps.is_plugin_binding(mode, event, &scope)
+            };
         match (event, cxt.editor.count) {
             // If the count is already started and the input is a number, always continue the count.
             (key!(i @ '0'..='9'), Some(count)) => {
@@ -1243,12 +1258,14 @@ impl EditorView {
                 cxt.editor.count = NonZeroUsize::new(count);
             }
             // A non-zero digit will start the count if that number isn't used by a keymap.
-            (key!(i @ '1'..='9'), None) if !self.keymaps.contains_key(mode, event) => {
+            (key!(i @ '1'..='9'), None)
+                if !self.keymaps.contains_key(mode, event) && !plugin_special_key =>
+            {
                 let i = i.to_digit(10).unwrap() as usize;
                 cxt.editor.count = NonZeroUsize::new(i);
             }
             // special handling for repeat operator
-            (key!('.'), _) if self.keymaps.pending().is_empty() => {
+            (key!('.'), _) if self.keymaps.pending().is_empty() && !plugin_special_key => {
                 for _ in 0..cxt.editor.count.map_or(1, NonZeroUsize::into) {
                     // first execute whatever put us into insert mode
                     self.last_insert.0.execute(cxt);
