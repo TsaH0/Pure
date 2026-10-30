@@ -583,6 +583,11 @@ impl MappableCommand {
         vsplit_new, "Vertical right split scratch buffer",
         wclose, "Close window",
         wonly, "Close windows except current",
+        grow_view_width, "Widen the split",
+        shrink_view_width, "Narrow the split",
+        grow_view_height, "Make the split taller",
+        shrink_view_height, "Make the split shorter",
+        equalize_views, "Make all splits the same size",
         select_register, "Select register",
         insert_register, "Insert register",
         copy_between_registers, "Copy between two registers",
@@ -6292,6 +6297,36 @@ fn vsplit(cx: &mut Context) {
 
 fn vsplit_new(cx: &mut Context) {
     cx.editor.new_file(Action::VerticalSplit);
+}
+
+/// Resize the focused split by the count (1 by default) times `step`.
+fn resize_focused(cx: &mut Context, layout: tree::Layout, step: i32) {
+    let delta = step * cx.count() as i32;
+    let view = cx.editor.tree.focus;
+    if !cx.editor.tree.resize_view(view, layout, delta) {
+        cx.editor
+            .set_status("no split beside this one to take the space from");
+    }
+}
+
+fn grow_view_width(cx: &mut Context) {
+    resize_focused(cx, tree::Layout::Vertical, 1);
+}
+
+fn shrink_view_width(cx: &mut Context) {
+    resize_focused(cx, tree::Layout::Vertical, -1);
+}
+
+fn grow_view_height(cx: &mut Context) {
+    resize_focused(cx, tree::Layout::Horizontal, 1);
+}
+
+fn shrink_view_height(cx: &mut Context) {
+    resize_focused(cx, tree::Layout::Horizontal, -1);
+}
+
+fn equalize_views(cx: &mut Context) {
+    cx.editor.tree.equalize();
 }
 
 fn wclose(cx: &mut Context) {

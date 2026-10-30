@@ -299,6 +299,7 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 | `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
 | `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |
 | `http` | HTTPS requests (`http::get(url, reply)`, `http::fetch`); the reply is JSON with `status`, `headers` and `body`. HTTPS only, no redirects, never to local or private addresses (checked after DNS), sent with the system's `curl` | `network` + `allow-network` (the hosts) |
+| `windows` | open a document in a split (right or below), focus, close (not the last), resize by columns and rows, equalize, set a split's gutters; **canvases**: draw styled lines in place of one of your buffers' text (dashboards, graphs) | `run-commands` (canvases: –) |
 | `syntax` | the document's tree-sitter tree: queries (with `#eq?`, `#match?`; compiled once and cached; at most 10000 matches), the node at a position, parents, children, siblings, S-expressions; the editor's own query files (`query-file("rust", "textobjects.scm")`) to reuse its text objects and symbol queries. The document's language only, not injected ones | `read-buffers` |
 
 **Settings schemas.** Declare settings in `plugin.toml`; the editor checks

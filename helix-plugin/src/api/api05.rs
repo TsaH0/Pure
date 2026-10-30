@@ -272,6 +272,60 @@ mod state_impl {
     }
 }
 
+mod windows_impl {
+    use super::*;
+    use crate::v05::WindowAction as W;
+    use v0_5::helix::plugin::windows::{Host, Side, Span};
+
+    impl Host for State {
+        fn split(&mut self, doc: u32, side: Side) -> std::result::Result<(), String> {
+            let below = matches!(side, Side::Below);
+            self.window(W::Split { doc, below })
+        }
+        fn focus(&mut self, view: u64) -> std::result::Result<(), String> {
+            self.window(W::Focus(view))
+        }
+        fn close(&mut self, view: u64) -> std::result::Result<(), String> {
+            self.window(W::Close(view))
+        }
+        fn resize(
+            &mut self,
+            view: u64,
+            columns: i32,
+            rows: i32,
+        ) -> std::result::Result<(), String> {
+            self.window(W::Resize {
+                view,
+                columns,
+                rows,
+            })
+        }
+        fn equalize(&mut self) -> std::result::Result<(), String> {
+            self.window(W::Equalize)
+        }
+        fn set_gutters(
+            &mut self,
+            view: u64,
+            gutters: Vec<String>,
+        ) -> std::result::Result<(), String> {
+            self.window(W::Gutters { view, gutters })
+        }
+        fn set_canvas(
+            &mut self,
+            doc: u32,
+            lines: Option<Vec<Vec<Span>>>,
+        ) -> std::result::Result<(), String> {
+            let lines = lines.map(|lines| {
+                lines
+                    .into_iter()
+                    .map(|spans| spans.into_iter().map(|s| (s.text, s.scope)).collect())
+                    .collect()
+            });
+            State::set_canvas(self, doc, lines)
+        }
+    }
+}
+
 mod panels2_impl {
     use super::*;
     use v0_5::helix::plugin::panels::Dock as D;

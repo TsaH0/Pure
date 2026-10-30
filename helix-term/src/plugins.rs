@@ -1535,6 +1535,82 @@ fn clear_key_bindings(plugin: Option<&str>) {
     plugin_layers::set_bindings(all);
 }
 
+/// The view numbered `number` (`view_number`).
+fn view_by_number(editor: &Editor, number: u64) -> Option<ViewId> {
+    editor
+        .tree
+        .views()
+        .map(|(view, _)| view.id)
+        .find(|id| view_number(*id) == number)
+}
+
+/// Do what a plugin asked to splits (API 0.5 `windows`).
+fn window_action(editor: &mut Editor, action: helix_plugin::v05::WindowAction) {
+    use helix_plugin::v05::WindowAction as W;
+    use helix_view::tree::Layout;
+    let view = |editor: &Editor, number: u64| view_by_number(editor, number);
+    match action {
+        W::Split { doc, below } => {
+            if let Some(doc) = editor_doc_id(editor, doc) {
+                let action = if below {
+                    helix_view::editor::Action::HorizontalSplit
+                } else {
+                    helix_view::editor::Action::VerticalSplit
+                };
+                editor.switch(doc, action);
+            }
+        }
+        W::Focus(number) => {
+            if let Some(id) = view(editor, number) {
+                editor.focus(id);
+            }
+        }
+        W::Close(number) => {
+            // The last view stays: closing it would quit.
+            if let Some(id) = view(editor, number).filter(|_| editor.tree.views().count() > 1) {
+                editor.close(id);
+            }
+        }
+        W::Resize {
+            view: number,
+            columns,
+            rows,
+        } => {
+            if let Some(id) = view(editor, number) {
+                if columns != 0 {
+                    editor.tree.resize_view(id, Layout::Vertical, columns);
+                }
+                if rows != 0 {
+                    editor.tree.resize_view(id, Layout::Horizontal, rows);
+                }
+            }
+        }
+        W::Equalize => editor.tree.equalize(),
+        W::Gutters {
+            view: number,
+            gutters,
+        } => {
+            use helix_view::editor::GutterType as G;
+            if let Some(id) = view(editor, number) {
+                let layout = gutters
+                    .iter()
+                    .filter_map(|gutter| match gutter.as_str() {
+                        "diagnostics" => Some(G::Diagnostics),
+                        "line-numbers" => Some(G::LineNumbers),
+                        "diff" => Some(G::Diff),
+                        "spacer" => Some(G::Spacer),
+                        "code-actions" => Some(G::CodeActionHint),
+                        "plugins" => Some(G::Plugins),
+                        _ => None,
+                    })
+                    .collect();
+                editor.tree.get_mut(id).gutters.layout = layout;
+            }
+        }
+    }
+    helix_event::request_redraw();
+}
+
 /// Load the lazy plugin `name` now, if it is one (it hasn't loaded yet).
 pub fn load_lazy(editor: &mut Editor, jobs: Option<&mut Jobs>, name: &str) {
     let Some(result) = with_host(|host| host.load_lazy(name)).flatten() else {
@@ -2240,6 +2316,15 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     spans: Vec::new(),
                 });
                 helix_event::request_redraw();
+            }
+            Action::Window(action) => window_action(editor, action),
+            Action::Canvas { doc, lines } => {
+                if let Some(doc) =
+                    editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
+                {
+                    doc.plugin_canvas = lines;
+                    helix_event::request_redraw();
+                }
             }
             Action::StyleSpans {
                 plugin,

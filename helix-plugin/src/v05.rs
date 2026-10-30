@@ -255,6 +255,17 @@ pub enum Callback2 {
     },
 }
 
+/// What a plugin does to splits (API 0.5 `windows`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowAction {
+    Split { doc: DocumentId, below: bool },
+    Focus(u64),
+    Close(u64),
+    Resize { view: u64, columns: i32, rows: i32 },
+    Equalize,
+    Gutters { view: u64, gutters: Vec<String> },
+}
+
 /// Most key bindings per plugin.
 pub const MAX_KEY_BINDINGS: usize = 256;
 
@@ -1050,6 +1061,76 @@ impl State {
             dock,
             spans,
         });
+        Ok(())
+    }
+    pub(crate) fn window(&mut self, action: WindowAction) -> Result<(), String> {
+        self.need(crate::Permission::RunCommands)?;
+        let view_known = |view: u64| self.snapshot.views.iter().any(|v| v.id == view);
+        match &action {
+            WindowAction::Split { doc, .. } => {
+                self.document(*doc)?;
+            }
+            WindowAction::Focus(view)
+            | WindowAction::Close(view)
+            | WindowAction::Resize { view, .. }
+            | WindowAction::Gutters { view, .. } => {
+                if !view_known(*view) {
+                    return Err(format!("no view {view}"));
+                }
+            }
+            WindowAction::Equalize => {}
+        }
+        if let WindowAction::Gutters { gutters, .. } = &action {
+            const KINDS: &[&str] = &[
+                "diagnostics",
+                "line-numbers",
+                "diff",
+                "spacer",
+                "code-actions",
+                "plugins",
+            ];
+            if let Some(bad) = gutters.iter().find(|g| !KINDS.contains(&g.as_str())) {
+                return Err(format!("unknown gutter '{bad}': {}", KINDS.join(", ")));
+            }
+        }
+        self.actions.push(crate::Action::Window(action));
+        Ok(())
+    }
+    pub(crate) fn set_canvas(
+        &mut self,
+        doc: DocumentId,
+        lines: Option<Vec<Vec<(String, String)>>>,
+    ) -> Result<(), String> {
+        let owned = self
+            .document(doc)?
+            .owner
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == self.plugin);
+        if !owned {
+            return Err(format!("document {doc} isn't one of this plugin's buffers"));
+        }
+        if lines.as_ref().is_some_and(|lines| lines.len() > 10_000) {
+            return Err("at most 10000 lines".into());
+        }
+        // One line each: control characters would break the screen.
+        let lines = lines.map(|lines| {
+            lines
+                .into_iter()
+                .map(|spans| {
+                    spans
+                        .into_iter()
+                        .map(|(text, scope)| {
+                            let text = text
+                                .chars()
+                                .map(|c| if c.is_control() { ' ' } else { c })
+                                .collect();
+                            (text, scope)
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        self.actions.push(crate::Action::Canvas { doc, lines });
         Ok(())
     }
     pub(crate) fn command_register(&mut self) -> Option<char> {

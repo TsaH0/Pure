@@ -213,6 +213,11 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "K" => swap_view_up,
             "H" => swap_view_left,
             "J" => swap_view_down,
+            ">" => grow_view_width,
+            "<" => shrink_view_width,
+            "+" => grow_view_height,
+            "minus" => shrink_view_height,
+            "=" => equalize_views,
             "n" => { "New split scratch buffer"
                 "C-s" | "s" => hsplit_new,
                 "C-v" | "v" => vsplit_new,
@@ -285,6 +290,11 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
                 "J" => swap_view_down,
                 "K" => swap_view_up,
                 "L" => swap_view_right,
+                ">" => grow_view_width,
+                "<" => shrink_view_width,
+                "+" => grow_view_height,
+                "minus" => shrink_view_height,
+                "=" => equalize_views,
                 "n" => { "New split scratch buffer"
                     "C-s" | "s" => hsplit_new,
                     "C-v" | "v" => vsplit_new,

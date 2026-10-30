@@ -176,6 +176,8 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "syntax",
                 "feed",
                 "feed-ret",
+                "win",
+                "canvas",
                 "next-key",
                 "count-commands",
                 "call",
@@ -561,6 +563,37 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 };
                 helix::plugin::commands::set_mode(mode)
             }
+            // `win split|split-below|focus|close|resize|equalize|gutters ...`
+            "win" => {
+                use helix::plugin::windows as w;
+                let view = |i: usize| -> Result<u64, String> {
+                    args.get(i).ok_or("a view")?.parse().map_err(|_| "a view number".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("split") => w::split(host::current_document().ok_or("no document")?, w::Side::Right),
+                    Some("split-below") => w::split(host::current_document().ok_or("no document")?, w::Side::Below),
+                    Some("focus") => w::focus(view(1)?),
+                    Some("close") => w::close(view(1)?),
+                    Some("resize") => w::resize(
+                        view(1)?,
+                        args[2].parse().map_err(|_| "columns")?,
+                        args[3].parse().map_err(|_| "rows")?,
+                    ),
+                    Some("equalize") => w::equalize(),
+                    Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
+                    _ => Err("which?".into()),
+                }
+            }
+            // A buffer of this plugin's, drawn by it: `canvas` (or `canvas off`).
+            "canvas" => {
+                use helix::plugin::windows as w;
+                if args.first().map(String::as_str) == Some("off") {
+                    let doc = host::current_document().ok_or("no document")?;
+                    return w::set_canvas(doc, None);
+                }
+                host::open_buffer("canvas", "text under the canvas\n", None, host::OpenAction::Replace)?;
+                Ok(())
+            }
             "views" => {
                 let views = helix::plugin::state::views()
                     .iter()
@@ -919,6 +952,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn on_document_open(doc: u32) {
         if let Some(name) = host::buffer_name(doc) {
             host::log(&format!("buffer-open:{name}:{doc}"));
+            if name == "canvas" {
+                use helix::plugin::windows::{set_canvas, Span};
+                let span = |text: &str, scope: &str| Span { text: text.into(), scope: scope.into() };
+                let _ = set_canvas(doc, Some(&[
+                    vec![span("Hello ", "#ff8800"), span("canvas", "fg:#00ff00 bold")],
+                    vec![span("second line", "")],
+                ]));
+            }
         }
         if POPUP_ON_OPEN.get() {
             host::set_status(

@@ -642,6 +642,13 @@ pub enum Action {
         id: u32,
         request: http::HttpRequest,
     },
+    /// A split (API 0.5 `windows`).
+    Window(v05::WindowAction),
+    /// Draw lines instead of a plugin buffer's text (`None` stops).
+    Canvas {
+        doc: DocumentId,
+        lines: Option<Vec<Vec<(String, String)>>>,
+    },
     /// Style parts of the items of `plugin`'s panel at `dock` (API 0.5).
     StyleSpans {
         plugin: String,

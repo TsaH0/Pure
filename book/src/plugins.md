@@ -141,6 +141,12 @@ A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
 unless you have bound something in that menu yourself: then your menu
 stays.
 
+Splits can be resized: `C-w >` and `C-w <` widen and narrow the split,
+`C-w +` and `C-w -` make it taller and shorter (with a count, by that many
+columns or rows), `C-w =` makes them all the same size again. Plugins can
+open, resize, close and focus splits, choose their gutters, and draw their
+own buffers entirely (canvases).
+
 `:normal keys` (`:norm`) plays keys as if typed, like Vim's:
 `:normal dd`, `:normal ihello<esc>`.
 

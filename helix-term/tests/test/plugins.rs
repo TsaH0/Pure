@@ -4506,3 +4506,149 @@ async fn lazy_plugins_load_when_first_needed() -> anyhow::Result<()> {
     assert!(status(&app).0.starts_with("v3-open:"), "{}", status(&app).0);
     Ok(())
 }
+
+/// The rows of the screen, as text.
+fn screen_rows(app: &Application) -> Vec<String> {
+    let screen = app.terminal_buffer();
+    (screen.area.y..screen.area.bottom())
+        .map(|y| {
+            (screen.area.x..screen.area.right())
+                .map(|x| screen[(x, y)].symbol.to_string())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+fn view_widths(app: &Application) -> Vec<u16> {
+    app.editor
+        .tree
+        .views()
+        .map(|(view, _)| view.area.width)
+        .collect()
+}
+
+/// Splits can be resized with keys (`C-w >`, `<`, `+`, `-`, `=`).
+#[tokio::test(flavor = "multi_thread")]
+async fn splits_resize_with_keys() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    keys(&mut app, "<C-w>v").await;
+    let even = view_widths(&app);
+    let before = app.editor.tree.get(app.editor.tree.focus).area.width;
+    keys(&mut app, "10<C-w><gt>").await;
+    // The focused split is 10 wider, the other 10 narrower.
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.width,
+        before + 10
+    );
+    let wider = view_widths(&app);
+    assert_eq!(
+        wider.iter().sum::<u16>(),
+        even.iter().sum::<u16>(),
+        "{even:?} -> {wider:?}"
+    );
+    keys(&mut app, "3<C-w><lt>").await;
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.width,
+        before + 7
+    );
+    keys(&mut app, "<C-w>=").await;
+    assert_eq!(view_widths(&app), even);
+    Ok(())
+}
+
+/// API 0.5 `windows`: plugins split, resize, set gutters, close splits, and
+/// draw their own buffers (canvases).
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_control_splits_and_draw_canvases() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/win split<ret>").await;
+    assert_eq!(app.editor.tree.views().count(), 2);
+    let focus = app.editor.tree.focus;
+    use slotmap::Key;
+    let id = focus.data().as_ffi();
+    let before = app.editor.tree.get(focus).area.width;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win resize {id} -8 0<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.get(focus).area.width, before - 8);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win gutters {id}<ret>"),
+    )
+    .await;
+    assert!(app.editor.tree.get(focus).gutters.layout.is_empty());
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win gutters {id} nope<ret>"),
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("unknown gutter"),
+        "{}",
+        status(&app).0
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win close {id}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+    // The last view isn't closed.
+    let last = app.editor.tree.focus.data().as_ffi();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win close {last}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+
+    // A canvas: the plugin's lines, not the buffer's text.
+    keys(&mut app, ":plugin-run testplugin3/canvas<ret>").await;
+    deliver_events(&mut app).await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter().any(|row| row.starts_with("Hello canvas")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("second line")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("text under")),
+        "{rows:#?}"
+    );
+    // In the plugin's colours.
+    let screen = app.terminal_buffer();
+    let y = rows
+        .iter()
+        .position(|row| row.starts_with("Hello"))
+        .unwrap() as u16;
+    assert_eq!(
+        screen[(0, y)].fg,
+        helix_view::graphics::Color::Rgb(0xff, 0x88, 0)
+    );
+    // Without it, the text again.
+    keys(&mut app, ":plugin-run testplugin3/canvas off<ret>").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("text under")),
+        "{rows:#?}"
+    );
+    // Only its own buffers.
+    keys(
+        &mut app,
+        ":buffer-previous<ret>:plugin-run testplugin3/canvas off<ret>",
+    )
+    .await;
+    assert!(
+        status(&app)
+            .0
+            .contains("isn't one of this plugin's buffers"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}

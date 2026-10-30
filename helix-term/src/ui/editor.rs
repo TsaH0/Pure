@@ -94,6 +94,36 @@ impl EditorView {
 
         let view_offset = doc.view_offset(view.id);
 
+        // A plugin draws this buffer itself.
+        if let Some(canvas) = &doc.plugin_canvas {
+            let lines_area = area.clip_bottom(1);
+            surface.clear_with(lines_area, theme.get("ui.background"));
+            for (row, line) in canvas.iter().take(lines_area.height as usize).enumerate() {
+                let y = lines_area.y + row as u16;
+                let mut x = lines_area.x;
+                for (text, scope) in line {
+                    let left = lines_area.right().saturating_sub(x) as usize;
+                    if left == 0 {
+                        break;
+                    }
+                    (x, _) = surface.set_stringn(x, y, text, left, theme.get(scope));
+                }
+            }
+            if viewport.right() != view.area.right() {
+                let border_style = theme.get("ui.window");
+                for y in area.top()..area.bottom() {
+                    surface[(area.right(), y)]
+                        .set_symbol(tui::symbols::line::VERTICAL)
+                        .set_style(border_style);
+                }
+            }
+            let statusline_area = area.clip_top(area.height.saturating_sub(1)).clip_bottom(1);
+            let mut context =
+                statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
+            statusline::render(&mut context, statusline_area, surface);
+            return;
+        }
+
         if !doc.plugin_decorations.is_empty() {
             doc.plugin_decorations.set_render_mode(editor.mode());
         }

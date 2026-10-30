@@ -581,7 +581,7 @@ mod v05;
 pub use v05::{
     commands, completion_menu, decorations2, floats, http, keymaps, lsp, marks, panels2, progress,
     services,
-    sessions, state, subscriptions, syntax, watch, CloseReason, CompletionEvent, Event, HookOutcome,
+    sessions, state, subscriptions, syntax, watch, windows, CloseReason, CompletionEvent, Event, HookOutcome,
     KeyOutcome, PluginState,
 };
 

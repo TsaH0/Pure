@@ -1097,6 +1097,36 @@ interface panels2 {
   style-spans: func(dock: dock, spans: list<span>) -> result<_, string>;
 }
 
+/// API 0.5: splits. Views are the ids `state.views` lists. Changes happen
+/// after the call, in order. Needs `run-commands` (canvases don't).
+interface windows {
+  use types.{document-id};
+
+  enum side { right, below }
+
+  /// Open `doc` in a new split beside the focused one; it gets the focus.
+  split: func(doc: document-id, side: side) -> result<_, string>;
+  focus: func(view: u64) -> result<_, string>;
+  close: func(view: u64) -> result<_, string>;
+  /// Grow `view` by `columns` and `rows` (negative shrinks), taking the
+  /// space from the split beside it.
+  resize: func(view: u64, columns: s32, rows: s32) -> result<_, string>;
+  /// Make all splits the same size.
+  equalize: func() -> result<_, string>;
+  /// The gutters of `view`, in order: "diagnostics", "line-numbers",
+  /// "diff", "spacer", "code-actions", "plugins"; none for no gutter.
+  set-gutters: func(view: u64, gutters: list<string>) -> result<_, string>;
+
+  /// Text in a style: a theme scope or one written out ("#ff8800",
+  /// "fg:#fff bg:#333 bold").
+  record span { text: string, scope: string }
+
+  /// Draw `lines` in place of the text of `doc`, one of this plugin's
+  /// buffers (`host.open-buffer`), until set to none: dashboards, graphs,
+  /// anything. At most 10000 lines.
+  set-canvas: func(doc: document-id, lines: option<list<list<span>>>) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1129,6 +1159,7 @@ world helix-plugin {
   import syntax;
   import http;
   import panels2;
+  import windows;
   export plugin;
   export callbacks;
   export events;

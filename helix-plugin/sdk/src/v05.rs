@@ -200,6 +200,12 @@ pub mod http {
     }
 }
 
+/// Splits: open, focus, close, resize, gutters; canvases (a plugin buffer
+/// drawn by the plugin).
+pub mod windows {
+    pub use super::plugin::windows::*;
+}
+
 /// Parts of panel items in styles of their own (an icon in its colour).
 pub mod panels2 {
     pub use super::plugin::panels2::*;

@@ -21,6 +21,9 @@ pub struct Tree {
 pub struct Node {
     parent: ViewId,
     content: Content,
+    /// Its share of its container's space (`resize`); equal weights split
+    /// the space equally.
+    weight: u32,
 }
 
 #[derive(Debug)]
@@ -29,11 +32,31 @@ pub enum Content {
     Container(Box<Container>),
 }
 
+/// The weights of `children`.
+fn weights(nodes: &SlotMap<ViewId, Node>, children: &[ViewId]) -> Vec<u32> {
+    children.iter().map(|child| nodes[*child].weight).collect()
+}
+
+/// `total` cells shared by `weights`: equal weights give everyone
+/// `total / n` (the caller gives the last the rest), as before weights.
+fn shares(total: u16, weights: &[u32]) -> Vec<u16> {
+    let n = weights.len().max(1);
+    if weights.iter().all(|w| *w == weights[0]) {
+        return vec![total / n as u16; weights.len()];
+    }
+    let sum: u64 = weights.iter().map(|w| *w as u64).sum::<u64>().max(1);
+    weights
+        .iter()
+        .map(|w| (total as u64 * *w as u64 / sum) as u16)
+        .collect()
+}
+
 impl Node {
     pub fn container(layout: Layout) -> Self {
         Self {
             parent: ViewId::default(),
             content: Content::Container(Box::new(Container::new(layout))),
+            weight: 1,
         }
     }
 
@@ -41,6 +64,7 @@ impl Node {
         Self {
             parent: ViewId::default(),
             content: Content::View(Box::new(view)),
+            weight: 1,
         }
     }
 }
@@ -135,6 +159,8 @@ impl Tree {
         // focus the new node
         self.focus = node;
 
+        // A new split: the splits beside it share the space equally again.
+        self.equalize_children(parent);
         // recalculate all the sizes
         self.recalculate();
 
@@ -208,6 +234,8 @@ impl Tree {
         // focus the new node
         self.focus = node;
 
+        let parent = self.nodes[node].parent;
+        self.equalize_children(parent);
         // recalculate all the sizes
         self.recalculate();
 
@@ -368,6 +396,10 @@ impl Tree {
         // b) node is container, calculate areas for each child and push them on the stack
 
         while let Some((key, area)) = self.stack.pop() {
+            let child_weights = match &self.nodes[key].content {
+                Content::Container(container) => weights(&self.nodes, &container.children),
+                Content::View(_) => Vec::new(),
+            };
             let node = &mut self.nodes[key];
 
             match &mut node.content {
@@ -382,8 +414,7 @@ impl Tree {
                     match container.layout {
                         Layout::Horizontal => {
                             let len = container.children.len();
-
-                            let height = area.height / len as u16;
+                            let sizes = shares(area.height, &child_weights);
 
                             let mut child_y = area.y;
 
@@ -392,9 +423,9 @@ impl Tree {
                                     container.area.x,
                                     child_y,
                                     container.area.width,
-                                    height,
+                                    sizes[i],
                                 );
-                                child_y += height;
+                                child_y += sizes[i];
 
                                 // last child takes the remaining width because we can get uneven
                                 // space from rounding
@@ -413,7 +444,7 @@ impl Tree {
                             let total_gap = inner_gap * len_u16.saturating_sub(2);
 
                             let used_area = area.width.saturating_sub(total_gap);
-                            let width = used_area / len_u16;
+                            let sizes = shares(used_area, &child_weights);
 
                             let mut child_x = area.x;
 
@@ -421,10 +452,10 @@ impl Tree {
                                 let mut area = Rect::new(
                                     child_x,
                                     container.area.y,
-                                    width,
+                                    sizes[i],
                                     container.area.height,
                                 );
-                                child_x += width + inner_gap;
+                                child_x += sizes[i] + inner_gap;
 
                                 // last child takes the remaining width because we can get uneven
                                 // space from rounding
@@ -437,6 +468,76 @@ impl Tree {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Grow (or shrink, with a negative `delta`) `view` by `delta` columns
+    /// (`Layout::Vertical`: side by side) or rows (`Layout::Horizontal`),
+    /// taking the space from a neighbour. `false` if nothing is beside it
+    /// that way.
+    pub fn resize_view(&mut self, view: ViewId, layout: Layout, delta: i32) -> bool {
+        const MIN: i32 = 3;
+        let mut child = view;
+        loop {
+            let parent = self.nodes[child].parent;
+            if parent == child {
+                return false;
+            }
+            let (children, container_layout) = match &self.nodes[parent].content {
+                Content::Container(container) => (container.children.clone(), container.layout),
+                Content::View(_) => unreachable!(),
+            };
+            if container_layout != layout || children.len() < 2 {
+                child = parent;
+                continue;
+            }
+            let sizes: Vec<i32> = children
+                .iter()
+                .map(|id| {
+                    let area = match &self.nodes[*id].content {
+                        Content::View(view) => view.area,
+                        Content::Container(container) => container.area,
+                    };
+                    match layout {
+                        Layout::Vertical => area.width as i32,
+                        Layout::Horizontal => area.height as i32,
+                    }
+                })
+                .collect();
+            let i = children.iter().position(|c| *c == child).unwrap();
+            let j = if i + 1 < children.len() { i + 1 } else { i - 1 };
+            let (mine, theirs) = (sizes[i], sizes[j]);
+            let low = MIN.min(mine);
+            let high = (mine + theirs - MIN).max(low);
+            let new = (mine + delta).clamp(low, high);
+            for (k, id) in children.iter().enumerate() {
+                let weight = match k {
+                    _ if k == i => new,
+                    _ if k == j => mine + theirs - new,
+                    _ => sizes[k],
+                };
+                self.nodes[*id].weight = weight.max(1) as u32;
+            }
+            self.recalculate();
+            return true;
+        }
+    }
+
+    /// Give every split the same share again.
+    pub fn equalize(&mut self) {
+        for (_, node) in self.nodes.iter_mut() {
+            node.weight = 1;
+        }
+        self.recalculate();
+    }
+
+    /// Make the splits in `container` share its space equally (after a
+    /// split is added or removed).
+    fn equalize_children(&mut self, container: ViewId) {
+        if let Content::Container(c) = &self.nodes[container].content {
+            for child in c.children.clone() {
+                self.nodes[child].weight = 1;
             }
         }
     }
@@ -897,6 +998,39 @@ mod test {
         assert_eq!(doc_id(&tree, l1), Some(doc_l1));
         assert_eq!(doc_id(&tree, l2), Some(doc_r0));
         assert_eq!(doc_id(&tree, r0), Some(doc_l0));
+    }
+
+    #[test]
+    fn views_resize_and_equalize() {
+        let mut tree = Tree::new(Rect::new(0, 0, 100, 40));
+        let mut view = View::new(DocumentId::default(), GutterConfig::default());
+        view.area = Rect::new(0, 0, 100, 40);
+        let left = tree.insert(view);
+        let right = tree.split(
+            View::new(DocumentId::default(), GutterConfig::default()),
+            Layout::Vertical,
+        );
+        let widths =
+            |tree: &Tree| -> Vec<u16> { tree.views().map(|(v, _)| v.area.width).collect() };
+        // (A column between them.)
+        assert_eq!(widths(&tree), [50, 49]);
+        // Wider by 10, the neighbour narrower.
+        assert!(tree.resize_view(left, Layout::Vertical, 10));
+        assert_eq!(widths(&tree), [60, 39]);
+        assert!(tree.resize_view(right, Layout::Vertical, 5));
+        assert_eq!(widths(&tree), [55, 44]);
+        // Never below 3 columns.
+        tree.resize_view(left, Layout::Vertical, -1000);
+        assert_eq!(widths(&tree)[0], 3);
+        // No split above or below: nothing to take rows from.
+        assert!(!tree.resize_view(left, Layout::Horizontal, 5));
+        // A terminal resize keeps the proportions.
+        tree.equalize();
+        tree.resize_view(left, Layout::Vertical, 10);
+        tree.resize(Rect::new(0, 0, 200, 40));
+        assert_eq!(widths(&tree), [121, 78]);
+        tree.equalize();
+        assert_eq!(widths(&tree), [100, 99]);
     }
 
     #[test]

@@ -221,6 +221,9 @@ pub struct Document {
     pub name: Option<Cow<'static, str>>,
     /// The plugin owning this buffer (Pure): `:write` goes to the plugin.
     pub plugin_owner: Option<String>,
+    /// Lines the owning plugin draws instead of the text: `(text, scope)`
+    /// spans each (plugin API 0.5 `windows.set-canvas`).
+    pub plugin_canvas: Option<Vec<Vec<(String, String)>>>,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
@@ -774,6 +777,7 @@ impl Document {
             readonly: false,
             name: None,
             plugin_owner: None,
+            plugin_canvas: None,
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
             plugin_decorations: Default::default(),
