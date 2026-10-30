@@ -77,6 +77,30 @@ impl Registers {
         }
     }
 
+    /// Vim's yank register: `"0` gets the last yank that didn't name a
+    /// register (`editor.registers = "vim"`).
+    pub fn record_yank(&mut self, values: &[String]) {
+        let _ = self.write('0', values.to_vec());
+    }
+
+    /// Vim's delete registers (`editor.registers = "vim"`): a delete or
+    /// change that didn't name a register goes to `"1`, moving the older
+    /// ones to `"2`-`"9`, if it spans lines; else to the small delete
+    /// register `"-`.
+    pub fn record_delete(&mut self, values: &[String]) {
+        if values.iter().any(|value| value.contains('\n')) {
+            for n in (1..9).rev() {
+                let from = char::from(b'0' + n);
+                if let Some(older) = self.inner.remove(&from) {
+                    self.inner.insert(char::from(b'0' + n + 1), older);
+                }
+            }
+            let _ = self.write('1', values.to_vec());
+        } else {
+            let _ = self.write('-', values.to_vec());
+        }
+    }
+
     /// The stored registers without the clipboard ones, values in order.
     pub fn stored(&self) -> impl Iterator<Item = (char, Vec<String>)> + '_ {
         self.inner

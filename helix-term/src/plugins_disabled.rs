@@ -151,3 +151,19 @@ pub struct PluginCompletion {
 pub fn open_directory(_editor: &Editor, _dir: PathBuf) -> bool {
     false
 }
+
+pub fn programs_blocked() -> bool {
+    false
+}
+
+pub fn block_programs(_blocked: bool) -> impl Drop {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {}
+    }
+    Guard
+}
+
+pub fn starts_program(_command: &str) -> bool {
+    false
+}

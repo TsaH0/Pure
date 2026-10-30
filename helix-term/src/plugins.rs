@@ -2543,6 +2543,30 @@ mod file_ops {
     }
 }
 
+runtime_local! {
+    /// Keys a plugin without `allow-process = true` feeds are playing.
+    static PROGRAMS_BLOCKED: AtomicBool = AtomicBool::new(false);
+}
+
+/// Whether commands that start programs are refused now: a plugin that
+/// may not start them is feeding keys.
+pub fn programs_blocked() -> bool {
+    PROGRAMS_BLOCKED.load(Ordering::Relaxed)
+}
+
+/// Refuse program-starting commands while the guard lives, if `blocked`.
+pub fn block_programs(blocked: bool) -> impl Drop {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PROGRAMS_BLOCKED.store(self.0, Ordering::Relaxed);
+        }
+    }
+    let before = PROGRAMS_BLOCKED.load(Ordering::Relaxed);
+    PROGRAMS_BLOCKED.store(before || blocked, Ordering::Relaxed);
+    Guard(before)
+}
+
 /// Whether running `command` (`:name args` or a static command) starts a
 /// program: plugins need `allow-process = true` for those.
 pub fn starts_program(command: &str) -> bool {

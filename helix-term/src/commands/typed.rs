@@ -3599,6 +3599,34 @@ fn read(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
     Ok(())
 }
 
+/// `:normal keys`: play keys as if typed, like Vim's.
+fn normal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let keys = helix_view::input::parse_macro(&args[0])?;
+    if keys.len() > crate::commands::MAX_FED_KEYS {
+        bail!("more than {} keys", crate::commands::MAX_FED_KEYS);
+    }
+    // After the command line has closed.
+    let callback = async move {
+        let call: job::Callback =
+            job::Callback::EditorCompositorJobs(Box::new(move |editor, compositor, jobs| {
+                let mut cx = compositor::Context {
+                    editor,
+                    jobs,
+                    scroll: None,
+                };
+                if let Err(err) = crate::commands::feed_keys(compositor, &mut cx, &keys, false) {
+                    cx.editor.set_error(err);
+                }
+            }));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
+    Ok(())
+}
+
 fn echo(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4641,6 +4669,18 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         signature: SHELL_SIGNATURE,
     },
     TypableCommand {
+        name: "normal",
+        aliases: &["norm"],
+        doc: "Play keys as if typed, like Vim's `:normal`: `:normal dd`, `:normal ihello<esc>`. An unfinished command is abandoned.",
+        fun: normal,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
+            raw_after: Some(0),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "substitute",
         aliases: &[],
         doc: "Replace text with a regex like Vim: `:s/pattern/replacement/flags`, `:%s/..` for the whole file, `:N,Ms/..` for lines. Without a range: the selections, or the current line. Patterns: Rust regex syntax or Vim's (`\\(.*\\)`, `\\v`, `\\{-}`, `\\zs`/`\\ze`, `\\<\\>`). Replacement: `\\1`/`$1`/`${name}` groups, `&` the match, `\\r` line break, `\\u` `\\U..\\E` `\\l` `\\L` case. Flags: g (all per line), i, I, n (count), e (no error).",
@@ -5123,6 +5163,16 @@ pub(super) fn execute_command(
     args: &str,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
+    // Before the arguments are expanded: `%sh{...}` runs a shell.
+    if event == PromptEvent::Validate
+        && crate::plugins::programs_blocked()
+        && crate::plugins::starts_program(&format!(":{} {args}", cmd.name))
+    {
+        anyhow::bail!(
+            "'{}' starts a program: the plugin feeding these keys needs allow-process = true",
+            cmd.name
+        );
+    }
     let args = if event == PromptEvent::Validate {
         Args::parse(args, cmd.signature, true, |token| {
             expansion::expand(cx.editor, token).map_err(|err| err.into())

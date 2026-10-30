@@ -24,6 +24,7 @@ mod test {
     #[cfg(feature = "plugins")]
     mod plugins;
     mod quickfix;
+    mod registers;
     mod splits;
     mod substitute;
 }
