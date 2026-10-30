@@ -29,6 +29,9 @@ options = parser.parse_args()
 metadata = json.loads(subprocess.check_output(
     ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT))
 packages = {p["name"]: p for p in metadata["packages"] if p["name"].startswith("pure-editor")}
+for package in packages.values():
+    if not package.get("description") or not (package.get("license") or package.get("license_file")):
+        raise SystemExit(f"{package['name']} is missing required registry metadata")
 remaining = dict(packages)
 ordered = []
 while remaining:

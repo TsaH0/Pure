@@ -64,9 +64,14 @@ The separate WASM plugin SDK is not published as part of this release.
    unpacking and plugin input regressions.
 5. Commit the release changes, then run `python3 scripts/publish-crates.py`.
    Cargo uses its configured credentials. The script publishes in non-dev
-   dependency order and can resume a partially published release.
-6. Verify with `cargo install pure-editor --locked --root <temporary-directory>`
-   and a clean config/cache. Then push the release commit and tag.
+   dependency order, can resume a partially published release, and waits until
+   crates.io's explicit retry time when new-crate publication is rate limited.
+   `--status-file /path/status.json` writes progress without credentials.
+   After archive checks pass, `--no-verify` avoids Cargo repeating those builds.
+6. Run `python3 scripts/verify-registry-install.py --root <temporary-directory>`.
+   It installs the published version with Cargo/Rust 1.90 into an isolated prefix
+   and checks the bundled runtime with an empty config/cache. It does not replace
+   the user's editor. Then push the release commit and tag.
 
 The package-local runtime/language/theme/icon paths are symlinks to canonical
 workspace assets. Cargo dereferences them into ordinary files in each archive;
