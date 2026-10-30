@@ -117,27 +117,36 @@ pub fn runtime_file(rel_path: impl AsRef<Path>) -> PathBuf {
     })
 }
 
+/// Pure's directory in `base`: `pure`, or `helix` while only that exists
+/// (a setup made before Pure had its own, kept working until it is moved).
+fn pure_dir(base: PathBuf) -> PathBuf {
+    let pure = base.join("pure");
+    let helix = base.join("helix");
+    if !pure.exists() && helix.exists() {
+        helix
+    } else {
+        pure
+    }
+}
+
+/// `~/.config/pure` (or `~/.config/helix`, see [`pure_dir`]).
 pub fn config_dir() -> PathBuf {
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the config directory!");
-    let mut path = strategy.config_dir();
-    path.push("helix");
-    path
+    pure_dir(strategy.config_dir())
 }
 
+/// `~/.cache/pure` (or `~/.cache/helix`, see [`pure_dir`]).
 pub fn cache_dir() -> PathBuf {
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the cache directory!");
-    let mut path = strategy.cache_dir();
-    path.push("helix");
-    path
+    pure_dir(strategy.cache_dir())
 }
 
+/// `~/.local/share/pure` (or `~/.local/share/helix`, see [`pure_dir`]).
 pub fn data_dir() -> PathBuf {
     let strategy = choose_base_strategy().expect("Unable to find the data directory!");
-    let mut path = strategy.data_dir();
-    path.push("helix");
-    path
+    pure_dir(strategy.data_dir())
 }
 
 pub fn config_file() -> PathBuf {
@@ -161,7 +170,7 @@ pub fn lang_config_file() -> PathBuf {
 }
 
 pub fn default_log_file() -> PathBuf {
-    cache_dir().join("helix.log")
+    cache_dir().join("pure.log")
 }
 
 /// Merge two TOML documents, merging values from `right` onto `left`
@@ -283,6 +292,25 @@ fn ensure_parent_dir(path: &Path) {
         if !parent.exists() {
             std::fs::create_dir_all(parent).ok();
         }
+    }
+}
+
+#[cfg(test)]
+mod pure_dir_tests {
+    use super::pure_dir;
+
+    #[test]
+    fn pure_unless_only_helix_exists() {
+        let base = tempfile::tempdir().unwrap();
+        let base = base.path().to_path_buf();
+        // Nothing yet: pure.
+        assert_eq!(pure_dir(base.clone()), base.join("pure"));
+        // An existing Helix setup keeps working...
+        std::fs::create_dir(base.join("helix")).unwrap();
+        assert_eq!(pure_dir(base.clone()), base.join("helix"));
+        // ...until there is a pure directory.
+        std::fs::create_dir(base.join("pure")).unwrap();
+        assert_eq!(pure_dir(base.clone()), base.join("pure"));
     }
 }
 

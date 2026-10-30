@@ -8,7 +8,7 @@ background, so they never delay startup.
 The full guide, including how to write plugins, is
 [`helix-plugin/README.md`](https://github.com/TsaH0/helix-editor-custom/blob/master/helix-plugin/README.md). For coding agents, copy
 [`helix-plugin/AGENTS.md`](https://github.com/TsaH0/Pure/blob/master/helix-plugin/AGENTS.md)
-into your plugin project or `~/.config/helix/`: it has everything an agent
+into your plugin project or `~/.config/pure/`: it has everything an agent
 needs to build, test and benchmark a plugin.
 
 ## Installing a plugin
@@ -21,15 +21,15 @@ Pure fetches it, shows its name, version and permissions, and asks before
 installing. It uses the plugin's committed `plugin.wasm` (nothing is built).
 `:plugin-update` (all, or named plugins) fetches new versions and asks again
 if a plugin wants new permissions; `:plugin-remove <name>` removes one.
-Installed plugins are recorded in `~/.config/helix/plugins.lock` with their
+Installed plugins are recorded in `~/.config/pure/plugins.lock` with their
 commit and a SHA-256 of the component: if the component changes behind
 Pure's back, it isn't loaded until you update or reinstall it.
 
-You can also install by hand. Each plugin is a directory in `~/.config/helix/plugins/` holding its
+You can also install by hand. Each plugin is a directory in `~/.config/pure/plugins/` holding its
 `plugin.toml` and `plugin.wasm`:
 
 ```
-~/.config/helix/plugins/
+~/.config/pure/plugins/
 └── finder/
     ├── plugin.toml
     └── plugin.wasm
@@ -67,7 +67,7 @@ Run a plugin's command with `:<plugin>/<command> [args]` (or
 command palette (`space ?`) with their docs. Bind them like any command:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [keys.normal.space]
 e = ":oil/open"
 "/" = ":finder/grep"
@@ -102,7 +102,7 @@ Signs and
 statusline text only show where you ask for them:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [editor]
 gutters = ["diagnostics", "plugins", "line-numbers", "spacer", "diff"]
 
@@ -161,7 +161,7 @@ fn saved() { status(`saved ${path()}`); }
 ```
 
 Or put the script in `init.rhai` in the config directory and let the
-plugin read it (`allow-files = "read"`, `allow-dirs = ["~/.config/helix"]`).
+plugin read it (`allow-files = "read"`, `allow-dirs = ["~/.config/pure"]`).
 Scripts can use `text()`, `path()`, `language()`, `mode()`,
 `selections()`, `set_selections()`, `selected()`, `replace_selections()`,
 `insert()`, `query()` (tree-sitter captures), `command(name, [args])`,
@@ -184,14 +184,14 @@ project). To have `pure some/dir` and `:open some/dir` open oil instead of
 the file picker:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [editor]
 directory-handler = "oil/open"
 ```
 
 ## Settings and permissions
 
-`~/.config/helix/plugins.toml` has one table per plugin. Plugins can only do
+`~/.config/pure/plugins.toml` has one table per plugin. Plugins can only do
 what their `plugin.toml` asks for; running programs and touching files also
 need your consent here:
 

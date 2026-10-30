@@ -9,7 +9,7 @@ documentation][tree-sitter-queries].
 
 Query files should be placed in `runtime/queries/{language}/textobjects.scm`
 when contributing to Pure. Note that to test the query files locally you should put
-them under your local runtime directory (`~/.config/helix/runtime` on Linux
+them under your local runtime directory (`~/.config/pure/runtime` on Linux
 for example).
 
 The following [captures][tree-sitter-captures] are recognized:

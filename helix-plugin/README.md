@@ -6,16 +6,16 @@ run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
 component for it works. Rust has an SDK in [`sdk/`](sdk).
 
 Writing a plugin with a coding agent (Claude Code, Codex, ...)? Copy
-[`AGENTS.md`](AGENTS.md) into the plugin's project (or `~/.config/helix/`):
+[`AGENTS.md`](AGENTS.md) into the plugin's project (or `~/.config/pure/`):
 it tells the agent how to build, test and benchmark a plugin for Pure.
 
 ## Using plugins
 
-Each plugin is a directory in `~/.config/helix/plugins/` with a `plugin.toml`
+Each plugin is a directory in `~/.config/pure/plugins/` with a `plugin.toml`
 and the component:
 
 ```
-~/.config/helix/plugins/
+~/.config/pure/plugins/
 └── text-tools/
     ├── plugin.toml
     └── plugin.wasm
@@ -26,7 +26,7 @@ with `:plugin-run <plugin>/<command> [args...]` (with completion) and can be
 bound like any typable command:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [keys.normal.space]
 u = ":plugin-run text-tools/upper"
 ```
@@ -34,7 +34,7 @@ u = ":plugin-run text-tools/upper"
 `:plugin-list` shows the loaded plugins, their permissions and commands, and
 why a plugin was disabled.
 
-Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
+Settings go in `~/.config/pure/plugins.toml`, one table per plugin. Everything
 except `enabled`, `allow-process`, `allow-files`, `allow-dirs`, `allow-listen` and `keys` is passed to the plugin's `init` as JSON:
 
 ```toml
@@ -52,7 +52,7 @@ allow-listen = [27121]          # see "Listening for requests"
 
 Pure ships the API; examples are optional and are never installed automatically.
 Copy an example's `plugin.toml` and `plugin.wasm` into
-`~/.config/helix/plugins/<name>/`.
+`~/.config/pure/plugins/<name>/`.
 
 | Example | Commands | `plugins.toml` |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ permissions = ["read-buffers", "edit-buffers"]
 
 Build with `cargo build --release --target wasm32-wasip2` and copy
 `target/wasm32-wasip2/release/my_plugin.wasm` to
-`~/.config/helix/plugins/my-plugin/plugin.wasm` next to the manifest.
+`~/.config/pure/plugins/my-plugin/plugin.wasm` next to the manifest.
 
 See [`examples/text-tools`](examples/text-tools) for a complete plugin and
 [`examples/api-demo`](examples/api-demo) for API 0.3 callback examples.
@@ -455,7 +455,7 @@ Both only from commands and callbacks.
 ## Files
 
 Each plugin has its own directory, `editor::data_dir()`
-(`~/.local/share/helix/plugins/<name>/`), and can read and write it with
+(`~/.local/share/pure/plugins/<name>/`), and can read and write it with
 `std::fs` without any permission. The workspace (`editor::workspace_root()`)
 needs the `filesystem` permission and the user's grant:
 
