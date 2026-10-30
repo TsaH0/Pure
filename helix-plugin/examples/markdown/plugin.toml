@@ -5,6 +5,11 @@ description = "Render Markdown in the buffer, like render-markdown.nvim"
 permissions = ["read-buffers"]
 wasm = "plugin.wasm"
 
+# Loads when a Markdown file opens (or `toggle` runs), not at startup.
+[load]
+languages = ["markdown"]
+commands = ["toggle"]
+
 # Only used where nothing else binds the key.
 [keys.normal.space]
 M = "toggle"

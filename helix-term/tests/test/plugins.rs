@@ -4451,3 +4451,58 @@ async fn plugin_keys_replace_whole_menus() -> anyhow::Result<()> {
     assert_eq!(cursor(&app), 1);
     Ok(())
 }
+
+/// A lazy plugin (`[load]` in plugin.toml) loads only when one of its
+/// commands runs or a document in one of its languages opens.
+#[tokio::test(flavor = "multi_thread")]
+async fn lazy_plugins_load_when_first_needed() -> anyhow::Result<()> {
+    let lazy_dir = |load: &str| -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("testplugin3");
+        std::fs::create_dir(&plugin).unwrap();
+        std::fs::copy(
+            helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+            plugin.join("plugin.wasm"),
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("plugin.toml"),
+            format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n\n[load]\n{load}\n"),
+        )
+        .unwrap();
+        dir
+    };
+
+    // By command: not loaded until `views` runs, which then works.
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    let dir = lazy_dir("commands = [\"views\"]");
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    assert!(helix_term::plugins::commands_with_docs()
+        .iter()
+        .any(|(name, doc)| name == "testplugin3/views" && doc.contains("loads")));
+    keys(&mut app, ":testplugin3/views<ret>").await;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+    assert!(status(&app).0.starts_with("views:"), "{}", status(&app).0);
+
+    // `lazy = false` loads it at once.
+    let dir2 = lazy_dir("commands = [\"views\"]");
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir2.path(),
+        "[testplugin3]\nlazy = false\n",
+    )?;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+
+    // By language: opening a Rust file loads it, and it hears of the file.
+    let dir3 = lazy_dir("languages = [\"rust\"]");
+    helix_term::plugins::load_with_settings(&mut app.editor, dir3.path(), "")?;
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    let file = tempfile::Builder::new().suffix(".rs").tempfile()?;
+    std::fs::write(file.path(), "fn main() {}\n")?;
+    keys(&mut app, &format!(":open {}<ret>", file.path().display())).await;
+    deliver_events(&mut app).await;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+    assert!(status(&app).0.starts_with("v3-open:"), "{}", status(&app).0);
+    Ok(())
+}

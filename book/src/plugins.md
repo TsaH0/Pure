@@ -220,9 +220,15 @@ allow-key-override = true        # its keys may take precedence over yours
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
 
+[markdown]
+lazy = false                     # load at startup even if it would wait
+
 [my-ai-tool]
 allow-network = ["api.example.com", "*.example.org"]  # HTTPS hosts it may reach
 ```
+
+Some plugins load only when needed: when a file of their language opens or
+one of their commands runs (`:plugin-list` says which haven't loaded yet).
 
 Plugins that declare their settings have them checked when they load: a
 misspelled name or a wrong type is an error that names the setting. After

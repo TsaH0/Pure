@@ -5,6 +5,10 @@ description = "Under each Rust function, how often the file uses it (a code lens
 permissions = ["read-buffers"]
 wasm = "plugin.wasm"
 
+# Loads when a Rust file opens, not at startup.
+[load]
+languages = ["rust"]
+
 # Checked when the plugin loads; set them under [lens] in plugins.toml.
 [settings.enabled]
 type = "boolean"

@@ -755,6 +755,11 @@ fn install(
     *HOST.lock() = host;
 
     apply(editor, None, actions);
+    // Lazy plugins the open documents need.
+    let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
+    for doc in open {
+        load_lazy_for(editor, doc);
+    }
     for err in &errors {
         log::error!("{err:#}");
     }
@@ -889,6 +894,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-key-override");
     table.remove("allow-lsp");
     table.remove("allow-network");
+    table.remove("lazy");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -901,6 +907,10 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             key_override: flag(settings, name, "allow-key-override")?,
             lsp: flag(settings, name, "allow-lsp")?,
             network: allowed_hosts(settings, name)?,
+            eager: settings
+                .get(name)
+                .and_then(|table| table.get("lazy"))
+                .is_some_and(|lazy| lazy.as_bool() == Some(false)),
         })
     })())
 }
@@ -1525,6 +1535,38 @@ fn clear_key_bindings(plugin: Option<&str>) {
     plugin_layers::set_bindings(all);
 }
 
+/// Load the lazy plugin `name` now, if it is one (it hasn't loaded yet).
+pub fn load_lazy(editor: &mut Editor, jobs: Option<&mut Jobs>, name: &str) {
+    let Some(result) = with_host(|host| host.load_lazy(name)).flatten() else {
+        return;
+    };
+    refresh_wanted(editor);
+    match result {
+        Ok(actions) => {
+            log::info!("plugin '{name}' loaded on first use");
+            plugin_changed(name, helix_plugin::v05::PluginState::Loaded);
+            apply(editor, jobs, actions);
+        }
+        Err(err) => editor.set_error(format!("{err:#}")),
+    }
+}
+
+/// Load the lazy plugins a document in `doc`'s language needs.
+fn load_lazy_for(editor: &mut Editor, doc: DocumentId) {
+    let Some(language) = editor
+        .documents
+        .get(&doc)
+        .and_then(|doc| doc.language_name())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let names = with_host(|host| host.lazy_for_language(&language)).unwrap_or_default();
+    for name in names {
+        load_lazy(editor, None, &name);
+    }
+}
+
 /// Keys bound to `plugin`'s callback `name` were pressed: ask it. `true`:
 /// handled; `false`: pass the keys through. Errors (including a disabled or
 /// missing plugin) are shown and pass the keys through.
@@ -1569,6 +1611,7 @@ pub fn run_command(
     if DEPTH.load(Ordering::Relaxed) >= MAX_DEPTH {
         anyhow::bail!("plugin commands nested too deeply (running {name})");
     }
+    load_lazy(editor, Some(&mut *jobs), plugin);
     let snapshot = snapshot(editor);
     let result = with_host(|host| host.run_command(plugin, command, args, snapshot))
         .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))?;
@@ -2839,6 +2882,8 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
+        // Lazy plugins for its language load first, so they hear of it.
+        load_lazy_for(event.editor, event.doc);
         queue(Event::DocumentOpen(plugin_doc_id(event.doc)));
         Ok(())
     });
@@ -3065,6 +3110,9 @@ pub fn describe() -> String {
         out.push_str(&format!("**{}** {}", plugin.name, plugin.version));
         if let Some(reason) = &plugin.disabled {
             out.push_str(&format!(" — *disabled: {reason}*"));
+        }
+        if plugin.lazy {
+            out.push_str(" — *not loaded yet: loads when needed*");
         }
         out.push('\n');
         let timing = plugin.timing;

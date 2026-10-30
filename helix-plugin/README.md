@@ -807,6 +807,25 @@ exception: those apply only in the plugin's own buffers (see
 `keys = false` in the plugin's `plugins.toml` table. Plugin commands also
 run as `:<plugin>/<command>` and appear in the command palette.
 
+## Loading when needed
+
+A plugin that is only useful for some files or after a command can wait,
+like lazy.nvim: it is neither compiled nor started until then.
+
+```toml
+# plugin.toml
+[load]
+languages = ["markdown"]   # when a Markdown document opens
+commands = ["toggle"]      # or when :markdown/toggle runs (its keys too)
+```
+
+The `commands` are listed (palette, completion, `[keys]`) before it loads;
+running one loads the plugin, then runs it. A document that loads it is
+told to it as opened. Plugins others depend on load at startup, and the
+user can turn it off with `lazy = false` in `plugins.toml`. `:plugin-list`
+shows which haven't loaded yet. The `markdown`, `lens` and `outline`
+examples are lazy.
+
 ## Background tasks (API 0.3)
 
 Heavy work (parsing a big file, building an index) would freeze the editor
