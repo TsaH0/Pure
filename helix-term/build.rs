@@ -3,14 +3,16 @@ use helix_loader::grammar::{build_grammars, fetch_grammars};
 const STRICT: bool = true;
 
 fn main() {
-    if std::env::var("HELIX_DISABLE_AUTO_GRAMMAR_BUILD").is_err() {
+    if std::env::var_os("CARGO_FEATURE_BUILD_GRAMMARS").is_some()
+        && std::env::var("HELIX_DISABLE_AUTO_GRAMMAR_BUILD").is_err()
+    {
         fetch_grammars(STRICT).expect("Failed to fetch tree-sitter grammars");
         build_grammars(Some(std::env::var("TARGET").unwrap()), STRICT)
             .expect("Failed to compile tree-sitter grammars");
     }
 
     #[cfg(windows)]
-    windows_rc::link_icon_in_windows_exe("../contrib/helix-256p.ico");
+    windows_rc::link_icon_in_windows_exe("assets/helix-256p.ico");
 }
 
 #[cfg(windows)]

@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "xtask"
 version.workspace = true
 authors.workspace = true
@@ -12,10 +13,10 @@ homepage.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-helix-term = { path = "../helix-term" }
-helix-core = { path = "../helix-core" }
-helix-view = { path = "../helix-view" }
-helix-loader = { path = "../helix-loader" }
-helix-stdx = { path = "../helix-stdx" }
+helix-term = { version = "=0.1.0", package = "pure-editor", path = "../helix-term" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-view = { version = "=0.1.0", package = "pure-editor-view", path = "../helix-view" }
+helix-loader = { version = "=0.1.0", package = "pure-editor-loader", path = "../helix-loader" }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
 ropey.workspace = true
 toml.workspace = true

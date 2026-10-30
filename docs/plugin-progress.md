@@ -473,7 +473,7 @@ API 0.2 was extended in place (it is not released yet):
 - Property tests (quickcheck, `helix-plugin/src/test.rs`, `mod properties`):
   plugin edits apply like a simple model or are rejected exactly when they
   overlap or are out of range; selections and `text-range` never panic.
-- Benchmarks: `cargo test -p helix-plugin --release -- --ignored --nocapture
+- Benchmarks: `cargo test -p pure-editor-plugin --release -- --ignored --nocapture
   benchmarks`. On this machine (4 cores), loading `text-tools`:
 
   | Plugins | Cold cache | Warm cache |

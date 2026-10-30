@@ -1,5 +1,6 @@
 [package]
-name = "helix-vcs"
+include = ["src/**", "README.md", "LICENSE"]
+name = "pure-editor-vcs"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,8 +11,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-helix-core = { path = "../helix-core" }
-helix-event = { path = "../helix-event" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-event = { version = "=0.1.0", package = "pure-editor-event", path = "../helix-event" }
 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "parking_lot", "macros"] }
 parking_lot.workspace = true
@@ -28,3 +29,6 @@ git = ["gix"]
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[lib]
+name = "helix_vcs"

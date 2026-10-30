@@ -10,10 +10,11 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
+include = ["src/**", "README.md", "LICENSE", "build.rs", "vendor/**"]
 edition = "2021"
 rust-version = "1.76.0"
-name = "tree-house-bindings"
-version = "0.3.2"
+name = "pure-editor-tree-house-bindings"
+version = "0.1.0"
 authors = [
     "Pascal Kuthe <pascalkuthe@pm.me>",
     "Michael Davis <mcarsondavis@gmail.com>",
@@ -27,7 +28,7 @@ autobenches = false
 description = "Homey Rust bindings for the tree-sitter C library"
 readme = "README.md"
 license = "MPL-2.0"
-repository = "https://github.com/helix-editor/tree-house"
+repository = "https://github.com/TsaH0/Pure"
 
 [features]
 ropey = ["dep:ropey"]

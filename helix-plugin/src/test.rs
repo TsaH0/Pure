@@ -1802,7 +1802,7 @@ mod properties {
 }
 
 /// Startup and event costs (M9.2). Run with
-/// `cargo test -p helix-plugin --release -- --ignored --nocapture benchmarks`.
+/// `cargo test -p pure-editor-plugin --release -- --ignored --nocapture benchmarks`.
 #[test]
 #[ignore]
 fn benchmarks() {
@@ -3857,7 +3857,7 @@ fn background_tasks_are_still_interrupted_after_the_host_is_dropped() {
 }
 
 /// What one Markdown re-render costs (see `examples/markdown`). Run with
-/// `cargo test -p helix-plugin --release -- --ignored --nocapture markdown_cost`.
+/// `cargo test -p pure-editor-plugin --release -- --ignored --nocapture markdown_cost`.
 #[test]
 #[ignore]
 fn markdown_cost() {

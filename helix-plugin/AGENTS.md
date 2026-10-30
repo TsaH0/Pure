@@ -689,12 +689,12 @@ Not possible (from the roadmap's M12 table):
    first, since grammars cannot be fetched in sandboxes):
    - `helix-plugin/build-plugins.sh` after changing an example, the SDK or
      the WIT.
-   - `cargo test -p helix-plugin` runs host tests that load real components:
+   - `cargo test -p pure-editor-plugin` runs host tests that load real components:
      one per interface (`api_03_*`) and per example (`*_example_*`, via
      `load_example(&mut host, root, "<name>", "<json config>")` plus
      `host.dispatch(Event::DocumentOpen(1), &snapshot(..))`, then asserting
      on the returned `Action`s).
-   - `cargo test -p helix-term --features integration --test integration -- plugins`
+   - `cargo test -p pure-editor --features integration --test integration -- plugins`
      runs in-editor tests (`helix-term/tests/test/plugins.rs`, for example
      `app_with_example("<name>", "<plugins.toml>")`, `keys(&mut app,
      ":plugin-run x/y<ret>")`, `wait_for_status`, `deliver_events`). Call
@@ -749,8 +749,8 @@ quickcheck properties plus `fuzzing_through_the_abi` in
 `helix-plugin/src/test.rs`):
 
 ```sh
-cargo test -p helix-plugin --release -- --ignored --nocapture benchmarks      # load + dispatch
-cargo test -p helix-plugin --release -- --ignored --nocapture markdown_cost   # one re-render
+cargo test -p pure-editor-plugin --release -- --ignored --nocapture benchmarks      # load + dispatch
+cargo test -p pure-editor-plugin --release -- --ignored --nocapture markdown_cost   # one re-render
 python3 docs/bench/vs-helix.py '{"helix": ["<hx>", "<runtime>"], "pure": ["<pure>", "<runtime>"]}' start|work|idle <rounds>
 #   needs docs/bench/work/big.rs and a docs/bench-cfg config dir (see the script's top)
 ```
@@ -824,6 +824,6 @@ Rules:
       bindings.
 - [ ] If the plugin lives in the Pure repo: `build-plugins.sh` was run,
       a host test (`*_example_*`) and, where useful, an in-editor test were
-      added, `cargo test -p helix-plugin` and the `plugins` integration tests
+      added, `cargo test -p pure-editor-plugin` and the `plugins` integration tests
       pass, frozen fixtures are unchanged, and the example is listed in
       `helix-plugin/README.md` and `book/src/plugins.md`.

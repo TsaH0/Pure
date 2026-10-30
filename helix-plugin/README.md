@@ -208,8 +208,8 @@ The versioned WIT files are the complete API reference.
 
 ## Development
 
-- `cargo test -p helix-plugin` tests the host with real plugins.
-- `cargo test -p helix-term --features integration --test integration -- plugins`
+- `cargo test -p pure-editor-plugin` tests the host with real plugins.
+- `cargo test -p pure-editor --features integration --test integration -- plugins`
   tests plugins in a running editor.
 - `./build-plugins.sh` rebuilds the 0.1, 0.2 and 0.3 test plugins (`tests/fixtures`)
   and every example after changing guest code or the SDK. The committed

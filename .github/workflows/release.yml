@@ -40,7 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Fetch tree-sitter grammars
-        run: cargo run --package=helix-loader --bin=hx-loader
+        run: cargo run --package=pure-editor-loader --bin=hx-loader
 
       - name: Bundle grammars
         run: tar cJf grammars.tar.xz -C runtime/grammars/sources .
