@@ -272,6 +272,23 @@ mod state_impl {
     }
 }
 
+mod folds_impl {
+    use super::*;
+    use v0_5::helix::plugin::folds::Host;
+
+    impl Host for State {
+        fn fold(&mut self, doc: u32, first: u32, last: u32) -> std::result::Result<(), String> {
+            State::fold(self, doc, first, last, true)
+        }
+        fn unfold(&mut self, doc: u32, first: u32, last: u32) -> std::result::Result<(), String> {
+            State::fold(self, doc, first, last, false)
+        }
+        fn list(&mut self, doc: u32) -> std::result::Result<Vec<(u32, u32)>, String> {
+            State::folds(self, doc)
+        }
+    }
+}
+
 mod windows_impl {
     use super::*;
     use crate::v05::WindowAction as W;

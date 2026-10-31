@@ -2111,6 +2111,23 @@ impl Component for EditorView {
     }
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        // A cursor that got into folded lines (a search, a jump) opens the
+        // fold, like Vim.
+        {
+            let (view, doc) = current!(cx.editor);
+            if !doc.folds.is_empty() {
+                let text = doc.text().slice(..);
+                let cursor = doc.selection(view.id).primary().cursor(text);
+                if doc
+                    .folds
+                    .iter()
+                    .any(|fold| fold.start < cursor && cursor <= fold.end)
+                {
+                    let line = text.char_to_line(cursor);
+                    doc.unfold_lines(line, line);
+                }
+            }
+        }
         // clear with background color
         surface.set_style(area, cx.editor.theme.get("ui.background"));
         let config = cx.editor.config();

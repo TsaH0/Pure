@@ -526,6 +526,8 @@ pub struct DocumentSnapshot {
     /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
     /// plugin is loaded. A copy shares the tree, so it is cheap.
     pub syntax: Option<helix_core::tree_sitter::Tree>,
+    /// Its folds, `(first, last)` lines (API 0.5 `folds`).
+    pub folds: Vec<(u32, u32)>,
 }
 
 /// The editor state a plugin call can read.
@@ -644,6 +646,13 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Fold (or unfold) lines `first..=last` of a document (API 0.5).
+    Fold {
+        doc: DocumentId,
+        first: u32,
+        last: u32,
+        fold: bool,
+    },
     /// A split (API 0.5 `windows`).
     Window(v05::WindowAction),
     /// Draw lines instead of a plugin buffer's text (`None` stops).

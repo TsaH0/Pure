@@ -1762,6 +1762,18 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                         .language_servers()
                         .map(|server| server.name().to_string())
                         .collect(),
+                    folds: {
+                        let text = doc.text().slice(..);
+                        doc.folds
+                            .iter()
+                            .map(|fold| {
+                                (
+                                    text.char_to_line(fold.start) as u32,
+                                    text.char_to_line(fold.end) as u32,
+                                )
+                            })
+                            .collect()
+                    },
                     syntax: if HAS_V05.load(Ordering::Relaxed) {
                         doc.syntax().map(|syntax| syntax.tree().clone())
                     } else {
@@ -2321,6 +2333,23 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::Window(action) => window_action(editor, action),
+            Action::Fold {
+                doc,
+                first,
+                last,
+                fold,
+            } => {
+                if let Some(doc) =
+                    editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
+                {
+                    if fold {
+                        doc.fold_lines(first as usize, last as usize);
+                    } else {
+                        doc.unfold_lines(first as usize, last as usize);
+                    }
+                    helix_event::request_redraw();
+                }
+            }
             Action::LanguageServer(action) => lsp_server::apply(editor, action),
             Action::Canvas { doc, lines } => {
                 if let Some(doc) =

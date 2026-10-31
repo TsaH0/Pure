@@ -141,6 +141,14 @@ A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
 unless you have bound something in that menu yourself: then your menu
 stays.
 
+Code can be folded, like Vim: `zc` (or `zf`) folds the selected lines, or
+the syntax node around the cursor (a function, a block; the indented lines
+below it where there is no syntax tree), `zo` unfolds, `za` toggles, `zM`
+folds every top-level block and `zR` unfolds everything. A fold shows as
+its first line followed by `⋯ N lines` (the `ui.virtual.fold` scope, or
+`comment`); `j` and `k` step over it, edits move it, and a jump or search
+into it opens it. Plugins can fold too.
+
 Splits can be resized: `C-w >` and `C-w <` widen and narrow the split,
 `C-w +` and `C-w -` make it taller and shorter (with a count, by that many
 columns or rows), `C-w =` makes them all the same size again. Plugins can

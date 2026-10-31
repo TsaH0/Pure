@@ -4814,3 +4814,77 @@ async fn plugins_start_language_server_programs_with_the_grant() -> anyhow::Resu
     );
     Ok(())
 }
+
+/// Folding: `zc` folds the syntax node (or the selected lines), the
+/// lines vanish behind a marker, `j` steps over them, `zo` / `za` / `zR`
+/// unfold, edits move folds, and a search into a fold opens it.
+#[tokio::test(flavor = "multi_thread")]
+async fn folds_hide_lines_and_open_again() -> anyhow::Result<()> {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile()?;
+    std::fs::write(
+        file.path(),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\nfn b() {}\n",
+    )?;
+    let mut app = AppBuilder::new().with_file(file.path(), None).build()?;
+    let line_of = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let text = doc.text().slice(..);
+        text.char_to_line(doc.selection(view.id).primary().cursor(text))
+    };
+    // On `fn a`: the function's lines fold.
+    keys(&mut app, "zc").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("fn a() {") && row.contains("⋯ 3 lines")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("let x")), "{rows:#?}");
+    // The next line down is `fn b`.
+    keys(&mut app, "j").await;
+    assert_eq!(line_of(&app), 4);
+    // Unfold from its first line.
+    keys(&mut app, "kzo").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("let x")));
+    // `za` toggles; an edit above moves the fold with the text.
+    keys(&mut app, "za").await;
+    assert!(!screen_rows(&app).iter().any(|row| row.contains("let x")));
+    keys(&mut app, "O// top<esc>").await;
+    let (_, doc) = helix_view::current_ref!(app.editor);
+    let text = doc.text().slice(..);
+    let folded: Vec<_> = doc
+        .folds
+        .iter()
+        .map(|f| (text.char_to_line(f.start), text.char_to_line(f.end)))
+        .collect();
+    assert_eq!(folded, [(1, 4)]);
+    // A search into the fold opens it.
+    keys(&mut app, "gg/let y<ret>").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("let y")));
+    // Selected lines fold too; zR unfolds all.
+    keys(&mut app, "ggxxzc").await;
+    assert!(!screen_rows(&app).iter().any(|row| row.contains("fn a")));
+    keys(&mut app, "zR").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("fn a")));
+    Ok(())
+}
+
+/// API 0.5 `folds`: plugins fold, list and unfold lines.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_fold_lines() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\nthree\nfour\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/fold 1 2<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/fold list<ret>").await;
+    assert_eq!(status(&app).0, "folds:1-2");
+    assert!(!screen_rows(&app).iter().any(|row| row.starts_with("three")));
+    keys(&mut app, ":plugin-run testplugin3/fold 2 2<ret>").await;
+    assert!(
+        status(&app).0.contains("invalid lines"),
+        "{}",
+        status(&app).0
+    );
+    keys(&mut app, ":plugin-run testplugin3/fold off 2 2<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/fold list<ret>").await;
+    assert_eq!(status(&app).0, "folds:");
+    Ok(())
+}

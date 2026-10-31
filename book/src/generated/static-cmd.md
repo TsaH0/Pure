@@ -265,12 +265,17 @@
 | `grow_view_height` | Make the split taller | normal: `` <C-w>+ ``, `` <space>w+ ``, select: `` <C-w>+ ``, `` <space>w+ `` |
 | `shrink_view_height` | Make the split shorter | normal: `` <C-w><minus> ``, `` <space>w<minus> ``, select: `` <C-w><minus> ``, `` <space>w<minus> `` |
 | `equalize_views` | Make all splits the same size | normal: `` <C-w>= ``, `` <space>w= ``, select: `` <C-w>= ``, `` <space>w= `` |
+| `fold` | Fold the selected lines, or the syntax node (or indented block) around the cursor | normal: `` zc ``, `` zf ``, select: `` zc ``, `` zf `` |
+| `unfold` | Unfold the folds on the selected lines | normal: `` zo ``, select: `` zo `` |
+| `toggle_fold` | Fold or unfold at the cursor | normal: `` za ``, select: `` za `` |
+| `fold_all` | Fold every top-level block | normal: `` zM ``, select: `` zM `` |
+| `unfold_all` | Unfold everything | normal: `` zR ``, select: `` zR `` |
 | `select_register` | Select register | normal: `` " ``, select: `` " `` |
 | `insert_register` | Insert register | insert: `` <C-r> `` |
 | `copy_between_registers` | Copy between two registers |  |
 | `align_view_middle` | Align view middle | normal: `` Zm ``, `` zm ``, select: `` Zm ``, `` zm `` |
 | `align_view_top` | Align view top | normal: `` Zt ``, `` zt ``, select: `` Zt ``, `` zt `` |
-| `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zc ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zc ``, `` zz `` |
+| `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zz `` |
 | `align_view_bottom` | Align view bottom | normal: `` Zb ``, `` zb ``, select: `` Zb ``, `` zb `` |
 | `scroll_up` | Scroll view up | normal: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> ``, select: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> `` |
 | `scroll_down` | Scroll view down | normal: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> ``, select: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> `` |

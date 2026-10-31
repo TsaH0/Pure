@@ -588,6 +588,11 @@ impl MappableCommand {
         grow_view_height, "Make the split taller",
         shrink_view_height, "Make the split shorter",
         equalize_views, "Make all splits the same size",
+        fold, "Fold the selected lines, or the syntax node (or indented block) around the cursor",
+        unfold, "Unfold the folds on the selected lines",
+        toggle_fold, "Fold or unfold at the cursor",
+        fold_all, "Fold every top-level block",
+        unfold_all, "Unfold everything",
         select_register, "Select register",
         insert_register, "Insert register",
         copy_between_registers, "Copy between two registers",
@@ -6297,6 +6302,126 @@ fn vsplit(cx: &mut Context) {
 
 fn vsplit_new(cx: &mut Context) {
     cx.editor.new_file(Action::VerticalSplit);
+}
+
+/// The lines `fold` folds for a cursor on `line`: the smallest syntax node
+/// around it spanning lines, else the lines indented deeper below it.
+fn fold_range(doc: &Document, line: usize) -> Option<(usize, usize)> {
+    let text = doc.text().slice(..);
+    if let Some(syntax) = doc.syntax() {
+        let line_start = text.line_to_byte(line) as u32;
+        let first_char = text.line_to_char(line)
+            + text
+                .line(line)
+                .chars()
+                .take_while(|c| c.is_whitespace() && *c != '\n')
+                .count();
+        let byte = (text.char_to_byte(first_char) as u32).max(line_start);
+        let mut node = syntax
+            .tree()
+            .root_node()
+            .descendant_for_byte_range(byte, byte);
+        while let Some(found) = node {
+            let first = text.byte_to_line(found.start_byte() as usize);
+            let last = text.byte_to_line((found.end_byte() as usize).min(text.len_bytes()));
+            if last > first && found.parent().is_some() {
+                return Some((first, last));
+            }
+            node = found.parent();
+        }
+    }
+    let indent = |line: usize| {
+        let content = text.line(line);
+        let blank = content.chars().all(char::is_whitespace);
+        (!blank).then(|| {
+            content
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .count()
+        })
+    };
+    let base = indent(line)?;
+    let mut last = line;
+    for next in line + 1..text.len_lines() {
+        match indent(next) {
+            Some(depth) if depth <= base => break,
+            Some(_) => last = next,
+            None => {}
+        }
+    }
+    (last > line).then_some((line, last))
+}
+
+fn fold(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let range = doc.selection(view.id).primary();
+    let (first, last) = range.line_range(text);
+    let lines = if last > first {
+        Some((first, last))
+    } else {
+        fold_range(doc, text.char_to_line(range.cursor(text)))
+    };
+    let Some((first, last)) = lines else {
+        cx.editor.set_status("nothing to fold here");
+        return;
+    };
+    doc.fold_lines(first, last);
+    // The cursor goes to the folded block's first line.
+    let text = doc.text().slice(..);
+    let pos = text.line_to_char(first);
+    doc.set_selection(view.id, Selection::point(pos));
+}
+
+fn unfold(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let (first, last) = doc.selection(view.id).primary().line_range(text);
+    if !doc.unfold_lines(first, last) {
+        cx.editor.set_status("no fold here");
+    }
+}
+
+fn toggle_fold(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let (first, last) = doc.selection(view.id).primary().line_range(text);
+    if !doc.unfold_lines(first, last) {
+        fold(cx);
+    }
+}
+
+fn fold_all(cx: &mut Context) {
+    let (_, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let mut ranges = Vec::new();
+    if let Some(syntax) = doc.syntax() {
+        let root = syntax.tree().root_node();
+        for child in root.children().filter(|child| child.is_named()) {
+            let first = text.byte_to_line(child.start_byte() as usize);
+            let last = text.byte_to_line((child.end_byte() as usize).min(text.len_bytes()));
+            ranges.push((first, last));
+        }
+    } else {
+        let mut line = 0;
+        while line < text.len_lines() {
+            match fold_range(doc, line) {
+                Some((first, last)) => {
+                    ranges.push((first, last));
+                    line = last + 1;
+                }
+                None => line += 1,
+            }
+        }
+    }
+    for (first, last) in ranges {
+        doc.fold_lines(first, last);
+    }
+}
+
+fn unfold_all(cx: &mut Context) {
+    let (_, doc) = current!(cx.editor);
+    doc.folds.clear();
 }
 
 /// Resize the focused split by the count (1 by default) times `step`.

@@ -1151,6 +1151,20 @@ interface windows {
   set-canvas: func(doc: document-id, lines: option<list<list<span>>>) -> result<_, string>;
 }
 
+/// API 0.5: folded lines (as `zc`, `zo`). Lines are 0-based. Needs
+/// `read-buffers`.
+interface folds {
+  use types.{document-id};
+
+  /// Fold lines `first..=last` (at least two): they show as `first` with a
+  /// marker after it. Overlapping folds merge.
+  fold: func(doc: document-id, first: u32, last: u32) -> result<_, string>;
+  /// Unfold the folds touching lines `first..=last`.
+  unfold: func(doc: document-id, first: u32, last: u32) -> result<_, string>;
+  /// The folds: `(first, last)` lines.
+  %list: func(doc: document-id) -> result<list<tuple<u32, u32>>, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1184,6 +1198,7 @@ world helix-plugin {
   import http;
   import panels2;
   import windows;
+  import folds;
   export plugin;
   export callbacks;
   export events;

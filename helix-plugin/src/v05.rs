@@ -1159,6 +1159,32 @@ impl State {
         self.actions.push(crate::Action::Canvas { doc, lines });
         Ok(())
     }
+    pub(crate) fn fold(
+        &mut self,
+        doc: DocumentId,
+        first: u32,
+        last: u32,
+        fold: bool,
+    ) -> Result<(), String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let lines = self.document(doc)?.text.len_lines() as u32;
+        if first > last || last >= lines || (fold && first == last) {
+            return Err(format!(
+                "invalid lines {first}..={last} of a document of {lines} lines"
+            ));
+        }
+        self.actions.push(crate::Action::Fold {
+            doc,
+            first,
+            last,
+            fold,
+        });
+        Ok(())
+    }
+    pub(crate) fn folds(&mut self, doc: DocumentId) -> Result<Vec<(u32, u32)>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.folds.clone())
+    }
     pub(crate) fn command_register(&mut self) -> Option<char> {
         self.snapshot.ui.command_register
     }

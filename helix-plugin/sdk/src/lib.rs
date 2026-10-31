@@ -579,7 +579,7 @@ macro_rules! __export_callbacks {
 mod v05;
 #[cfg(not(any(feature = "api-v0-1", feature = "api-v0-2", feature = "api-v0-3", feature = "api-v0-4")))]
 pub use v05::{
-    commands, completion_menu, decorations2, floats, http, keymaps, lsp, marks, panels2, progress,
+    commands, completion_menu, decorations2, floats, folds, http, keymaps, lsp, marks, panels2, progress,
     services,
     sessions, state, subscriptions, syntax, watch, windows, CloseReason, CompletionEvent, Event, HookOutcome,
     KeyOutcome, PluginState,

@@ -502,6 +502,13 @@ impl View {
                 .add_inline_annotations(other_inlay_hints, other_style)
                 .add_inline_annotations(padding_after_inlay_hints, None);
         };
+        if !doc.folds.is_empty() {
+            let style = theme.and_then(|t| {
+                t.find_highlight("ui.virtual.fold")
+                    .or_else(|| t.find_highlight("comment"))
+            });
+            text_annotations.add_conceals(&doc.folds, style);
+        }
         if !doc.plugin_decorations.is_empty() {
             let cursor_line = doc.plugin_decorations.wants_cursor_line().then(|| {
                 let text = doc.text().slice(..);

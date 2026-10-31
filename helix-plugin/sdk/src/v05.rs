@@ -200,6 +200,11 @@ pub mod http {
     }
 }
 
+/// Folded lines: fold, unfold, list.
+pub mod folds {
+    pub use super::plugin::folds::*;
+}
+
 /// Splits: open, focus, close, resize, gutters; canvases (a plugin buffer
 /// drawn by the plugin).
 pub mod windows {

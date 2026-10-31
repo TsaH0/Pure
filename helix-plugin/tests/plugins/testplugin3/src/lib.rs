@@ -195,6 +195,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "feed-ret",
                 "win",
                 "canvas",
+                "fold",
                 "next-key",
                 "count-commands",
                 "call",
@@ -600,6 +601,26 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     Some("equalize") => w::equalize(),
                     Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
                     _ => Err("which?".into()),
+                }
+            }
+            // `fold first last`, `fold off first last`, `fold list`.
+            "fold" => {
+                use helix::plugin::folds;
+                let doc = host::current_document().ok_or("no document")?;
+                let n = |i: usize| -> Result<u32, String> {
+                    args.get(i).ok_or("a line")?.parse().map_err(|_| "a line number".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("off") => folds::unfold(doc, n(1)?, n(2)?),
+                    Some("list") => {
+                        let list = folds::list(doc)?
+                            .iter()
+                            .map(|(first, last)| format!("{first}-{last}"))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("folds:{}", list.join(",")));
+                        Ok(())
+                    }
+                    _ => folds::fold(doc, n(0)?, n(1)?),
                 }
             }
             // A buffer of this plugin's, drawn by it: `canvas` (or `canvas off`).
