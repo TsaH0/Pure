@@ -80,9 +80,10 @@ impl Overlay {
 }
 
 /// Hides the document text `start..end` (char indices, grapheme aligned).
-/// `replacement` is drawn instead: empty hides the text, otherwise it should
-/// be a single grapheme (`…`, `α`). The hidden range never spans a line
-/// break; the formatter stops at the first one.
+/// `replacement` is drawn instead: empty hides the text, otherwise it is
+/// drawn as one grapheme-wide cell group (`…`, `α`, `⋯ 12 lines`). The
+/// hidden range never spans a line break, the formatter stops at the first
+/// one, unless it is a fold ([`Conceal::fold`]): that hides whole lines.
 ///
 /// The concealed text is still part of the document: positions inside it
 /// map to the replacement's cell (or the next visible cell when hidden).
@@ -91,6 +92,8 @@ pub struct Conceal {
     pub start: usize,
     pub end: usize,
     pub replacement: Tendril,
+    /// Hides line breaks too (folded lines).
+    pub fold: bool,
 }
 
 impl Conceal {
@@ -99,6 +102,17 @@ impl Conceal {
             start,
             end,
             replacement: replacement.into(),
+            fold: false,
+        }
+    }
+
+    /// Hide `start..end` including its line breaks: folded lines. Usually
+    /// from the end of a line's text to the end of the last folded line's
+    /// text, so the first line shows with `replacement` after it.
+    pub fn fold(start: usize, end: usize, replacement: impl Into<Tendril>) -> Self {
+        Self {
+            fold: true,
+            ..Self::new(start, end, replacement)
         }
     }
 }
@@ -413,6 +427,13 @@ impl<'a> TextAnnotations<'a> {
             self.overlays.push((layer, highlight).into());
         }
         self
+    }
+
+    /// Whether some lines are folded ([`Conceal::fold`]).
+    pub fn has_folds(&self) -> bool {
+        self.conceals
+            .iter()
+            .any(|layer| layer.annotations.iter().any(|conceal| conceal.fold))
     }
 
     /// Add concealed ranges (see [`Conceal`]).

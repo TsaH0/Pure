@@ -6,16 +6,16 @@ run in a sandbox by [Wasmtime](https://wasmtime.dev). The API is defined in
 component for it works. Rust has an SDK in [`sdk/`](sdk).
 
 Writing a plugin with a coding agent (Claude Code, Codex, ...)? Copy
-[`AGENTS.md`](AGENTS.md) into the plugin's project (or `~/.config/helix/`):
+[`AGENTS.md`](AGENTS.md) into the plugin's project (or `~/.config/pure/`):
 it tells the agent how to build, test and benchmark a plugin for Pure.
 
 ## Using plugins
 
-Each plugin is a directory in `~/.config/helix/plugins/` with a `plugin.toml`
+Each plugin is a directory in `~/.config/pure/plugins/` with a `plugin.toml`
 and the component:
 
 ```
-~/.config/helix/plugins/
+~/.config/pure/plugins/
 └── text-tools/
     ├── plugin.toml
     └── plugin.wasm
@@ -26,7 +26,7 @@ with `:plugin-run <plugin>/<command> [args...]` (with completion) and can be
 bound like any typable command:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [keys.normal.space]
 u = ":plugin-run text-tools/upper"
 ```
@@ -34,7 +34,7 @@ u = ":plugin-run text-tools/upper"
 `:plugin-list` shows the loaded plugins, their permissions and commands, and
 why a plugin was disabled.
 
-Settings go in `~/.config/helix/plugins.toml`, one table per plugin. Everything
+Settings go in `~/.config/pure/plugins.toml`, one table per plugin. Everything
 except `enabled`, `allow-process`, `allow-files`, `allow-dirs`, `allow-listen` and `keys` is passed to the plugin's `init` as JSON:
 
 ```toml
@@ -52,7 +52,7 @@ allow-listen = [27121]          # see "Listening for requests"
 
 Pure ships the API; examples are optional and are never installed automatically.
 Copy an example's `plugin.toml` and `plugin.wasm` into
-`~/.config/helix/plugins/<name>/`.
+`~/.config/pure/plugins/<name>/`.
 
 | Example | Commands | `plugins.toml` |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ permissions = ["read-buffers", "edit-buffers"]
 
 Build with `cargo build --release --target wasm32-wasip2` and copy
 `target/wasm32-wasip2/release/my_plugin.wasm` to
-`~/.config/helix/plugins/my-plugin/plugin.wasm` next to the manifest.
+`~/.config/pure/plugins/my-plugin/plugin.wasm` next to the manifest.
 
 See [`examples/text-tools`](examples/text-tools) for a complete plugin and
 [`examples/api-demo`](examples/api-demo) for API 0.3 callback examples.
@@ -291,14 +291,17 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 
 | Interface | What it does | Needs |
 | --- | --- | --- |
-| `keymaps` | bind keys to `on-key` (or closures); take the next key typed, as `f` and `r` do (`keymaps::then_next_key(|key| ...)`); layers `override` (with `allow-key-override`), `plugin`, `fallback`; per document or language; return pass-through to let the keys do what they would | – |
+| `keymaps` | bind keys to `on-key` (or closures); take the next key typed, as `f` and `r` do (`keymaps::then_next_key(|key| ...)`); layers `override` (with `allow-key-override`), `plugin` (above Pure's keys, whole menus like `g` included, below the user's), `fallback`; per document or language; return pass-through to let the keys do what they would | – |
 | `completion-menu` | the open menu's items and selection; select, next, previous, confirm, abort (drops the preview), close (keeps it); `completion-menu` events say why it closed | – |
 | `subscriptions`, `hooks` | subscribe and unsubscribe at any time, filtered by language, path glob, document or command; `pre-command` and `pre-save` may cancel (and `pre-save` may edit) | – |
 | `commands`, `state` | run native, typable (arguments as they are) and plugin commands by name, in batches that stop at the first failure; switch mode; play keys as if typed (`commands.feed-keys("dw")`, like Vim's `:normal`); views and what the UI shows; in a `pre-command` hook, the register and count the command was given (`state.command-register`, `command-count`); close your own buffers you moved away from (`state.close-buffer`, kept while shown or modified) | `run-commands` (and `allow-process` for commands that start programs, also when fed keys run them) |
 | `services` | register from `init`, discover, call with JSON (1 MiB); versions, allowed callers, no cycles, at most four plugins deep; `dependencies` in `plugin.toml` load first | – |
 | `floats`, `marks`, `decorations2` | an interactive floating list; positions that move with edits; rows below lines; replacing part of a layer | – |
-| `sessions`, `progress`, `watch`, `lsp` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories; requests to the document's language servers | `process` + `allow-process`; –; `filesystem` + `allow-files`; `lsp` + `allow-lsp` |
+| `sessions`, `progress`, `watch` | programs you write to while they run (1 MiB queued at most); statusline progress; file changes in granted directories | `process` + `allow-process`; –; `filesystem` + `allow-files` |
+| `lsp` | send requests to the document's language servers; **be a language server** (`serve`: like none-ls, the editor's requests for hover, code actions, definitions, rename, formatting... go to your service "lsp" and your replies show in its UI); hear servers' notifications (`listen`); change servers' replies before the editor uses them (`filter`); start language server programs (`start`) | `lsp` + `allow-lsp` (and `process` + `allow-process` for `start`) |
 | `http` | HTTPS requests (`http::get(url, reply)`, `http::fetch`); the reply is JSON with `status`, `headers` and `body`. HTTPS only, no redirects, never to local or private addresses (checked after DNS), sent with the system's `curl` | `network` + `allow-network` (the hosts) |
+| `folds` | fold lines (they show as the first with `⋯ N lines`), unfold, list the folds | `read-buffers` |
+| `windows` | open a document in a split (right or below), focus, close (not the last), resize by columns and rows, equalize, set a split's gutters; **canvases**: draw styled lines in place of one of your buffers' text (dashboards, graphs) | `run-commands` (canvases: –) |
 | `syntax` | the document's tree-sitter tree: queries (with `#eq?`, `#match?`; compiled once and cached; at most 10000 matches), the node at a position, parents, children, siblings, S-expressions; the editor's own query files (`query-file("rust", "textobjects.scm")`) to reuse its text objects and symbol queries. The document's language only, not injected ones | `read-buffers` |
 
 **Settings schemas.** Declare settings in `plugin.toml`; the editor checks
@@ -455,7 +458,7 @@ Both only from commands and callbacks.
 ## Files
 
 Each plugin has its own directory, `editor::data_dir()`
-(`~/.local/share/helix/plugins/<name>/`), and can read and write it with
+(`~/.local/share/pure/plugins/<name>/`), and can read and write it with
 `std::fs` without any permission. The workspace (`editor::workspace_root()`)
 needs the `filesystem` permission and the user's grant:
 
@@ -551,8 +554,13 @@ decorations::set_signs(doc, "lines", &[sign(0, "●", "warning")])?;
 decorations::set_statusline("count", "3 todos")?;
 ```
 
-- Highlights use theme scopes (`warning`, `diff.plus`, ...). Overlapping
-  ones in one layer: the first wins.
+- Highlights use theme scopes (`warning`, `diff.plus`, ...) or styles of
+  their own, anywhere a scope goes (decorations, signs, statusline, panel
+  items): `#ff8800` (the text's colour), `fg:#ff8800 bg:#202020 bold
+  italic underline`, or a theme scope changed (`function bold`). Panel items
+  can have parts in styles of their own (`panels2::style_spans`: the tree's
+  icons in their file type's colour). Overlapping highlights in one layer:
+  the first wins.
 - Virtual text goes before the char at its position; the offset of a line's
   line break puts it at the end of the line. No line breaks in the text.
 - Overlays (`set_overlays`, `decorations::overlay`) draw other characters
@@ -801,6 +809,25 @@ exception: those apply only in the plugin's own buffers (see
 [Buffers](#buffers-api-03)). Users turn them off with
 `keys = false` in the plugin's `plugins.toml` table. Plugin commands also
 run as `:<plugin>/<command>` and appear in the command palette.
+
+## Loading when needed
+
+A plugin that is only useful for some files or after a command can wait,
+like lazy.nvim: it is neither compiled nor started until then.
+
+```toml
+# plugin.toml
+[load]
+languages = ["markdown"]   # when a Markdown document opens
+commands = ["toggle"]      # or when :markdown/toggle runs (its keys too)
+```
+
+The `commands` are listed (palette, completion, `[keys]`) before it loads;
+running one loads the plugin, then runs it. A document that loads it is
+told to it as opened. Plugins others depend on load at startup, and the
+user can turn it off with `lazy = false` in `plugins.toml`. `:plugin-list`
+shows which haven't loaded yet. The `markdown`, `lens` and `outline`
+examples are lazy.
 
 ## Background tasks (API 0.3)
 

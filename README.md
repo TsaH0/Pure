@@ -28,7 +28,7 @@ inspired editor, written in Rust) that keeps up with Helix and adds:
   and letters work for pairs (`mib`, `miB`, `mir`, `miA`, `mid`, `mis`, `miq`).
 
 Run it with `pure`. Configuration lives where Helix keeps
-it, in `~/.config/helix/`.
+it, in `~/.config/pure/`.
 
 # Features (from Helix)
 

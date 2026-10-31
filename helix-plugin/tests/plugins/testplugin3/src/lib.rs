@@ -115,6 +115,23 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
         if config.contains("provide-bad") {
             helix::plugin::services::register("Bad Name", "1.0.0", &[])?;
         }
+        // A language server for Rust: hover and definition; with
+        // `lsp-filter`, hover results are changed on their way back.
+        if config.contains("lsp-server") {
+            helix::plugin::services::register("lsp", "1.0.0", &[])?;
+            helix::plugin::lsp::serve(
+                &["rust".to_string(), "markdown".to_string()],
+                r#"{"hoverProvider": true, "definitionProvider": true, "positionEncoding": "utf-32"}"#,
+            )?;
+        }
+        if config.contains("lsp-filter") {
+            helix::plugin::services::register("lsp-filter", "1.0.0", &[])?;
+            helix::plugin::lsp::filter(&["textDocument/hover".to_string()])?;
+        }
+        if config.contains("lsp-listen") {
+            helix::plugin::services::register("lsp-notification", "1.0.0", &[])?;
+            helix::plugin::lsp::listen(&["window/logMessage".to_string()])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -176,6 +193,9 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "syntax",
                 "feed",
                 "feed-ret",
+                "win",
+                "canvas",
+                "fold",
                 "next-key",
                 "count-commands",
                 "call",
@@ -197,6 +217,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "watch",
                 "lsp-servers",
                 "lsp-request",
+                "lsp-start",
                 "http",
                 "config",
             ]
@@ -561,6 +582,57 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 };
                 helix::plugin::commands::set_mode(mode)
             }
+            // `win split|split-below|focus|close|resize|equalize|gutters ...`
+            "win" => {
+                use helix::plugin::windows as w;
+                let view = |i: usize| -> Result<u64, String> {
+                    args.get(i).ok_or("a view")?.parse().map_err(|_| "a view number".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("split") => w::split(host::current_document().ok_or("no document")?, w::Side::Right),
+                    Some("split-below") => w::split(host::current_document().ok_or("no document")?, w::Side::Below),
+                    Some("focus") => w::focus(view(1)?),
+                    Some("close") => w::close(view(1)?),
+                    Some("resize") => w::resize(
+                        view(1)?,
+                        args[2].parse().map_err(|_| "columns")?,
+                        args[3].parse().map_err(|_| "rows")?,
+                    ),
+                    Some("equalize") => w::equalize(),
+                    Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
+                    _ => Err("which?".into()),
+                }
+            }
+            // `fold first last`, `fold off first last`, `fold list`.
+            "fold" => {
+                use helix::plugin::folds;
+                let doc = host::current_document().ok_or("no document")?;
+                let n = |i: usize| -> Result<u32, String> {
+                    args.get(i).ok_or("a line")?.parse().map_err(|_| "a line number".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("off") => folds::unfold(doc, n(1)?, n(2)?),
+                    Some("list") => {
+                        let list = folds::list(doc)?
+                            .iter()
+                            .map(|(first, last)| format!("{first}-{last}"))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("folds:{}", list.join(",")));
+                        Ok(())
+                    }
+                    _ => folds::fold(doc, n(0)?, n(1)?),
+                }
+            }
+            // A buffer of this plugin's, drawn by it: `canvas` (or `canvas off`).
+            "canvas" => {
+                use helix::plugin::windows as w;
+                if args.first().map(String::as_str) == Some("off") {
+                    let doc = host::current_document().ok_or("no document")?;
+                    return w::set_canvas(doc, None);
+                }
+                host::open_buffer("canvas", "text under the canvas\n", None, host::OpenAction::Replace)?;
+                Ok(())
+            }
             "views" => {
                 let views = helix::plugin::state::views()
                     .iter()
@@ -814,6 +886,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("http:{id}"));
                 Ok(())
             }
+            // `lsp-start name command`: for Markdown documents.
+            "lsp-start" => helix::plugin::lsp::start(
+                &args[0],
+                &args[1],
+                &[],
+                &["markdown".to_string()],
+                None,
+            ),
             "lsp-request" => {
                 let doc = host::current_document().ok_or("no document")?;
                 let id = helix::plugin::lsp::request(doc, None, &args[0], args.get(1).map_or("null", String::as_str))?;
@@ -919,6 +999,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
     fn on_document_open(doc: u32) {
         if let Some(name) = host::buffer_name(doc) {
             host::log(&format!("buffer-open:{name}:{doc}"));
+            if name == "canvas" {
+                use helix::plugin::windows::{set_canvas, Span};
+                let span = |text: &str, scope: &str| Span { text: text.into(), scope: scope.into() };
+                let _ = set_canvas(doc, Some(&[
+                    vec![span("Hello ", "#ff8800"), span("canvas", "fg:#00ff00 bold")],
+                    vec![span("second line", "")],
+                ]));
+            }
         }
         if POPUP_ON_OPEN.get() {
             host::set_status(
@@ -1186,6 +1274,33 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         payload: String,
     ) -> Result<String, String> {
         record(format!("service:{caller}:{service}:{method}:{payload}"));
+        match service.as_str() {
+            "testplugin3.lsp" => {
+                return match method.as_str() {
+                    "textDocument/hover" => Ok(r#"{"contents": {"kind": "markdown", "value": "from the plugin"}}"#.into()),
+                    "textDocument/definition" => {
+                        // The same document, line 0, chars 3-7.
+                        let uri = payload
+                            .split("\"uri\":\"")
+                            .nth(1)
+                            .and_then(|rest| rest.split('"').next())
+                            .ok_or("no uri")?;
+                        Ok(format!(
+                            r#"{{"uri": "{uri}", "range": {{"start": {{"line": 0, "character": 3}}, "end": {{"line": 0, "character": 7}}}}}}"#
+                        ))
+                    }
+                    _ => Err(format!("unsupported {method}")),
+                };
+            }
+            "testplugin3.lsp-filter" => {
+                return Ok(r#"{"contents": {"kind": "markdown", "value": "filtered"}}"#.into());
+            }
+            "testplugin3.lsp-notification" => {
+                host::set_status(&format!("notified:{method}"));
+                return Ok("null".into());
+            }
+            _ => {}
+        }
         match method.as_str() {
             "echo" => Ok(payload),
             "fail" => Err("failed on purpose".into()),

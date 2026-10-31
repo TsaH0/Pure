@@ -260,12 +260,22 @@
 | `vsplit_new` | Vertical right split scratch buffer | normal: `` <C-w>nv ``, `` <space>wnv ``, `` <C-w>n<C-v> ``, `` <space>wn<C-v> ``, select: `` <C-w>nv ``, `` <space>wnv ``, `` <C-w>n<C-v> ``, `` <space>wn<C-v> `` |
 | `wclose` | Close window | normal: `` <C-w>q ``, `` <space>wq ``, `` <C-w><C-q> ``, `` <space>w<C-q> ``, select: `` <C-w>q ``, `` <space>wq ``, `` <C-w><C-q> ``, `` <space>w<C-q> `` |
 | `wonly` | Close windows except current | normal: `` <C-w>o ``, `` <space>wo ``, `` <C-w><C-o> ``, `` <space>w<C-o> ``, select: `` <C-w>o ``, `` <space>wo ``, `` <C-w><C-o> ``, `` <space>w<C-o> `` |
+| `grow_view_width` | Widen the split | normal: `` <C-w><gt> ``, `` <space>w<gt> ``, select: `` <C-w><gt> ``, `` <space>w<gt> `` |
+| `shrink_view_width` | Narrow the split | normal: `` <C-w><lt> ``, `` <space>w<lt> ``, select: `` <C-w><lt> ``, `` <space>w<lt> `` |
+| `grow_view_height` | Make the split taller | normal: `` <C-w>+ ``, `` <space>w+ ``, select: `` <C-w>+ ``, `` <space>w+ `` |
+| `shrink_view_height` | Make the split shorter | normal: `` <C-w><minus> ``, `` <space>w<minus> ``, select: `` <C-w><minus> ``, `` <space>w<minus> `` |
+| `equalize_views` | Make all splits the same size | normal: `` <C-w>= ``, `` <space>w= ``, select: `` <C-w>= ``, `` <space>w= `` |
+| `fold` | Fold the selected lines, or the syntax node (or indented block) around the cursor | normal: `` zc ``, `` zf ``, select: `` zc ``, `` zf `` |
+| `unfold` | Unfold the folds on the selected lines | normal: `` zo ``, select: `` zo `` |
+| `toggle_fold` | Fold or unfold at the cursor | normal: `` za ``, select: `` za `` |
+| `fold_all` | Fold every top-level block | normal: `` zM ``, select: `` zM `` |
+| `unfold_all` | Unfold everything | normal: `` zR ``, select: `` zR `` |
 | `select_register` | Select register | normal: `` " ``, select: `` " `` |
 | `insert_register` | Insert register | insert: `` <C-r> `` |
 | `copy_between_registers` | Copy between two registers |  |
 | `align_view_middle` | Align view middle | normal: `` Zm ``, `` zm ``, select: `` Zm ``, `` zm `` |
 | `align_view_top` | Align view top | normal: `` Zt ``, `` zt ``, select: `` Zt ``, `` zt `` |
-| `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zc ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zc ``, `` zz `` |
+| `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zz `` |
 | `align_view_bottom` | Align view bottom | normal: `` Zb ``, `` zb ``, select: `` Zb ``, `` zb `` |
 | `scroll_up` | Scroll view up | normal: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> ``, select: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> `` |
 | `scroll_down` | Scroll view down | normal: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> ``, select: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> `` |

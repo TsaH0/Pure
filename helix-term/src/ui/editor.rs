@@ -94,6 +94,36 @@ impl EditorView {
 
         let view_offset = doc.view_offset(view.id);
 
+        // A plugin draws this buffer itself.
+        if let Some(canvas) = &doc.plugin_canvas {
+            let lines_area = area.clip_bottom(1);
+            surface.clear_with(lines_area, theme.get("ui.background"));
+            for (row, line) in canvas.iter().take(lines_area.height as usize).enumerate() {
+                let y = lines_area.y + row as u16;
+                let mut x = lines_area.x;
+                for (text, scope) in line {
+                    let left = lines_area.right().saturating_sub(x) as usize;
+                    if left == 0 {
+                        break;
+                    }
+                    (x, _) = surface.set_stringn(x, y, text, left, theme.get(scope));
+                }
+            }
+            if viewport.right() != view.area.right() {
+                let border_style = theme.get("ui.window");
+                for y in area.top()..area.bottom() {
+                    surface[(area.right(), y)]
+                        .set_symbol(tui::symbols::line::VERTICAL)
+                        .set_style(border_style);
+                }
+            }
+            let statusline_area = area.clip_top(area.height.saturating_sub(1)).clip_bottom(1);
+            let mut context =
+                statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
+            statusline::render(&mut context, statusline_area, surface);
+            return;
+        }
+
         if !doc.plugin_decorations.is_empty() {
             doc.plugin_decorations.set_render_mode(editor.mode());
         }
@@ -2081,6 +2111,23 @@ impl Component for EditorView {
     }
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        // A cursor that got into folded lines (a search, a jump) opens the
+        // fold, like Vim.
+        {
+            let (view, doc) = current!(cx.editor);
+            if !doc.folds.is_empty() {
+                let text = doc.text().slice(..);
+                let cursor = doc.selection(view.id).primary().cursor(text);
+                if doc
+                    .folds
+                    .iter()
+                    .any(|fold| fold.start < cursor && cursor <= fold.end)
+                {
+                    let line = text.char_to_line(cursor);
+                    doc.unfold_lines(line, line);
+                }
+            }
+        }
         // clear with background color
         surface.set_style(area, cx.editor.theme.get("ui.background"));
         let config = cx.editor.config();

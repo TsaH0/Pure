@@ -873,6 +873,10 @@ impl Application {
 
         match call {
             Call::Notification(helix_lsp::jsonrpc::Notification { method, params, .. }) => {
+                // Plugins listening to it hear it too.
+                if let Some(server) = self.editor.language_server_by_id(server_id) {
+                    crate::plugins::lsp_notification(server.name(), &method, &params);
+                }
                 let notification = match Notification::parse(&method, params) {
                     Ok(notification) => notification,
                     Err(helix_lsp::Error::Unhandled) => {

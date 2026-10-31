@@ -159,6 +159,8 @@ pub struct PluginSettings {
     /// Hosts HTTPS requests may go to (`allow-network`): names, IP
     /// addresses or `*.domain`.
     pub network: Vec<String>,
+    /// Load at startup even if the plugin is lazy (`lazy = false`).
+    pub eager: bool,
 }
 
 impl PluginSettings {
@@ -408,6 +410,30 @@ pub struct Manifest {
     /// checked against them.
     #[serde(default)]
     pub settings: settings::Schema,
+    /// Load only when needed (`[load]`), like lazy.nvim: when a document of
+    /// one of `languages` opens or one of `commands` runs (from its keys
+    /// too). Until then it costs nothing.
+    #[serde(default)]
+    pub load: Option<LoadOn>,
+}
+
+/// When a lazy plugin loads, see [`Manifest::load`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct LoadOn {
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// The plugin's commands that load it (they are listed before it loads).
+    #[serde(default)]
+    pub commands: Vec<String>,
+}
+
+/// A plugin not loaded yet (see [`Manifest::load`]).
+#[derive(Debug, Clone)]
+pub struct LazyPlugin {
+    pub dir: PathBuf,
+    pub manifest: Manifest,
+    pub settings: PluginSettings,
 }
 
 fn default_wasm() -> PathBuf {
@@ -441,6 +467,20 @@ impl Manifest {
                 manifest.name,
                 manifest.api
             );
+        }
+        if let Some(load) = &manifest.load {
+            if load.languages.is_empty() && load.commands.is_empty() {
+                bail!(
+                    "plugin '{}': [load] needs languages or commands",
+                    manifest.name
+                );
+            }
+            if let Some(bad) = load.commands.iter().find(|c| !is_valid_name(c)) {
+                bail!(
+                    "plugin '{}': invalid command name '{bad}' in [load]",
+                    manifest.name
+                );
+            }
         }
         // Checked before anything joins it to a directory: a file next to
         // plugin.toml, never `../x` or an absolute path.
@@ -486,6 +526,8 @@ pub struct DocumentSnapshot {
     /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
     /// plugin is loaded. A copy shares the tree, so it is cheap.
     pub syntax: Option<helix_core::tree_sitter::Tree>,
+    /// Its folds, `(first, last)` lines (API 0.5 `folds`).
+    pub folds: Vec<(u32, u32)>,
 }
 
 /// The editor state a plugin call can read.
@@ -601,6 +643,29 @@ pub enum Action {
         plugin: String,
         id: u32,
         request: http::HttpRequest,
+    },
+    /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
+    LanguageServer(v05::LspAction),
+    /// Fold (or unfold) lines `first..=last` of a document (API 0.5).
+    Fold {
+        doc: DocumentId,
+        first: u32,
+        last: u32,
+        fold: bool,
+    },
+    /// A split (API 0.5 `windows`).
+    Window(v05::WindowAction),
+    /// Draw lines instead of a plugin buffer's text (`None` stops).
+    Canvas {
+        doc: DocumentId,
+        lines: Option<Vec<Vec<(String, String)>>>,
+    },
+    /// Style parts of the items of `plugin`'s panel at `dock` (API 0.5).
+    StyleSpans {
+        plugin: String,
+        dock: Dock,
+        /// `(item, chars, scope)`.
+        spans: Vec<(usize, std::ops::Range<usize>, String)>,
     },
     /// Stop an `HttpRequest`.
     CancelHttp {
@@ -2631,6 +2696,8 @@ pub struct PluginInfo {
     /// `[keys]` from `plugin.toml`.
     pub keys: Option<toml::Table>,
     pub timing: CallTiming,
+    /// Not loaded yet ([`Manifest::load`]); `commands` are those that load it.
+    pub lazy: bool,
 }
 
 /// Loads and runs plugins.
@@ -2647,6 +2714,8 @@ pub struct PluginHost {
     /// Whether an editor command starts a program (see
     /// [`PluginHost::set_program_check`]).
     starts_program: Option<fn(&str) -> bool>,
+    /// Plugins not loaded yet ([`Manifest::load`]).
+    lazy: Vec<LazyPlugin>,
     /// What the editor provides to 0.5 calls (see
     /// [`PluginHost::set_editor_fns`]).
     editor_fns: v05::EditorFns,
@@ -2767,6 +2836,7 @@ impl PluginHost {
             workspace: None,
             data_root: None,
             starts_program: None,
+            lazy: Vec::new(),
             editor_fns: v05::EditorFns::default(),
             marks: Default::default(),
             ticker,
@@ -2798,8 +2868,74 @@ impl PluginHost {
                 listen: plugin.store.data().listen.clone(),
                 keys: plugin.manifest.keys.clone(),
                 timing: plugin.timing,
+                lazy: false,
             })
+            .chain(self.lazy.iter().map(|lazy| {
+                PluginInfo {
+                    name: lazy.manifest.name.clone(),
+                    version: lazy.manifest.version.clone(),
+                    description: lazy.manifest.description.clone(),
+                    dir: lazy.dir.clone(),
+                    permissions: lazy.manifest.permissions.clone(),
+                    commands: lazy
+                        .manifest
+                        .load
+                        .iter()
+                        .flat_map(|load| &load.commands)
+                        .map(|name| CommandInfo {
+                            name: name.clone(),
+                            doc: format!("(loads {})", lazy.manifest.name),
+                        })
+                        .collect(),
+                    disabled: None,
+                    process: lazy.settings.process.clone(),
+                    files: lazy.settings.files,
+                    listen: lazy.settings.listen.clone(),
+                    keys: lazy.manifest.keys.clone(),
+                    timing: CallTiming::default(),
+                    lazy: true,
+                }
+            }))
             .collect()
+    }
+
+    /// Whether `name` is a plugin not loaded yet.
+    pub fn is_lazy(&self, name: &str) -> bool {
+        self.lazy.iter().any(|lazy| lazy.manifest.name == name)
+    }
+
+    /// The plugins not loaded yet that a document in `language` loads.
+    pub fn lazy_for_language(&self, language: &str) -> Vec<String> {
+        self.lazy
+            .iter()
+            .filter(|lazy| {
+                lazy.manifest
+                    .load
+                    .as_ref()
+                    .is_some_and(|load| load.languages.iter().any(|l| l == language))
+            })
+            .map(|lazy| lazy.manifest.name.clone())
+            .collect()
+    }
+
+    /// Load the lazy plugin `name` now; `None` if it isn't one.
+    pub fn load_lazy(&mut self, name: &str) -> Option<anyhow::Result<Vec<Action>>> {
+        let index = self
+            .lazy
+            .iter()
+            .position(|lazy| lazy.manifest.name == name)?;
+        let LazyPlugin {
+            dir,
+            manifest,
+            settings,
+        } = self.lazy.remove(index);
+        let component = compile(
+            &self.engine,
+            self.cache_dir.as_deref(),
+            &manifest.name,
+            &dir.join(&manifest.wasm),
+        );
+        Some(self.load_compiled(&dir, manifest, settings, component))
     }
 
     /// Remove all plugins.
@@ -2813,6 +2949,7 @@ impl PluginHost {
                 .store(false, Ordering::Relaxed);
         }
         self.plugins.clear();
+        self.lazy.clear();
     }
 
     /// The workspace plugins granted `allow-files` can access, and where
@@ -2887,6 +3024,23 @@ impl PluginHost {
         let (enabled, mut dependency_errors) =
             v05::dependency_order(enabled, |name| self.plugin(name).is_some());
         errors.append(&mut dependency_errors);
+        // Lazy plugins wait, unless another plugin depends on them.
+        let needed: Vec<String> = enabled
+            .iter()
+            .flat_map(|(_, m, _)| m.dependencies.iter().chain(&m.optional_dependencies))
+            .cloned()
+            .collect();
+        let (lazy, enabled): (Vec<_>, Vec<_>) = enabled
+            .into_iter()
+            .partition(|(_, m, s)| m.load.is_some() && !s.eager && !needed.contains(&m.name));
+        self.lazy.extend(
+            lazy.into_iter()
+                .map(|(dir, manifest, settings)| LazyPlugin {
+                    dir,
+                    manifest,
+                    settings,
+                }),
+        );
         // Compiling (on a cold cache) is the slow part: do it in parallel,
         // a few at a time, then load in order.
         let (engine, cache_dir) = (&self.engine, self.cache_dir.as_deref());
@@ -3146,6 +3300,20 @@ impl PluginHost {
                     .iter()
                     .map(|command| (plugin.manifest.name.clone(), command.clone()))
             })
+            // Lazy plugins' commands, which load them.
+            .chain(self.lazy.iter().flat_map(|lazy| {
+                lazy.manifest
+                    .load
+                    .iter()
+                    .flat_map(|load| &load.commands)
+                    .map(|name| {
+                        let command = CommandInfo {
+                            name: name.clone(),
+                            doc: format!("(loads {})", lazy.manifest.name),
+                        };
+                        (lazy.manifest.name.clone(), command)
+                    })
+            }))
             .collect()
     }
 

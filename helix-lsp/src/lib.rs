@@ -5,12 +5,13 @@ pub mod jsonrpc;
 mod transport;
 
 use arc_swap::ArcSwap;
-pub use client::Client;
+pub use client::{set_in_process_server, Client, IN_PROCESS};
 pub use futures_executor::block_on;
 pub use helix_lsp_types as lsp;
 pub use jsonrpc::Call;
 use log::warn;
 pub use lsp::{Position, Url};
+pub use transport::{set_reply_filter, ReplyFilter};
 
 use futures_util::stream::select_all::SelectAll;
 use helix_core::syntax::config::{
@@ -577,8 +578,19 @@ impl Notification {
     }
 }
 
+/// A language server added at runtime, for some languages (Pure's
+/// plugins: their own servers, or programs they start).
+#[derive(Debug, Clone)]
+pub struct AddedServer {
+    pub name: String,
+    pub languages: Vec<String>,
+    pub config: LanguageServerConfiguration,
+}
+
 #[derive(Debug)]
 pub struct Registry {
+    /// Servers added at runtime ([`Registry::add_server`]).
+    added: Vec<AddedServer>,
     inner: SlotMap<LanguageServerId, Arc<Client>>,
     inner_by_name: HashMap<LanguageServerName, Vec<Arc<Client>>>,
     syn_loader: Arc<ArcSwap<helix_core::syntax::Loader>>,
@@ -589,12 +601,40 @@ pub struct Registry {
 impl Registry {
     pub fn new(syn_loader: Arc<ArcSwap<helix_core::syntax::Loader>>) -> Self {
         Self {
+            added: Vec::new(),
             inner: SlotMap::with_key(),
             inner_by_name: HashMap::new(),
             syn_loader,
             incoming: SelectAll::new(),
             file_event_handler: file_event::Handler::new(),
         }
+    }
+
+    /// Use `server` for documents in its languages too, besides those
+    /// `languages.toml` configures (replacing a server of the same name).
+    /// Documents open already need `Editor::refresh_language_servers`.
+    pub fn add_server(&mut self, server: AddedServer) {
+        self.remove_server(&server.name);
+        self.added.push(server);
+    }
+
+    /// Stop and forget an added server.
+    pub fn remove_server(&mut self, name: &str) {
+        if self.added.iter().any(|added| added.name == name) {
+            self.added.retain(|added| added.name != name);
+            if let Some(clients) = self.inner_by_name.remove(name) {
+                for client in clients {
+                    self.file_event_handler.remove_client(client.id());
+                    self.inner.remove(client.id());
+                    client.force_shutdown();
+                }
+            }
+        }
+    }
+
+    /// The servers added at runtime.
+    pub fn added_servers(&self) -> &[AddedServer] {
+        &self.added
     }
 
     pub fn get_by_id(&self, id: LanguageServerId) -> Option<&Arc<Client>> {
@@ -629,7 +669,15 @@ impl Registry {
         let config = syn_loader
             .language_server_configs()
             .get(&name)
-            .ok_or_else(|| anyhow::anyhow!("Language server '{name}' not defined"))?;
+            .or_else(|| {
+                self.added
+                    .iter()
+                    .find(|added| added.name == name)
+                    .map(|added| &added.config)
+            })
+            .ok_or_else(|| anyhow::anyhow!("Language server '{name}' not defined"))?
+            .clone();
+        let config = &config;
         let id = self.inner.try_insert_with_key(|id| {
             start_client(
                 id,
@@ -709,46 +757,56 @@ impl Registry {
         root_dirs: &'a [PathBuf],
         enable_snippets: bool,
     ) -> impl Iterator<Item = (LanguageServerName, Result<Arc<Client>>)> + 'a {
-        language_config.language_servers.iter().filter_map(
-            move |LanguageServerFeatures { name, .. }| {
-                if let Some(clients) = self.inner_by_name.get(name) {
-                    // If the clients vec is empty, do not automatically start a client
-                    // for this server. The empty vec is a tombstone left to mean that a
-                    // server has been manually stopped and shouldn't be started automatically.
-                    // See `stop`.
-                    if clients.is_empty() {
-                        return None;
-                    }
+        let names: Vec<String> = language_config
+            .language_servers
+            .iter()
+            .map(|LanguageServerFeatures { name, .. }| name.clone())
+            .chain(
+                self.added
+                    .iter()
+                    .filter(|added| added.languages.contains(&language_config.language_id))
+                    .map(|added| added.name.clone()),
+            )
+            .collect();
+        names.into_iter().filter_map(move |name| {
+            let name = &name;
+            if let Some(clients) = self.inner_by_name.get(name) {
+                // If the clients vec is empty, do not automatically start a client
+                // for this server. The empty vec is a tombstone left to mean that a
+                // server has been manually stopped and shouldn't be started automatically.
+                // See `stop`.
+                if clients.is_empty() {
+                    return None;
+                }
 
-                    if let Some((_, client)) = clients.iter().enumerate().find(|(i, client)| {
-                        let manual_roots = language_config
-                            .workspace_lsp_roots
-                            .as_deref()
-                            .unwrap_or(root_dirs);
-                        client.try_add_doc(&language_config.roots, manual_roots, doc_path, *i == 0)
-                    }) {
-                        return Some((name.to_owned(), Ok(client.clone())));
-                    }
+                if let Some((_, client)) = clients.iter().enumerate().find(|(i, client)| {
+                    let manual_roots = language_config
+                        .workspace_lsp_roots
+                        .as_deref()
+                        .unwrap_or(root_dirs);
+                    client.try_add_doc(&language_config.roots, manual_roots, doc_path, *i == 0)
+                }) {
+                    return Some((name.to_owned(), Ok(client.clone())));
                 }
-                match self.start_client(
-                    name.clone(),
-                    language_config,
-                    doc_path,
-                    root_dirs,
-                    enable_snippets,
-                ) {
-                    Ok(client) => {
-                        self.inner_by_name
-                            .entry(name.to_owned())
-                            .or_default()
-                            .push(client.clone());
-                        Some((name.clone(), Ok(client)))
-                    }
-                    Err(StartupError::NoRequiredRootFound) => None,
-                    Err(StartupError::Error(err)) => Some((name.to_owned(), Err(err))),
+            }
+            match self.start_client(
+                name.clone(),
+                language_config,
+                doc_path,
+                root_dirs,
+                enable_snippets,
+            ) {
+                Ok(client) => {
+                    self.inner_by_name
+                        .entry(name.to_owned())
+                        .or_default()
+                        .push(client.clone());
+                    Some((name.clone(), Ok(client)))
                 }
-            },
-        )
+                Err(StartupError::NoRequiredRootFound) => None,
+                Err(StartupError::Error(err)) => Some((name.to_owned(), Err(err))),
+            }
+        })
     }
 
     pub fn iter_clients(&self) -> impl Iterator<Item = &Arc<Client>> {

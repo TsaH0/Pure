@@ -200,6 +200,22 @@ pub mod http {
     }
 }
 
+/// Folded lines: fold, unfold, list.
+pub mod folds {
+    pub use super::plugin::folds::*;
+}
+
+/// Splits: open, focus, close, resize, gutters; canvases (a plugin buffer
+/// drawn by the plugin).
+pub mod windows {
+    pub use super::plugin::windows::*;
+}
+
+/// Parts of panel items in styles of their own (an icon in its colour).
+pub mod panels2 {
+    pub use super::plugin::panels2::*;
+}
+
 /// Views and UI state.
 pub mod state {
     pub use super::plugin::state::*;

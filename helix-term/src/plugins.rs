@@ -23,6 +23,7 @@ pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
 mod http;
 mod listen;
+mod lsp_server;
 mod picker;
 mod popup;
 mod process;
@@ -129,6 +130,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     listen::stop_plugin(Some(plugin));
     watch::stop_plugin(Some(plugin));
     http::stop_plugin(Some(plugin));
+    lsp_server::stop_plugin(editor, Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -727,6 +729,7 @@ fn install(
     listen::stop_plugin(None);
     watch::stop_plugin(None);
     http::stop_plugin(None);
+    lsp_server::stop_plugin(editor, None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -755,6 +758,11 @@ fn install(
     *HOST.lock() = host;
 
     apply(editor, None, actions);
+    // Lazy plugins the open documents need.
+    let open: Vec<_> = editor.documents().map(|doc| doc.id()).collect();
+    for doc in open {
+        load_lazy_for(editor, doc);
+    }
     for err in &errors {
         log::error!("{err:#}");
     }
@@ -889,6 +897,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-key-override");
     table.remove("allow-lsp");
     table.remove("allow-network");
+    table.remove("lazy");
     table.remove("keys");
     let config = serde_json::to_string(&table).unwrap_or_else(|_| "{}".into());
     Some((|| {
@@ -901,6 +910,10 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             key_override: flag(settings, name, "allow-key-override")?,
             lsp: flag(settings, name, "allow-lsp")?,
             network: allowed_hosts(settings, name)?,
+            eager: settings
+                .get(name)
+                .and_then(|table| table.get("lazy"))
+                .is_some_and(|lazy| lazy.as_bool() == Some(false)),
         })
     })())
 }
@@ -1525,6 +1538,114 @@ fn clear_key_bindings(plugin: Option<&str>) {
     plugin_layers::set_bindings(all);
 }
 
+/// The view numbered `number` (`view_number`).
+fn view_by_number(editor: &Editor, number: u64) -> Option<ViewId> {
+    editor
+        .tree
+        .views()
+        .map(|(view, _)| view.id)
+        .find(|id| view_number(*id) == number)
+}
+
+/// Do what a plugin asked to splits (API 0.5 `windows`).
+fn window_action(editor: &mut Editor, action: helix_plugin::v05::WindowAction) {
+    use helix_plugin::v05::WindowAction as W;
+    use helix_view::tree::Layout;
+    let view = |editor: &Editor, number: u64| view_by_number(editor, number);
+    match action {
+        W::Split { doc, below } => {
+            if let Some(doc) = editor_doc_id(editor, doc) {
+                let action = if below {
+                    helix_view::editor::Action::HorizontalSplit
+                } else {
+                    helix_view::editor::Action::VerticalSplit
+                };
+                editor.switch(doc, action);
+            }
+        }
+        W::Focus(number) => {
+            if let Some(id) = view(editor, number) {
+                editor.focus(id);
+            }
+        }
+        W::Close(number) => {
+            // The last view stays: closing it would quit.
+            if let Some(id) = view(editor, number).filter(|_| editor.tree.views().count() > 1) {
+                editor.close(id);
+            }
+        }
+        W::Resize {
+            view: number,
+            columns,
+            rows,
+        } => {
+            if let Some(id) = view(editor, number) {
+                if columns != 0 {
+                    editor.tree.resize_view(id, Layout::Vertical, columns);
+                }
+                if rows != 0 {
+                    editor.tree.resize_view(id, Layout::Horizontal, rows);
+                }
+            }
+        }
+        W::Equalize => editor.tree.equalize(),
+        W::Gutters {
+            view: number,
+            gutters,
+        } => {
+            use helix_view::editor::GutterType as G;
+            if let Some(id) = view(editor, number) {
+                let layout = gutters
+                    .iter()
+                    .filter_map(|gutter| match gutter.as_str() {
+                        "diagnostics" => Some(G::Diagnostics),
+                        "line-numbers" => Some(G::LineNumbers),
+                        "diff" => Some(G::Diff),
+                        "spacer" => Some(G::Spacer),
+                        "code-actions" => Some(G::CodeActionHint),
+                        "plugins" => Some(G::Plugins),
+                        _ => None,
+                    })
+                    .collect();
+                editor.tree.get_mut(id).gutters.layout = layout;
+            }
+        }
+    }
+    helix_event::request_redraw();
+}
+
+/// Load the lazy plugin `name` now, if it is one (it hasn't loaded yet).
+pub fn load_lazy(editor: &mut Editor, jobs: Option<&mut Jobs>, name: &str) {
+    let Some(result) = with_host(|host| host.load_lazy(name)).flatten() else {
+        return;
+    };
+    refresh_wanted(editor);
+    match result {
+        Ok(actions) => {
+            log::info!("plugin '{name}' loaded on first use");
+            plugin_changed(name, helix_plugin::v05::PluginState::Loaded);
+            apply(editor, jobs, actions);
+        }
+        Err(err) => editor.set_error(format!("{err:#}")),
+    }
+}
+
+/// Load the lazy plugins a document in `doc`'s language needs.
+fn load_lazy_for(editor: &mut Editor, doc: DocumentId) {
+    let Some(language) = editor
+        .documents
+        .get(&doc)
+        .and_then(|doc| doc.language_name())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    let names = with_host(|host| host.lazy_for_language(&language)).unwrap_or_default();
+    for name in names {
+        load_lazy(editor, None, &name);
+    }
+}
+
 /// Keys bound to `plugin`'s callback `name` were pressed: ask it. `true`:
 /// handled; `false`: pass the keys through. Errors (including a disabled or
 /// missing plugin) are shown and pass the keys through.
@@ -1569,6 +1690,7 @@ pub fn run_command(
     if DEPTH.load(Ordering::Relaxed) >= MAX_DEPTH {
         anyhow::bail!("plugin commands nested too deeply (running {name})");
     }
+    load_lazy(editor, Some(&mut *jobs), plugin);
     let snapshot = snapshot(editor);
     let result = with_host(|host| host.run_command(plugin, command, args, snapshot))
         .ok_or_else(|| anyhow::anyhow!("no plugins are loaded"))?;
@@ -1640,6 +1762,18 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                         .language_servers()
                         .map(|server| server.name().to_string())
                         .collect(),
+                    folds: {
+                        let text = doc.text().slice(..);
+                        doc.folds
+                            .iter()
+                            .map(|fold| {
+                                (
+                                    text.char_to_line(fold.start) as u32,
+                                    text.char_to_line(fold.end) as u32,
+                                )
+                            })
+                            .collect()
+                    },
                     syntax: if HAS_V05.load(Ordering::Relaxed) {
                         doc.syntax().map(|syntax| syntax.tree().clone())
                     } else {
@@ -2194,8 +2328,50 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                     scroll,
                     focused,
                     float,
+                    spans: Vec::new(),
                 });
                 helix_event::request_redraw();
+            }
+            Action::Window(action) => window_action(editor, action),
+            Action::Fold {
+                doc,
+                first,
+                last,
+                fold,
+            } => {
+                if let Some(doc) =
+                    editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
+                {
+                    if fold {
+                        doc.fold_lines(first as usize, last as usize);
+                    } else {
+                        doc.unfold_lines(first as usize, last as usize);
+                    }
+                    helix_event::request_redraw();
+                }
+            }
+            Action::LanguageServer(action) => lsp_server::apply(editor, action),
+            Action::Canvas { doc, lines } => {
+                if let Some(doc) =
+                    editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
+                {
+                    doc.plugin_canvas = lines;
+                    helix_event::request_redraw();
+                }
+            }
+            Action::StyleSpans {
+                plugin,
+                dock,
+                spans,
+            } => {
+                let dock = view_dock(dock);
+                if let Some(panel) = editor.panel_mut(dock).filter(|panel| panel.owner == plugin) {
+                    panel.spans = spans;
+                    panel
+                        .spans
+                        .sort_by_key(|(item, chars, _)| (*item, chars.start));
+                    helix_event::request_redraw();
+                }
             }
             Action::CloseSidebar { plugin, dock } => {
                 let dock = view_dock(dock);
@@ -2815,7 +2991,14 @@ fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
 }
 
 /// Register the hooks that turn editor events into plugin events.
+/// A notification from language server `server`, for plugins listening.
+pub fn lsp_notification(server: &str, method: &str, params: &helix_lsp::jsonrpc::Params) {
+    let params = serde_json::to_value(params).unwrap_or(serde_json::Value::Null);
+    lsp_server::notification(server, method, &params);
+}
+
 pub fn register_hooks() {
+    lsp_server::install();
     register_hook!(move |event: &mut PostCommand<'_, '_>| {
         // Do not allocate a command name or lock anything unless requested.
         if wants(EventKind::PostCommand) && APPLYING.load(Ordering::Relaxed) == 0 {
@@ -2824,6 +3007,8 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
+        // Lazy plugins for its language load first, so they hear of it.
+        load_lazy_for(event.editor, event.doc);
         queue(Event::DocumentOpen(plugin_doc_id(event.doc)));
         Ok(())
     });
@@ -3050,6 +3235,9 @@ pub fn describe() -> String {
         out.push_str(&format!("**{}** {}", plugin.name, plugin.version));
         if let Some(reason) = &plugin.disabled {
             out.push_str(&format!(" — *disabled: {reason}*"));
+        }
+        if plugin.lazy {
+            out.push_str(" — *not loaded yet: loads when needed*");
         }
         out.push('\n');
         let timing = plugin.timing;

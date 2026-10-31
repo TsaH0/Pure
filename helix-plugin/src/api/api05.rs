@@ -272,6 +272,98 @@ mod state_impl {
     }
 }
 
+mod folds_impl {
+    use super::*;
+    use v0_5::helix::plugin::folds::Host;
+
+    impl Host for State {
+        fn fold(&mut self, doc: u32, first: u32, last: u32) -> std::result::Result<(), String> {
+            State::fold(self, doc, first, last, true)
+        }
+        fn unfold(&mut self, doc: u32, first: u32, last: u32) -> std::result::Result<(), String> {
+            State::fold(self, doc, first, last, false)
+        }
+        fn list(&mut self, doc: u32) -> std::result::Result<Vec<(u32, u32)>, String> {
+            State::folds(self, doc)
+        }
+    }
+}
+
+mod windows_impl {
+    use super::*;
+    use crate::v05::WindowAction as W;
+    use v0_5::helix::plugin::windows::{Host, Side, Span};
+
+    impl Host for State {
+        fn split(&mut self, doc: u32, side: Side) -> std::result::Result<(), String> {
+            let below = matches!(side, Side::Below);
+            self.window(W::Split { doc, below })
+        }
+        fn focus(&mut self, view: u64) -> std::result::Result<(), String> {
+            self.window(W::Focus(view))
+        }
+        fn close(&mut self, view: u64) -> std::result::Result<(), String> {
+            self.window(W::Close(view))
+        }
+        fn resize(
+            &mut self,
+            view: u64,
+            columns: i32,
+            rows: i32,
+        ) -> std::result::Result<(), String> {
+            self.window(W::Resize {
+                view,
+                columns,
+                rows,
+            })
+        }
+        fn equalize(&mut self) -> std::result::Result<(), String> {
+            self.window(W::Equalize)
+        }
+        fn set_gutters(
+            &mut self,
+            view: u64,
+            gutters: Vec<String>,
+        ) -> std::result::Result<(), String> {
+            self.window(W::Gutters { view, gutters })
+        }
+        fn set_canvas(
+            &mut self,
+            doc: u32,
+            lines: Option<Vec<Vec<Span>>>,
+        ) -> std::result::Result<(), String> {
+            let lines = lines.map(|lines| {
+                lines
+                    .into_iter()
+                    .map(|spans| spans.into_iter().map(|s| (s.text, s.scope)).collect())
+                    .collect()
+            });
+            State::set_canvas(self, doc, lines)
+        }
+    }
+}
+
+mod panels2_impl {
+    use super::*;
+    use v0_5::helix::plugin::panels::Dock as D;
+    use v0_5::helix::plugin::panels2::{Host, Span};
+
+    impl Host for State {
+        fn style_spans(&mut self, dock: D, spans: Vec<Span>) -> std::result::Result<(), String> {
+            let dock = match dock {
+                D::Left => crate::Dock::Left,
+                D::Right => crate::Dock::Right,
+                D::Bottom => crate::Dock::Bottom,
+            };
+            let spans = spans
+                .into_iter()
+                .map(|span| (span.item, span.start, span.end, span.scope))
+                .collect();
+            State::style_spans(self, dock, spans)
+        }
+    }
+}
+
 mod http_impl {
     use super::*;
     use v0_5::helix::plugin::http::{Host, Request};
@@ -614,6 +706,29 @@ impl v0_5::helix::plugin::lsp::Host for State {
         params: String,
     ) -> std::result::Result<u32, String> {
         State::lsp_request(self, doc, server, method, params)
+    }
+    fn serve(
+        &mut self,
+        languages: Vec<String>,
+        capabilities: String,
+    ) -> std::result::Result<(), String> {
+        State::lsp_serve(self, languages, capabilities)
+    }
+    fn listen(&mut self, methods: Vec<String>) -> std::result::Result<(), String> {
+        State::lsp_listen(self, methods)
+    }
+    fn filter(&mut self, methods: Vec<String>) -> std::result::Result<(), String> {
+        State::lsp_filter(self, methods)
+    }
+    fn start(
+        &mut self,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    ) -> std::result::Result<(), String> {
+        State::lsp_start(self, name, command, args, languages, config)
     }
 }
 

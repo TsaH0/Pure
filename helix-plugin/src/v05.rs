@@ -255,6 +255,43 @@ pub enum Callback2 {
     },
 }
 
+/// A plugin as or around language servers (API 0.5 `lsp`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LspAction {
+    Serve {
+        plugin: String,
+        languages: Vec<String>,
+        capabilities: String,
+    },
+    Listen {
+        plugin: String,
+        methods: Vec<String>,
+    },
+    Filter {
+        plugin: String,
+        methods: Vec<String>,
+    },
+    Start {
+        plugin: String,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    },
+}
+
+/// What a plugin does to splits (API 0.5 `windows`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowAction {
+    Split { doc: DocumentId, below: bool },
+    Focus(u64),
+    Close(u64),
+    Resize { view: u64, columns: i32, rows: i32 },
+    Equalize,
+    Gutters { view: u64, gutters: Vec<String> },
+}
+
 /// Most key bindings per plugin.
 pub const MAX_KEY_BINDINGS: usize = 256;
 
@@ -1028,6 +1065,126 @@ impl State {
         });
         Ok(())
     }
+    pub(crate) fn style_spans(
+        &mut self,
+        dock: crate::Dock,
+        spans: Vec<(u32, u32, u32, String)>,
+    ) -> Result<(), String> {
+        if spans.len() > 10_000 {
+            return Err("at most 10000 spans".into());
+        }
+        let spans = spans
+            .into_iter()
+            .map(|(item, start, end, scope)| {
+                if start > end || scope.len() > 256 {
+                    return Err(format!("invalid span {start}..{end} of item {item}"));
+                }
+                Ok((item as usize, start as usize..end as usize, scope))
+            })
+            .collect::<Result<_, String>>()?;
+        self.actions.push(crate::Action::StyleSpans {
+            plugin: self.plugin.clone(),
+            dock,
+            spans,
+        });
+        Ok(())
+    }
+    pub(crate) fn window(&mut self, action: WindowAction) -> Result<(), String> {
+        self.need(crate::Permission::RunCommands)?;
+        let view_known = |view: u64| self.snapshot.views.iter().any(|v| v.id == view);
+        match &action {
+            WindowAction::Split { doc, .. } => {
+                self.document(*doc)?;
+            }
+            WindowAction::Focus(view)
+            | WindowAction::Close(view)
+            | WindowAction::Resize { view, .. }
+            | WindowAction::Gutters { view, .. } => {
+                if !view_known(*view) {
+                    return Err(format!("no view {view}"));
+                }
+            }
+            WindowAction::Equalize => {}
+        }
+        if let WindowAction::Gutters { gutters, .. } = &action {
+            const KINDS: &[&str] = &[
+                "diagnostics",
+                "line-numbers",
+                "diff",
+                "spacer",
+                "code-actions",
+                "plugins",
+            ];
+            if let Some(bad) = gutters.iter().find(|g| !KINDS.contains(&g.as_str())) {
+                return Err(format!("unknown gutter '{bad}': {}", KINDS.join(", ")));
+            }
+        }
+        self.actions.push(crate::Action::Window(action));
+        Ok(())
+    }
+    pub(crate) fn set_canvas(
+        &mut self,
+        doc: DocumentId,
+        lines: Option<Vec<Vec<(String, String)>>>,
+    ) -> Result<(), String> {
+        let owned = self
+            .document(doc)?
+            .owner
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == self.plugin);
+        if !owned {
+            return Err(format!("document {doc} isn't one of this plugin's buffers"));
+        }
+        if lines.as_ref().is_some_and(|lines| lines.len() > 10_000) {
+            return Err("at most 10000 lines".into());
+        }
+        // One line each: control characters would break the screen.
+        let lines = lines.map(|lines| {
+            lines
+                .into_iter()
+                .map(|spans| {
+                    spans
+                        .into_iter()
+                        .map(|(text, scope)| {
+                            let text = text
+                                .chars()
+                                .map(|c| if c.is_control() { ' ' } else { c })
+                                .collect();
+                            (text, scope)
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        self.actions.push(crate::Action::Canvas { doc, lines });
+        Ok(())
+    }
+    pub(crate) fn fold(
+        &mut self,
+        doc: DocumentId,
+        first: u32,
+        last: u32,
+        fold: bool,
+    ) -> Result<(), String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let lines = self.document(doc)?.text.len_lines() as u32;
+        if first > last || last >= lines || (fold && first == last) {
+            return Err(format!(
+                "invalid lines {first}..={last} of a document of {lines} lines"
+            ));
+        }
+        self.actions.push(crate::Action::Fold {
+            doc,
+            first,
+            last,
+            fold,
+        });
+        Ok(())
+    }
+    pub(crate) fn folds(&mut self, doc: DocumentId) -> Result<Vec<(u32, u32)>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        Ok(self.document(doc)?.folds.clone())
+    }
     pub(crate) fn command_register(&mut self) -> Option<char> {
         self.snapshot.ui.command_register
     }
@@ -1624,6 +1781,126 @@ impl State {
             request,
         });
         Ok(id)
+    }
+}
+
+impl State {
+    /// The plugin registered service `name` (to serve the editor through).
+    fn need_own_service(&self, name: &str, function: &str) -> Result<(), String> {
+        if self.v05.own_services.iter().any(|s| s.name == name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{function} needs the service \"{name}\": services.register it first"
+            ))
+        }
+    }
+
+    fn check_languages(languages: &[String]) -> Result<(), String> {
+        if languages.is_empty() || languages.len() > 64 {
+            return Err("1 to 64 languages".into());
+        }
+        if let Some(bad) = languages.iter().find(|l| l.is_empty() || l.len() > 64) {
+            return Err(format!("invalid language '{bad}'"));
+        }
+        Ok(())
+    }
+
+    fn check_methods(methods: &[String]) -> Result<(), String> {
+        if methods.is_empty() || methods.len() > 256 {
+            return Err("1 to 256 methods".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lsp_serve(
+        &mut self,
+        languages: Vec<String>,
+        capabilities: String,
+    ) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp", "lsp.serve")?;
+        Self::check_languages(&languages)?;
+        check_json("the capabilities", &capabilities)?;
+        if !capabilities.trim_start().starts_with('{') {
+            return Err("the capabilities must be a JSON object".into());
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Serve {
+                plugin,
+                languages,
+                capabilities,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_listen(&mut self, methods: Vec<String>) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp-notification", "lsp.listen")?;
+        Self::check_methods(&methods)?;
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Listen {
+                plugin,
+                methods,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_filter(&mut self, methods: Vec<String>) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp-filter", "lsp.filter")?;
+        Self::check_methods(&methods)?;
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Filter {
+                plugin,
+                methods,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_start(
+        &mut self,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    ) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need(crate::Permission::Process)?;
+        let allowed = match &self.process {
+            crate::ProcessGrant::Any => true,
+            crate::ProcessGrant::Only(programs) => programs.contains(&command),
+            crate::ProcessGrant::None => false,
+        };
+        if !allowed {
+            return Err(format!(
+                "starting '{command}' needs it in allow-process in plugins.toml"
+            ));
+        }
+        if !crate::is_valid_name(&name) {
+            return Err(format!(
+                "invalid server name '{name}': use a-z, 0-9, '-' and '_'"
+            ));
+        }
+        Self::check_languages(&languages)?;
+        if let Some(config) = &config {
+            check_json("the config", config)?;
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Start {
+                plugin,
+                name,
+                command,
+                args,
+                languages,
+                config,
+            }));
+        Ok(())
     }
 }
 

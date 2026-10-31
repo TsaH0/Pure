@@ -8,7 +8,7 @@
 //! work = 25   # minutes
 //! rest = 5
 //!
-//! # ~/.config/helix/config.toml: show it
+//! # ~/.config/pure/config.toml: show it
 //! [editor.statusline]
 //! right = ["plugins", "diagnostics", "selections", "position"]
 //! ```

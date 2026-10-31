@@ -51,6 +51,8 @@ pub struct Sidebar {
     pub focused: bool,
     /// A float's height (rows, with the border) and position.
     pub float: Option<(u16, FloatPosition)>,
+    /// Parts of items in styles of their own: `(item, chars, scope)`.
+    pub spans: Vec<(usize, std::ops::Range<usize>, String)>,
 }
 
 /// Narrowest and widest side panel.
@@ -108,6 +110,7 @@ mod test {
             scroll: 0,
             focused: false,
             float: None,
+            spans: Vec::new(),
         }
     }
 

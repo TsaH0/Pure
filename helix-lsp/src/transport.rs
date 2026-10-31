@@ -11,13 +11,37 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
-    process::{ChildStderr, ChildStdin, ChildStdout},
+    io::{
+        AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+        BufReader, BufWriter,
+    },
     sync::{
         mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedSender},
         Mutex, Notify,
     },
 };
+
+/// What a server reads from: a program's stdout, or an in-process server.
+pub type ServerOut = Box<dyn AsyncRead + Unpin + Send>;
+/// What a server is written to: a program's stdin, or an in-process server.
+pub type ServerIn = Box<dyn AsyncWrite + Unpin + Send>;
+
+/// Lets the editor change servers' replies before they are used (Pure's
+/// plugins, `lsp.filter`): `wants(server, method)` says which;
+/// `filter(server, method, result, reply)` must send the result to
+/// `reply`, changed or not.
+#[derive(Clone, Copy)]
+pub struct ReplyFilter {
+    pub wants: fn(&str, &str) -> bool,
+    pub filter: fn(String, String, Value, Sender<Result<Value>>),
+}
+
+static REPLY_FILTER: std::sync::OnceLock<ReplyFilter> = std::sync::OnceLock::new();
+
+/// Set the [`ReplyFilter`] (once).
+pub fn set_reply_filter(filter: ReplyFilter) {
+    let _ = REPLY_FILTER.set(filter);
+}
 
 #[derive(Debug)]
 pub enum Payload {
@@ -44,7 +68,8 @@ enum ServerMessage {
 pub struct Transport {
     id: LanguageServerId,
     name: String,
-    pending_requests: Mutex<HashMap<jsonrpc::Id, Sender<Result<Value>>>>,
+    /// The method and reply channel of each request sent.
+    pending_requests: Mutex<HashMap<jsonrpc::Id, (String, Sender<Result<Value>>)>>,
     shutdown_requested: AtomicBool,
     inject_tx: UnboundedSender<Payload>,
     /// Notified once the `exit` notification has been flushed to the server's stdin
@@ -54,9 +79,9 @@ pub struct Transport {
 impl Transport {
     #[allow(clippy::type_complexity)]
     pub fn start(
-        server_stdout: BufReader<ChildStdout>,
-        server_stdin: BufWriter<ChildStdin>,
-        server_stderr: BufReader<ChildStderr>,
+        server_stdout: BufReader<ServerOut>,
+        server_stdin: BufWriter<ServerIn>,
+        server_stderr: BufReader<ServerOut>,
         id: LanguageServerId,
         name: String,
     ) -> (
@@ -172,7 +197,7 @@ impl Transport {
 
     async fn send_payload_to_server(
         &self,
-        server_stdin: &mut BufWriter<ChildStdin>,
+        server_stdin: &mut BufWriter<ServerIn>,
         payload: Payload,
     ) -> Result<()> {
         //TODO: reuse string
@@ -181,7 +206,7 @@ impl Transport {
                 self.pending_requests
                     .lock()
                     .await
-                    .insert(value.id.clone(), chan);
+                    .insert(value.id.clone(), (value.method.clone(), chan));
                 serde_json::to_string(&value)?
             }
             Payload::Notification(value) => serde_json::to_string(&value)?,
@@ -193,7 +218,7 @@ impl Transport {
 
     async fn send_string_to_server(
         &self,
-        server_stdin: &mut BufWriter<ChildStdin>,
+        server_stdin: &mut BufWriter<ServerIn>,
         request: String,
         language_server_name: &str,
     ) -> Result<()> {
@@ -265,7 +290,13 @@ impl Transport {
             }
         };
 
-        if let Some(tx) = self.pending_requests.lock().await.remove(&id) {
+        if let Some((method, tx)) = self.pending_requests.lock().await.remove(&id) {
+            if let (Some(filter), Ok(value)) = (REPLY_FILTER.get(), &result) {
+                if (filter.wants)(&self.name, &method) {
+                    (filter.filter)(self.name.clone(), method, value.clone(), tx);
+                    return Ok(());
+                }
+            }
             match tx.send(result).await {
                 Ok(_) => (),
                 Err(_) => log::debug!(
@@ -286,7 +317,7 @@ impl Transport {
 
     async fn recv(
         transport: Arc<Self>,
-        mut server_stdout: BufReader<ChildStdout>,
+        mut server_stdout: BufReader<ServerOut>,
         client_tx: UnboundedSender<(LanguageServerId, jsonrpc::Call)>,
     ) {
         let mut recv_buffer = String::new();
@@ -321,7 +352,7 @@ impl Transport {
                     }
 
                     // Close any outstanding requests.
-                    for (id, tx) in transport.pending_requests.lock().await.drain() {
+                    for (id, (_, tx)) in transport.pending_requests.lock().await.drain() {
                         match tx.send(Err(Error::StreamClosed)).await {
                             Ok(_) => (),
                             Err(_) => {
@@ -352,7 +383,7 @@ impl Transport {
         }
     }
 
-    async fn err(transport: Arc<Self>, mut server_stderr: BufReader<ChildStderr>) {
+    async fn err(transport: Arc<Self>, mut server_stderr: BufReader<ServerOut>) {
         let mut recv_buffer = String::new();
         loop {
             match Self::recv_server_error(&mut server_stderr, &mut recv_buffer, &transport.name)
@@ -369,7 +400,7 @@ impl Transport {
 
     async fn send(
         transport: Arc<Self>,
-        mut server_stdin: BufWriter<ChildStdin>,
+        mut server_stdin: BufWriter<ServerIn>,
         client_tx: UnboundedSender<(LanguageServerId, jsonrpc::Call)>,
         mut client_rx: UnboundedReceiver<Payload>,
         mut inject_rx: UnboundedReceiver<Payload>,

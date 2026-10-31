@@ -270,8 +270,8 @@ All git related options are only enabled in a git repository.
 Ignore files can be placed locally as `.ignore` or put in your home directory as `~/.ignore`. They support the usual ignore and negative ignore (unignore) rules used in `.gitignore` files.
 
 Additionally, you can use Pure-specific ignore files by creating a local `.helix/ignore` file in the current workspace or a global `ignore` file located in your Pure config directory:
-- Linux and Mac: `~/.config/helix/ignore`
-- Windows: `%AppData%\helix\ignore`
+- Linux and Mac: `~/.config/pure/ignore`
+- Windows: `%AppData%\pure\ignore`
 
 Example:
 

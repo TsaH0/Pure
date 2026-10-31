@@ -359,3 +359,30 @@ fn conceal_position_round_trip() {
         }
     }
 }
+
+#[test]
+fn folds_hide_whole_lines() {
+    // "a {" then two folded lines, then "}": the fold runs from the end of
+    // line 0's text to the end of line 2's.
+    let text = "a {\nb\nc\n}\n";
+    let folds = [Conceal::fold(3, 7, "⋯")];
+    assert_eq!(conceal_text(text, false, &folds), "a {⋯ \n} \n ");
+    // Folded lines still count: "}" is line 3.
+    let mut annotations = TextAnnotations::default();
+    annotations.add_conceals(&folds, None);
+    let fmt = TextFormat::new_test(false);
+    let last = DocumentFormatter::new_at_prev_checkpoint(text.into(), &fmt, &annotations, 0)
+        .find(|g| g.char_idx == 8)
+        .unwrap();
+    assert_eq!((last.line_idx, last.visual_pos.row), (3, 1));
+    // Positions inside the fold are on the marker's row.
+    let inside = DocumentFormatter::new_at_prev_checkpoint(text.into(), &fmt, &annotations, 0)
+        .find(|g| g.char_idx == 3)
+        .unwrap();
+    assert_eq!(inside.visual_pos.row, 0);
+    // A plain conceal still stops at the line break.
+    assert_eq!(
+        conceal_text("ab\ncd\n", false, &[Conceal::new(1, 5, "")]),
+        "a \ncd \n "
+    );
+}

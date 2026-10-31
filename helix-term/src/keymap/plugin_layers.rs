@@ -133,8 +133,6 @@ pub fn user_bound(config: &HashMap<Mode, KeyTrie>, mode: Mode, keys: &[KeyEvent]
 enum Insert {
     /// Replace what is there, even a whole sub-menu.
     Override,
-    /// Replace commands (also a command at a prefix), not sub-menus.
-    Replace,
     /// Only where nothing is bound.
     Fill,
 }
@@ -165,7 +163,7 @@ fn insert(trie: &mut KeyTrie, keys: &[KeyEvent], leaf: KeyTrie, how: Insert) -> 
         };
     }
     match (node.map.get(last), how) {
-        (Some(_), Insert::Fill) | (Some(KeyTrie::Node(_)), Insert::Replace) => false,
+        (Some(_), Insert::Fill) => false,
         _ => {
             node.map.insert(*last, leaf);
             true
@@ -243,8 +241,10 @@ pub fn compose(
             Layer::Fallback => {
                 insert(trie, &binding.keys, leaf, Insert::Fill);
             }
+            // Above Pure's keys, menus included (`g`, `space`...), unless
+            // the user bound something there.
             Layer::Plugin if !user_bound(config, binding.mode, &binding.keys) => {
-                insert(trie, &binding.keys, leaf, Insert::Replace);
+                insert(trie, &binding.keys, leaf, Insert::Override);
             }
             Layer::Plugin => {}
             Layer::Override => {
@@ -366,28 +366,38 @@ mod test {
     #[test]
     fn layers_follow_the_documented_precedence() {
         let _lock = LOCK.lock();
-        // The user binds `C-k`; Pure binds `w` and the `g` menu.
+        // The user binds `C-k` and adds to the `space` menu; Pure binds `w`
+        // and the `g`, `z` and `space` menus.
         let mut config = crate::keymap::default();
         crate::keymap::merge_keys(
             &mut config,
-            hashmap! { Mode::Normal => keymap!({ "Normal" "C-k" => goto_file_start, }) },
+            hashmap! { Mode::Normal => keymap!({ "Normal"
+                "C-k" => goto_file_start,
+                "space" => { "Space" "X" => goto_file_end, },
+            }) },
         );
         set_bindings(vec![
             binding("over-user", "C-k", Layer::Plugin),
             binding("over-native", "w", Layer::Plugin),
             binding("over-menu", "g", Layer::Plugin),
+            binding("over-user-menu", "space", Layer::Plugin),
             binding("fill-taken", "b", Layer::Fallback),
             binding("fill-free", "C-q", Layer::Fallback),
             binding("override", "e", Layer::Override),
-            binding("deep", "g q z", Layer::Plugin),
+            binding("deep", "z q x", Layer::Plugin),
         ]);
         let map = compose(&config, &config, &KeyScope::default(), None).unwrap();
         // The user's keys beat the plugin layer; the plugin layer beats Pure's.
         assert_eq!(lookup(&map, "C-k").as_deref(), Some("goto_file_start"));
         assert_eq!(lookup(&map, "w").as_deref(), Some("plugin:over-native"));
-        // A plugin binding never replaces a whole menu (only `override` may).
-        assert_eq!(lookup(&map, "g").as_deref(), Some("node"));
-        assert_eq!(lookup(&map, "g q z").as_deref(), Some("plugin:deep"));
+        // Pure's whole menus too...
+        assert_eq!(lookup(&map, "g").as_deref(), Some("plugin:over-menu"));
+        // ...but not one the user added to.
+        assert_eq!(lookup(&map, "space").as_deref(), Some("node"));
+        assert_eq!(lookup(&map, "space X").as_deref(), Some("goto_file_end"));
+        // Deeper keys go into a menu, which keeps its other keys.
+        assert_eq!(lookup(&map, "z q x").as_deref(), Some("plugin:deep"));
+        assert_eq!(lookup(&map, "z z").as_deref(), Some("align_view_center"));
         // The fallback layer only takes free keys.
         assert_eq!(lookup(&map, "b").as_deref(), Some("move_prev_word_start"));
         assert_eq!(lookup(&map, "C-q").as_deref(), Some("plugin:fill-free"));

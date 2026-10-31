@@ -385,6 +385,85 @@ fn default_rainbow() -> Vec<Style> {
         Style::default().fg(Color::Magenta),
     ]
 }
+/// A style written out where a theme scope is expected, by plugins:
+/// `#ff8800` (the text's colour), `fg:#ff8800 bg:#202020 bold italic
+/// underline`, or a theme scope changed: `function bold`. Colours are
+/// `#rrggbb` or an ANSI index (`fg:3`). Theme scopes never contain `#`, `:`
+/// or spaces, so they can't be mistaken for one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StyleSpec {
+    base: Option<String>,
+    patch: Style,
+}
+
+/// Whether `scope` is a [`StyleSpec`] rather than a theme scope.
+pub fn is_spec(scope: &str) -> bool {
+    scope.contains(['#', ':', ' '])
+}
+
+impl StyleSpec {
+    pub fn parse(spec: &str) -> Option<Self> {
+        let mut base = None;
+        let mut patch = Style::default();
+        for word in spec.split_whitespace() {
+            if let Some(color) = word.strip_prefix("fg:") {
+                patch = patch.fg(ThemePalette::string_to_rgb(color).ok()?);
+            } else if let Some(color) = word.strip_prefix("bg:") {
+                patch = patch.bg(ThemePalette::string_to_rgb(color).ok()?);
+            } else if word.starts_with('#') {
+                patch = patch.fg(ThemePalette::string_to_rgb(word).ok()?);
+            } else if word == "underline" {
+                patch = patch.underline_style(UnderlineStyle::Line);
+            } else if let Ok(modifier) = word.parse::<Modifier>() {
+                patch = patch.add_modifier(modifier);
+            } else if base.is_none() && !word.contains(':') {
+                base = Some(word.to_string());
+            } else {
+                return None;
+            }
+        }
+        Some(Self { base, patch })
+    }
+}
+
+/// The highlights of styles written out: `SPEC_START + index` in [`SPECS`].
+const SPEC_START: u32 = 0x8000_0000;
+/// Most distinct styles written out (the rest get no highlight).
+const MAX_SPECS: usize = 4096;
+/// Styles written out so far, and their indices by text.
+#[derive(Default)]
+struct Specs {
+    specs: Vec<StyleSpec>,
+    by_text: HashMap<String, u32>,
+}
+
+static SPECS: LazyLock<std::sync::RwLock<Specs>> = LazyLock::new(Default::default);
+
+/// A highlight standing for `spec`, the same for the same text.
+fn spec_highlight(spec: &str) -> Option<Highlight> {
+    let known = SPECS
+        .read()
+        .unwrap_or_else(|err| err.into_inner())
+        .by_text
+        .get(spec)
+        .copied();
+    if let Some(i) = known {
+        return Some(Highlight::new(SPEC_START + i));
+    }
+    let parsed = StyleSpec::parse(spec)?;
+    let mut specs = SPECS.write().unwrap_or_else(|err| err.into_inner());
+    if let Some(i) = specs.by_text.get(spec) {
+        return Some(Highlight::new(SPEC_START + i));
+    }
+    if specs.specs.len() >= MAX_SPECS {
+        return None;
+    }
+    let i = specs.specs.len() as u32;
+    specs.specs.push(parsed);
+    specs.by_text.insert(spec.to_string(), i);
+    Some(Highlight::new(SPEC_START + i))
+}
+
 impl Theme {
     /// To allow `Highlight` to represent arbitrary RGB colors without turning it into an enum,
     /// we interpret the last 256^3 numbers as RGB.
@@ -409,14 +488,33 @@ impl Theme {
     pub fn highlight(&self, highlight: Highlight) -> Style {
         if let Some((red, green, blue)) = Self::decode_rgb_highlight(highlight) {
             Style::new().fg(Color::Rgb(red, green, blue))
+        } else if let Some(style) = self.highlights.get(highlight.idx()) {
+            *style
         } else {
-            self.highlights[highlight.idx()]
+            self.spec_style(highlight).unwrap_or_default()
         }
     }
 
     #[inline]
     pub fn scope(&self, highlight: Highlight) -> &str {
-        &self.scopes[highlight.idx()]
+        self.scopes.get(highlight.idx()).map_or("", String::as_str)
+    }
+
+    /// The style of a highlight from [`Theme::find_highlight`] for a style
+    /// written out (see [`StyleSpec`]).
+    fn spec_style(&self, highlight: Highlight) -> Option<Style> {
+        let index = highlight.get().checked_sub(SPEC_START)? as usize;
+        let specs = SPECS.read().unwrap_or_else(|err| err.into_inner());
+        Some(self.resolve_spec(specs.specs.get(index)?))
+    }
+
+    fn resolve_spec(&self, spec: &StyleSpec) -> Style {
+        let base = spec
+            .base
+            .as_deref()
+            .and_then(|scope| self.try_get(scope))
+            .unwrap_or_default();
+        base.patch(spec.patch)
     }
 
     pub fn name(&self) -> &str {
@@ -431,6 +529,9 @@ impl Theme {
     /// scopes. For example if `ui.text.focus` is not defined in the theme,
     /// `ui.text` is tried and then `ui` is tried.
     pub fn try_get(&self, scope: &str) -> Option<Style> {
+        if is_spec(scope) {
+            return StyleSpec::parse(scope).map(|spec| self.resolve_spec(&spec));
+        }
         std::iter::successors(Some(scope), |s| Some(s.rsplit_once('.')?.0))
             .find_map(|s| self.styles.get(s).copied())
     }
@@ -452,6 +553,9 @@ impl Theme {
     }
 
     pub fn find_highlight(&self, mut scope: &str) -> Option<Highlight> {
+        if is_spec(scope) {
+            return spec_highlight(scope);
+        }
         loop {
             if let Some(highlight) = self.find_highlight_exact(scope) {
                 return Some(highlight);
@@ -668,6 +772,59 @@ impl TryFrom<Value> for ThemePalette {
 }
 
 #[cfg(test)]
+mod spec_tests {
+    use super::*;
+
+    #[test]
+    fn styles_written_out() {
+        let theme = Theme::from(
+            toml::from_str::<Value>(
+                r##"
+            "function" = { fg = "#0000ff" }
+            "comment" = "#00ff00"
+        "##,
+            )
+            .unwrap(),
+        );
+        // A colour alone is the text's.
+        assert_eq!(
+            theme.get("#ff8800"),
+            Style::default().fg(Color::Rgb(255, 136, 0))
+        );
+        assert_eq!(
+            theme.get("fg:#ff8800 bg:#202020 bold underline"),
+            Style::default()
+                .fg(Color::Rgb(255, 136, 0))
+                .bg(Color::Rgb(32, 32, 32))
+                .add_modifier(Modifier::BOLD)
+                .underline_style(UnderlineStyle::Line)
+        );
+        // A theme scope, changed.
+        assert_eq!(
+            theme.get("function italic"),
+            Style::default()
+                .fg(Color::Rgb(0, 0, 255))
+                .add_modifier(Modifier::ITALIC)
+        );
+        // Highlights for them, the same for the same text.
+        let orange = theme.find_highlight("#ff8800").unwrap();
+        assert_eq!(theme.find_highlight("#ff8800"), Some(orange));
+        assert_eq!(theme.highlight(orange).fg, Some(Color::Rgb(255, 136, 0)));
+        let bold = theme.find_highlight("comment bold").unwrap();
+        assert_eq!(
+            theme.highlight(bold),
+            Style::default()
+                .fg(Color::Rgb(0, 255, 0))
+                .add_modifier(Modifier::BOLD)
+        );
+        // Theme scopes work as before; nonsense finds nothing.
+        assert!(theme.find_highlight("comment").is_some());
+        assert_eq!(theme.find_highlight("fg:nope"), None);
+        assert_eq!(theme.find_highlight("bg:#12 x:y"), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -758,9 +915,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds: the len is 0 but the index is 4278190078")]
     fn out_of_bounds() {
+        // Just below the RGB highlights: not a colour, and (unknown to the
+        // theme) no style.
         let highlight = Highlight::new(Theme::rgb_highlight(0, 0, 0).get() - 1);
-        Theme::default().highlight(highlight);
+        assert_eq!(Theme::default().highlight(highlight), Style::default());
     }
 }

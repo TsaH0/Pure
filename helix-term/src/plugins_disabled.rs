@@ -177,3 +177,5 @@ pub fn pre_command_with(
 ) -> Result<(), String> {
     Ok(())
 }
+
+pub fn lsp_notification(_server: &str, _method: &str, _params: &helix_lsp::jsonrpc::Params) {}

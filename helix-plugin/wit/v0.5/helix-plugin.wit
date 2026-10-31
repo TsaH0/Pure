@@ -923,6 +923,30 @@ interface lsp {
   /// Send request `method` with `params` (JSON) to `server` (default: the
   /// first that supports it).
   request: func(doc: document-id, server: option<string>, method: string, params: string) -> result<request-id, string>;
+
+  /// Be a language server (named after the plugin) for documents in
+  /// `languages`, like none-ls: the editor sends requests (hover, code
+  /// actions, definition, rename, formatting...) to this plugin's service
+  /// "lsp" (`services.register` it first), the method being the LSP method
+  /// and the payload its params (JSON); the reply (JSON) is the result.
+  /// `capabilities` is the `ServerCapabilities` (JSON) it has; set
+  /// `"positionEncoding": "utf-32"` for char positions. Notifications
+  /// aren't passed on (use the editor's events).
+  serve: func(languages: list<string>, capabilities: string) -> result<_, string>;
+  /// Hear these notifications from every language server
+  /// (`window/logMessage`, `$/progress`, a server's own) through this
+  /// plugin's service "lsp-notification": the method, and the payload
+  /// `{"server": name, "params": ...}`. "*" for all.
+  listen: func(methods: list<string>) -> result<_, string>;
+  /// Change the results of these requests the editor sends, before it uses
+  /// them, through this plugin's service "lsp-filter": the method, the
+  /// payload `{"server": name, "result": ...}`; the reply is the result to
+  /// use. A failing filter leaves the result as it was.
+  filter: func(methods: list<string>) -> result<_, string>;
+  /// Start language server program `command` for documents in `languages`,
+  /// as if `languages.toml` configured it (`config`: its settings, JSON).
+  /// Needs `allow-process` for the command too.
+  start: func(name: string, command: string, args: list<string>, languages: list<string>, config: option<string>) -> result<_, string>;
 }
 
 /// API 0.5 exports: synchronous hooks. Each has a 100 ms budget (250 ms
@@ -1076,6 +1100,71 @@ interface http {
   fetch: func(request: request) -> result<request-id, string>;
 }
 
+/// API 0.5: more for panels.
+interface panels2 {
+  use panels.{dock};
+
+  /// Part of a panel item in a style of its own.
+  record span {
+    /// The item's index.
+    item: u32,
+    /// Chars `start..end` of its text.
+    start: u32,
+    end: u32,
+    /// A theme scope or a style written out: "#ff8800",
+    /// "fg:#ff8800 bg:#202020 bold", "function italic".
+    scope: string,
+  }
+
+  /// Style parts of the items of this plugin's panel at `dock`, until it
+  /// is shown again. At most 10000 spans.
+  style-spans: func(dock: dock, spans: list<span>) -> result<_, string>;
+}
+
+/// API 0.5: splits. Views are the ids `state.views` lists. Changes happen
+/// after the call, in order. Needs `run-commands` (canvases don't).
+interface windows {
+  use types.{document-id};
+
+  enum side { right, below }
+
+  /// Open `doc` in a new split beside the focused one; it gets the focus.
+  split: func(doc: document-id, side: side) -> result<_, string>;
+  focus: func(view: u64) -> result<_, string>;
+  close: func(view: u64) -> result<_, string>;
+  /// Grow `view` by `columns` and `rows` (negative shrinks), taking the
+  /// space from the split beside it.
+  resize: func(view: u64, columns: s32, rows: s32) -> result<_, string>;
+  /// Make all splits the same size.
+  equalize: func() -> result<_, string>;
+  /// The gutters of `view`, in order: "diagnostics", "line-numbers",
+  /// "diff", "spacer", "code-actions", "plugins"; none for no gutter.
+  set-gutters: func(view: u64, gutters: list<string>) -> result<_, string>;
+
+  /// Text in a style: a theme scope or one written out ("#ff8800",
+  /// "fg:#fff bg:#333 bold").
+  record span { text: string, scope: string }
+
+  /// Draw `lines` in place of the text of `doc`, one of this plugin's
+  /// buffers (`host.open-buffer`), until set to none: dashboards, graphs,
+  /// anything. At most 10000 lines.
+  set-canvas: func(doc: document-id, lines: option<list<list<span>>>) -> result<_, string>;
+}
+
+/// API 0.5: folded lines (as `zc`, `zo`). Lines are 0-based. Needs
+/// `read-buffers`.
+interface folds {
+  use types.{document-id};
+
+  /// Fold lines `first..=last` (at least two): they show as `first` with a
+  /// marker after it. Overlapping folds merge.
+  fold: func(doc: document-id, first: u32, last: u32) -> result<_, string>;
+  /// Unfold the folds touching lines `first..=last`.
+  unfold: func(doc: document-id, first: u32, last: u32) -> result<_, string>;
+  /// The folds: `(first, last)` lines.
+  %list: func(doc: document-id) -> result<list<tuple<u32, u32>>, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1107,6 +1196,9 @@ world helix-plugin {
   import lsp;
   import syntax;
   import http;
+  import panels2;
+  import windows;
+  import folds;
   export plugin;
   export callbacks;
   export events;

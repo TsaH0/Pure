@@ -10,7 +10,7 @@ file which pattern matches interesting nodes from syntax trees.
 
 Query files should be placed in `runtime/queries/{language}/tags.scm`
 when contributing to Pure. You may place these under your local runtime
-directory (`~/.config/helix/runtime` in Linux for example) for the sake of
+directory (`~/.config/pure/runtime` in Linux for example) for the sake of
 testing.
 
 ## Captures

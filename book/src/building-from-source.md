@@ -75,7 +75,7 @@ export HELIX_RUNTIME=~/src/helix/runtime
 Or, create a symbolic link:
 
 ```sh
-ln -Tsf $PWD/runtime ~/.config/helix/runtime
+ln -Tsf $PWD/runtime ~/.config/pure/runtime
 ```
 
 #### Windows
@@ -95,7 +95,7 @@ Or, create a symlink in `%appdata%\helix\` that links to the source code directo
 
 | Method     | Command                                                                                |
 | ---------- | -------------------------------------------------------------------------------------- |
-| PowerShell | `New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\helix\runtime"`     |
+| PowerShell | `New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\pure\runtime"`     |
 | Cmd        | `cd %appdata%\helix` <br/> `mklink /D runtime "%userprofile%\src\helix\runtime"`       |
 
 > 💡 On Windows, creating a symbolic link may require running PowerShell or
@@ -132,7 +132,7 @@ script could follow are:
 1. `cp target/opt/pure $BUILD_DIR/usr/bin/pure`
 
 This way the resulting `pure` binary will always look for its runtime directory in
-`/usr/lib/helix/runtime` if the user has no custom runtime in `~/.config/helix`
+`/usr/lib/helix/runtime` if the user has no custom runtime in `~/.config/pure`
 or `HELIX_RUNTIME`.
 
 ### Validating the installation

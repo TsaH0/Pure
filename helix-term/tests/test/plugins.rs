@@ -4375,3 +4375,516 @@ async fn vim_registers_example_fills_numbered_registers() -> anyhow::Result<()> 
     assert_eq!(register(&app, '1'), ["two\n"]);
     Ok(())
 }
+
+/// The tree example's icons each get their file type's colour (panel
+/// spans with styles written out, API 0.5 `panels2`).
+#[tokio::test(flavor = "multi_thread")]
+async fn tree_example_colours_each_icon() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let work = helix_stdx::path::canonicalize(root.path());
+    std::fs::write(work.join("main.rs"), "fn main() {}\n")?;
+    std::fs::write(work.join("notes.md"), "hi\n")?;
+    let mut app = AppBuilder::new()
+        .with_file(work.join("notes.md"), None)
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir()?;
+    let plugin = dir.path().join("tree");
+    std::fs::create_dir(&plugin)?;
+    for file in ["plugin.toml", "plugin.wasm"] {
+        std::fs::copy(
+            helix_plugin_dir().join("examples/tree").join(file),
+            plugin.join(file),
+        )?;
+    }
+    let settings = format!(
+        "[tree]\nicons = true\nallow-files = \"read\"\nallow-dirs = [{:?}]\n",
+        work.display().to_string()
+    );
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), &settings)?;
+    // The tree shows the workspace: the repository, in tests.
+    keys(&mut app, ":tree/toggle<ret>").await;
+    let sidebar = app
+        .editor
+        .panel(helix_view::sidebar::Dock::Left)
+        .unwrap_or_else(|| panic!("no sidebar: {:?}", app.editor.get_status()));
+    let colour_of = |name: &str| {
+        let index = sidebar
+            .items
+            .iter()
+            .position(|item| item.text.ends_with(name))
+            .unwrap_or_else(|| panic!("no {name}: {:?}", sidebar.items));
+        sidebar
+            .spans
+            .iter()
+            .find(|(item, _, _)| *item == index)
+            .map(|(_, chars, scope)| (chars.clone(), scope.clone()))
+    };
+    assert_eq!(
+        colour_of(" Cargo.toml"),
+        Some((2..3, "#dea584".to_string()))
+    );
+    assert_eq!(colour_of(" README.md"), Some((2..3, "#dddddd".to_string())));
+    // The colour reaches the screen as RGB.
+    let style = app.editor.theme.get("#dea584");
+    assert_eq!(
+        style.fg,
+        Some(helix_view::graphics::Color::Rgb(0xde, 0xa5, 0x84))
+    );
+    Ok(())
+}
+
+/// A plugin key can replace one of Pure's whole menus (`Z`, here), as long
+/// as the user hasn't bound anything in it.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_keys_replace_whole_menus() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/bind plugin menu normal Z<ret>",
+    )
+    .await;
+    keys(&mut app, "Z").await;
+    assert_eq!(status(&app).0, "key:menu:Z:None");
+    // The rest of the keys are as before.
+    keys(&mut app, "l").await;
+    assert_eq!(cursor(&app), 1);
+    Ok(())
+}
+
+/// A lazy plugin (`[load]` in plugin.toml) loads only when one of its
+/// commands runs or a document in one of its languages opens.
+#[tokio::test(flavor = "multi_thread")]
+async fn lazy_plugins_load_when_first_needed() -> anyhow::Result<()> {
+    let lazy_dir = |load: &str| -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = dir.path().join("testplugin3");
+        std::fs::create_dir(&plugin).unwrap();
+        std::fs::copy(
+            helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+            plugin.join("plugin.wasm"),
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("plugin.toml"),
+            format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}]\n\n[load]\n{load}\n"),
+        )
+        .unwrap();
+        dir
+    };
+
+    // By command: not loaded until `views` runs, which then works.
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    let dir = lazy_dir("commands = [\"views\"]");
+    helix_term::plugins::load_with_settings(&mut app.editor, dir.path(), "")?;
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    assert!(helix_term::plugins::commands_with_docs()
+        .iter()
+        .any(|(name, doc)| name == "testplugin3/views" && doc.contains("loads")));
+    keys(&mut app, ":testplugin3/views<ret>").await;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+    assert!(status(&app).0.starts_with("views:"), "{}", status(&app).0);
+
+    // `lazy = false` loads it at once.
+    let dir2 = lazy_dir("commands = [\"views\"]");
+    helix_term::plugins::load_with_settings(
+        &mut app.editor,
+        dir2.path(),
+        "[testplugin3]\nlazy = false\n",
+    )?;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+
+    // By language: opening a Rust file loads it, and it hears of the file.
+    let dir3 = lazy_dir("languages = [\"rust\"]");
+    helix_term::plugins::load_with_settings(&mut app.editor, dir3.path(), "")?;
+    assert!(helix_term::plugins::plugin_names().is_empty());
+    let file = tempfile::Builder::new().suffix(".rs").tempfile()?;
+    std::fs::write(file.path(), "fn main() {}\n")?;
+    keys(&mut app, &format!(":open {}<ret>", file.path().display())).await;
+    deliver_events(&mut app).await;
+    assert_eq!(helix_term::plugins::plugin_names(), ["testplugin3"]);
+    assert!(status(&app).0.starts_with("v3-open:"), "{}", status(&app).0);
+    Ok(())
+}
+
+/// The rows of the screen, as text.
+fn screen_rows(app: &Application) -> Vec<String> {
+    let screen = app.terminal_buffer();
+    (screen.area.y..screen.area.bottom())
+        .map(|y| {
+            (screen.area.x..screen.area.right())
+                .map(|x| screen[(x, y)].symbol.to_string())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+fn view_widths(app: &Application) -> Vec<u16> {
+    app.editor
+        .tree
+        .views()
+        .map(|(view, _)| view.area.width)
+        .collect()
+}
+
+/// Splits can be resized with keys (`C-w >`, `<`, `+`, `-`, `=`).
+#[tokio::test(flavor = "multi_thread")]
+async fn splits_resize_with_keys() -> anyhow::Result<()> {
+    let mut app = AppBuilder::new().with_input_text("#[o|]#ne\n").build()?;
+    keys(&mut app, "<C-w>v").await;
+    let even = view_widths(&app);
+    let before = app.editor.tree.get(app.editor.tree.focus).area.width;
+    keys(&mut app, "10<C-w><gt>").await;
+    // The focused split is 10 wider, the other 10 narrower.
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.width,
+        before + 10
+    );
+    let wider = view_widths(&app);
+    assert_eq!(
+        wider.iter().sum::<u16>(),
+        even.iter().sum::<u16>(),
+        "{even:?} -> {wider:?}"
+    );
+    keys(&mut app, "3<C-w><lt>").await;
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.width,
+        before + 7
+    );
+    keys(&mut app, "<C-w>=").await;
+    assert_eq!(view_widths(&app), even);
+    Ok(())
+}
+
+/// API 0.5 `windows`: plugins split, resize, set gutters, close splits, and
+/// draw their own buffers (canvases).
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_control_splits_and_draw_canvases() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/win split<ret>").await;
+    assert_eq!(app.editor.tree.views().count(), 2);
+    let focus = app.editor.tree.focus;
+    use slotmap::Key;
+    let id = focus.data().as_ffi();
+    let before = app.editor.tree.get(focus).area.width;
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win resize {id} -8 0<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.get(focus).area.width, before - 8);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win gutters {id}<ret>"),
+    )
+    .await;
+    assert!(app.editor.tree.get(focus).gutters.layout.is_empty());
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win gutters {id} nope<ret>"),
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("unknown gutter"),
+        "{}",
+        status(&app).0
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win close {id}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+    // The last view isn't closed.
+    let last = app.editor.tree.focus.data().as_ffi();
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/win close {last}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+
+    // A canvas: the plugin's lines, not the buffer's text.
+    keys(&mut app, ":plugin-run testplugin3/canvas<ret>").await;
+    deliver_events(&mut app).await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter().any(|row| row.starts_with("Hello canvas")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.starts_with("second line")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("text under")),
+        "{rows:#?}"
+    );
+    // In the plugin's colours.
+    let screen = app.terminal_buffer();
+    let y = rows
+        .iter()
+        .position(|row| row.starts_with("Hello"))
+        .unwrap() as u16;
+    assert_eq!(
+        screen[(0, y)].fg,
+        helix_view::graphics::Color::Rgb(0xff, 0x88, 0)
+    );
+    // Without it, the text again.
+    keys(&mut app, ":plugin-run testplugin3/canvas off<ret>").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter().any(|row| row.contains("text under")),
+        "{rows:#?}"
+    );
+    // Only its own buffers.
+    keys(
+        &mut app,
+        ":buffer-previous<ret>:plugin-run testplugin3/canvas off<ret>",
+    )
+    .await;
+    assert!(
+        status(&app)
+            .0
+            .contains("isn't one of this plugin's buffers"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}
+
+/// A plugin as a language server (API 0.5 `lsp.serve`), like none-ls: the
+/// editor's requests reach the plugin's "lsp" service and its replies come
+/// back as a server's; `lsp.filter` changes replies; `lsp.listen` hears
+/// notifications.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_serve_as_language_servers() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // Markdown: no other server for it is installed here.
+    let file = dir.path().join("notes.md");
+    std::fs::write(&file, "fn main() {}\n")?;
+    let mut config = helpers::test_config();
+    config.editor.lsp.enable = true;
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_file(&file, None)
+        .build()?;
+    let plugins = tempfile::tempdir()?;
+    let plugin = plugins.path().join("testplugin3");
+    std::fs::create_dir(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}, \"lsp\"]\n"),
+    )?;
+    let settings = "[testplugin3]\nallow-lsp = true\nlsp-server = true\nlsp-listen = true\n";
+    helix_term::plugins::load_with_settings(&mut app.editor, plugins.path(), settings)?;
+    // The document gets the plugin as a server, which initializes.
+    let mut ready = false;
+    for _ in 0..50 {
+        deliver_events(&mut app).await;
+        let (_, doc) = helix_view::current_ref!(app.editor);
+        if doc
+            .language_servers()
+            .any(|ls| ls.name() == "testplugin3" && ls.is_initialized())
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(
+        ready,
+        "the plugin's server never started: {:?}",
+        app.editor.get_status()
+    );
+
+    // A request through it: the plugin answers.
+    keys(&mut app, ":plugin-run testplugin3/lsp-request textDocument/hover {\"textDocument\":{\"uri\":\"file:///x\"},\"position\":{\"line\":0,\"character\":3}}<ret>").await;
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("lsp-reply"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert!(
+        status(&app).0.contains("from the plugin"),
+        "{}",
+        status(&app).0
+    );
+
+    // The editor's own goto-definition uses it.
+    keys(&mut app, "gd").await;
+    for _ in 0..50 {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let range = doc.selection(view.id).primary();
+        if (range.from(), range.to()) == (3, 7) {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let range = doc.selection(view.id).primary();
+    assert_eq!(
+        (range.from(), range.to()),
+        (3, 7),
+        "{:?}",
+        app.editor.get_status()
+    );
+
+    // Notifications from servers reach listeners.
+    let params = helix_lsp::jsonrpc::Params::Map(Default::default());
+    helix_term::plugins::lsp_notification("some-server", "window/logMessage", &params);
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("notified"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert_eq!(status(&app).0, "notified:window/logMessage");
+
+    // A filter changes replies; unloading takes the server away.
+    let settings = "[testplugin3]\nallow-lsp = true\nlsp-server = true\nlsp-filter = true\n";
+    helix_term::plugins::load_with_settings(&mut app.editor, plugins.path(), settings)?;
+    for _ in 0..50 {
+        deliver_events(&mut app).await;
+        let (_, doc) = helix_view::current_ref!(app.editor);
+        if doc
+            .language_servers()
+            .any(|ls| ls.name() == "testplugin3" && ls.is_initialized())
+        {
+            break;
+        }
+    }
+    keys(&mut app, ":plugin-run testplugin3/lsp-request textDocument/hover {\"textDocument\":{\"uri\":\"file:///x\"},\"position\":{\"line\":0,\"character\":3}}<ret>").await;
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("lsp-reply"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert!(status(&app).0.contains("filtered"), "{}", status(&app).0);
+    Ok(())
+}
+
+/// API 0.5 `lsp.start`: a plugin starts a language server program, which
+/// needs the program in allow-process.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_start_language_server_programs_with_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""lsp", "process""#,
+        "[testplugin3]\nallow-lsp = true\nallow-process = [\"my-server\"]\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-start mine other-server<ret>",
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("allow-process"),
+        "{}",
+        status(&app).0
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-start mine my-server<ret>",
+    )
+    .await;
+    let added = app.editor.language_servers.added_servers();
+    assert!(
+        added.iter().any(|server| server.name == "mine"
+            && server.config.command == "my-server"
+            && server.languages == ["markdown"]),
+        "{added:?}"
+    );
+    Ok(())
+}
+
+/// Folding: `zc` folds the syntax node (or the selected lines), the
+/// lines vanish behind a marker, `j` steps over them, `zo` / `za` / `zR`
+/// unfold, edits move folds, and a search into a fold opens it.
+#[tokio::test(flavor = "multi_thread")]
+async fn folds_hide_lines_and_open_again() -> anyhow::Result<()> {
+    let file = tempfile::Builder::new().suffix(".rs").tempfile()?;
+    std::fs::write(
+        file.path(),
+        "fn a() {\n    let x = 1;\n    let y = 2;\n}\nfn b() {}\n",
+    )?;
+    let mut app = AppBuilder::new().with_file(file.path(), None).build()?;
+    let line_of = |app: &Application| {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let text = doc.text().slice(..);
+        text.char_to_line(doc.selection(view.id).primary().cursor(text))
+    };
+    // On `fn a`: the function's lines fold.
+    keys(&mut app, "zc").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("fn a() {") && row.contains("⋯ 3 lines")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("let x")), "{rows:#?}");
+    // The next line down is `fn b`.
+    keys(&mut app, "j").await;
+    assert_eq!(line_of(&app), 4);
+    // Unfold from its first line.
+    keys(&mut app, "kzo").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("let x")));
+    // `za` toggles; an edit above moves the fold with the text.
+    keys(&mut app, "za").await;
+    assert!(!screen_rows(&app).iter().any(|row| row.contains("let x")));
+    keys(&mut app, "O// top<esc>").await;
+    let (_, doc) = helix_view::current_ref!(app.editor);
+    let text = doc.text().slice(..);
+    let folded: Vec<_> = doc
+        .folds
+        .iter()
+        .map(|f| (text.char_to_line(f.start), text.char_to_line(f.end)))
+        .collect();
+    assert_eq!(folded, [(1, 4)]);
+    // A search into the fold opens it.
+    keys(&mut app, "gg/let y<ret>").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("let y")));
+    // Selected lines fold too; zR unfolds all.
+    keys(&mut app, "ggxxzc").await;
+    assert!(!screen_rows(&app).iter().any(|row| row.contains("fn a")));
+    keys(&mut app, "zR").await;
+    assert!(screen_rows(&app).iter().any(|row| row.contains("fn a")));
+    Ok(())
+}
+
+/// API 0.5 `folds`: plugins fold, list and unfold lines.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_fold_lines() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\ntwo\nthree\nfour\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/fold 1 2<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/fold list<ret>").await;
+    assert_eq!(status(&app).0, "folds:1-2");
+    assert!(!screen_rows(&app).iter().any(|row| row.starts_with("three")));
+    keys(&mut app, ":plugin-run testplugin3/fold 2 2<ret>").await;
+    assert!(
+        status(&app).0.contains("invalid lines"),
+        "{}",
+        status(&app).0
+    );
+    keys(&mut app, ":plugin-run testplugin3/fold off 2 2<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/fold list<ret>").await;
+    assert_eq!(status(&app).0, "folds:");
+    Ok(())
+}

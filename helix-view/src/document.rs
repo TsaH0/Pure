@@ -221,6 +221,12 @@ pub struct Document {
     pub name: Option<Cow<'static, str>>,
     /// The plugin owning this buffer (Pure): `:write` goes to the plugin.
     pub plugin_owner: Option<String>,
+    /// Folded lines, sorted and not overlapping: each hides from the end of
+    /// a line's text to the end of the last folded line's (`zc`, `zo`...).
+    pub folds: Vec<helix_core::text_annotations::Conceal>,
+    /// Lines the owning plugin draws instead of the text: `(text, scope)`
+    /// spans each (plugin API 0.5 `windows.set-canvas`).
+    pub plugin_canvas: Option<Vec<Vec<(String, String)>>>,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
@@ -774,6 +780,8 @@ impl Document {
             readonly: false,
             name: None,
             plugin_owner: None,
+            plugin_canvas: None,
+            folds: Vec::new(),
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
             plugin_decorations: Default::default(),
@@ -1511,6 +1519,16 @@ impl Document {
                 .map_pos(view_data.view_position.anchor, Assoc::Before);
         }
 
+        // Folds move with the text; one an edit emptied or broke goes.
+        if !self.folds.is_empty() {
+            let mut folds = std::mem::take(&mut self.folds);
+            for fold in &mut folds {
+                fold.start = changes.map_pos(fold.start, Assoc::After);
+                fold.end = changes.map_pos(fold.end, Assoc::Before);
+            }
+            self.set_folds(folds);
+        }
+
         // generate revert to savepoint
         if !self.savepoints.is_empty() {
             let revert = transaction.invert(&old_doc);
@@ -1973,8 +1991,57 @@ impl Document {
     }
 
     /// maintains the order as configured in the language_servers TOML array
+    /// Fold the lines `first..=last` (`last` > `first`): hide them after
+    /// line `first`'s text. Overlapping folds merge.
+    pub fn fold_lines(&mut self, first: usize, last: usize) {
+        let text = self.text.slice(..);
+        let last = last.min(text.len_lines().saturating_sub(1));
+        if last <= first {
+            return;
+        }
+        let start = helix_core::line_ending::line_end_char_index(&text, first);
+        let end = helix_core::line_ending::line_end_char_index(&text, last);
+        let mut folds = std::mem::take(&mut self.folds);
+        folds.push(helix_core::text_annotations::Conceal::fold(start, end, ""));
+        self.set_folds(folds);
+    }
+
+    /// Unfold the folds touching lines `first..=last`; whether there were any.
+    pub fn unfold_lines(&mut self, first: usize, last: usize) -> bool {
+        let text = self.text.slice(..);
+        let before = self.folds.len();
+        self.folds.retain(|fold| {
+            let (from, to) = (text.char_to_line(fold.start), text.char_to_line(fold.end));
+            to < first || from > last
+        });
+        self.folds.len() != before
+    }
+
+    /// Store `folds`: sorted, merged where they overlap, empty ones gone,
+    /// each labelled with how many lines it hides.
+    pub fn set_folds(&mut self, mut folds: Vec<helix_core::text_annotations::Conceal>) {
+        let text = self.text.slice(..);
+        let len = text.len_chars();
+        folds.retain(|fold| fold.start < fold.end && fold.end <= len);
+        folds.sort_by_key(|fold| fold.start);
+        let mut merged: Vec<helix_core::text_annotations::Conceal> = Vec::new();
+        for fold in folds {
+            match merged.last_mut() {
+                Some(last) if fold.start <= last.end => last.end = last.end.max(fold.end),
+                _ => merged.push(fold),
+            }
+        }
+        for fold in &mut merged {
+            let lines = text.char_to_line(fold.end) - text.char_to_line(fold.start);
+            fold.replacement =
+                format!(" ⋯ {lines} line{}", if lines == 1 { "" } else { "s" }).into();
+        }
+        merged.retain(|fold| text.char_to_line(fold.end) > text.char_to_line(fold.start));
+        self.folds = merged;
+    }
+
     pub fn language_servers(&self) -> impl Iterator<Item = &helix_lsp::Client> {
-        self.language_config().into_iter().flat_map(move |config| {
+        let configured = self.language_config().into_iter().flat_map(move |config| {
             config.language_servers.iter().filter_map(move |features| {
                 let ls = &**self.language_servers.get(&features.name)?;
                 if ls.is_initialized() {
@@ -1983,7 +2050,18 @@ impl Document {
                     None
                 }
             })
-        })
+        });
+        // Servers added at runtime (plugins').
+        let added = self
+            .language_servers
+            .iter()
+            .filter(move |(name, _)| {
+                self.language_config()
+                    .is_none_or(|config| !config.language_servers.iter().any(|f| &f.name == *name))
+            })
+            .map(|(_, ls)| &**ls)
+            .filter(|ls| ls.is_initialized());
+        configured.chain(added)
     }
 
     pub fn remove_language_server_by_name(&mut self, name: &str) -> Option<Arc<Client>> {
@@ -1994,7 +2072,7 @@ impl Document {
         &self,
         feature: LanguageServerFeature,
     ) -> impl Iterator<Item = &helix_lsp::Client> {
-        self.language_config().into_iter().flat_map(move |config| {
+        let configured = self.language_config().into_iter().flat_map(move |config| {
             config.language_servers.iter().filter_map(move |features| {
                 let ls = &**self.language_servers.get(&features.name)?;
                 if ls.is_initialized()
@@ -2006,7 +2084,18 @@ impl Document {
                     None
                 }
             })
-        })
+        });
+        // Servers added at runtime (plugins'): every feature they support.
+        let added = self
+            .language_servers
+            .iter()
+            .filter(move |(name, _)| {
+                self.language_config()
+                    .is_none_or(|config| !config.language_servers.iter().any(|f| &f.name == *name))
+            })
+            .map(|(_, ls)| &**ls)
+            .filter(move |ls| ls.is_initialized() && ls.supports_feature(feature));
+        configured.chain(added)
     }
 
     pub fn supports_language_server(&self, id: LanguageServerId) -> bool {

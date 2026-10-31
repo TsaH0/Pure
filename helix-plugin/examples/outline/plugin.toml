@@ -5,6 +5,10 @@ description = "The current file's symbols in a panel, following the cursor, like
 permissions = ["read-buffers", "edit-buffers"]
 wasm = "plugin.wasm"
 
+# Loads the first time it is shown, not at startup.
+[load]
+commands = ["toggle", "focus"]
+
 # Default binding: only used where nothing else binds the key.
 [keys.normal.space]
 O = "toggle"

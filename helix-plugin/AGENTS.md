@@ -7,8 +7,8 @@ contract: `helix-plugin/wit/v0.4/helix-plugin.wit`. The long-form guide is
 `helix-plugin/README.md`. Do not invent host functions. If something is not
 listed here or in the WIT, it does not exist.
 
-Pure keeps Helix's paths: config is `~/.config/helix/` (`$XDG_CONFIG_HOME/helix`),
-data is `~/.local/share/helix/`, and the cache is `~/.cache/helix/`.
+Pure keeps Helix's paths: config is `~/.config/pure/` (`$XDG_CONFIG_HOME/helix`),
+data is `~/.local/share/pure/`, and the cache is `~/.cache/pure/`.
 
 ---
 
@@ -173,7 +173,7 @@ statusline, popups, prompts, pickers, status messages, logging and background
 tasks need **no** permission. To compute decorations from the text you still
 need `read-buffers`. Ask only for what the plugin uses.
 
-### The user's `~/.config/helix/plugins.toml`
+### The user's `~/.config/pure/plugins.toml`
 
 One table per plugin, keyed by the manifest `name`:
 
@@ -209,7 +209,7 @@ overwrite the version-suffixed frozen fixtures in `helix-plugin/tests/fixtures/`
 
 ### Install, reload, inspect
 
-- **By hand:** put the files at `~/.config/helix/plugins/<name>/plugin.toml`
+- **By hand:** put the files at `~/.config/pure/plugins/<name>/plugin.toml`
   and `.../plugin.wasm`. Plugins load in the background at startup, after the
   first frame. For documents opened meanwhile, plugins receive
   `document-open`.
@@ -218,7 +218,7 @@ overwrite the version-suffixed frozen fixtures in `helix-plugin/tests/fixtures/`
   named by `wasm`, both from the **repo root**, and builds nothing.
   `:plugin-update [names]` asks again if the permissions grew.
   `:plugin-remove <name>`.
-- **`~/.config/helix/plugins.lock`** records source, commit and SHA-256 of
+- **`~/.config/pure/plugins.lock`** records source, commit and SHA-256 of
   each installed component. A changed component is refused until it is
   updated or reinstalled. Plugins copied in by hand are not in the lock.
 - **`:plugin-reload`** reloads everything, re-enables disabled plugins and
@@ -336,7 +336,7 @@ Unsubscribed events cost nothing: the editor checks an atomic bitmask.
   `search` its prompt, `replace` waits for the next key. They open once the
   plugin call has returned.
 - `workspace_root() -> Option<String>`, `cwd()`, `config_dir()`,
-  `data_dir()` (`~/.local/share/helix/plugins/<name>/`, always read-write via
+  `data_dir()` (`~/.local/share/pure/plugins/<name>/`, always read-write via
   `std::fs`, no permission needed)
 
 ### Opening files and buffers (`open-files`)

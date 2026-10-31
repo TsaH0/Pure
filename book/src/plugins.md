@@ -8,7 +8,7 @@ background, so they never delay startup.
 The full guide, including how to write plugins, is
 [`helix-plugin/README.md`](https://github.com/TsaH0/helix-editor-custom/blob/master/helix-plugin/README.md). For coding agents, copy
 [`helix-plugin/AGENTS.md`](https://github.com/TsaH0/Pure/blob/master/helix-plugin/AGENTS.md)
-into your plugin project or `~/.config/helix/`: it has everything an agent
+into your plugin project or `~/.config/pure/`: it has everything an agent
 needs to build, test and benchmark a plugin.
 
 ## Installing a plugin
@@ -21,15 +21,15 @@ Pure fetches it, shows its name, version and permissions, and asks before
 installing. It uses the plugin's committed `plugin.wasm` (nothing is built).
 `:plugin-update` (all, or named plugins) fetches new versions and asks again
 if a plugin wants new permissions; `:plugin-remove <name>` removes one.
-Installed plugins are recorded in `~/.config/helix/plugins.lock` with their
+Installed plugins are recorded in `~/.config/pure/plugins.lock` with their
 commit and a SHA-256 of the component: if the component changes behind
 Pure's back, it isn't loaded until you update or reinstall it.
 
-You can also install by hand. Each plugin is a directory in `~/.config/helix/plugins/` holding its
+You can also install by hand. Each plugin is a directory in `~/.config/pure/plugins/` holding its
 `plugin.toml` and `plugin.wasm`:
 
 ```
-~/.config/helix/plugins/
+~/.config/pure/plugins/
 └── finder/
     ├── plugin.toml
     └── plugin.wasm
@@ -67,7 +67,7 @@ Run a plugin's command with `:<plugin>/<command> [args]` (or
 command palette (`space ?`) with their docs. Bind them like any command:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [keys.normal.space]
 e = ":oil/open"
 "/" = ":finder/grep"
@@ -102,7 +102,7 @@ Signs and
 statusline text only show where you ask for them:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [editor]
 gutters = ["diagnostics", "plugins", "line-numbers", "spacer", "diff"]
 
@@ -137,8 +137,23 @@ Pure: they can bind any key above the defaults (`find-char` replaces
 `f`/`F`/`t`/`T`), take the key typed after theirs, run commands or play
 keys as if typed (like `:normal`), and see each command before it runs,
 with its register and count, to add to it or cancel it (`vim-registers`).
-Keys that open a menu of their own (`g`, `z`, `Z`, `space`...) can't be
-taken over as a whole, only the keys within them.
+A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
+unless you have bound something in that menu yourself: then your menu
+stays.
+
+Code can be folded, like Vim: `zc` (or `zf`) folds the selected lines, or
+the syntax node around the cursor (a function, a block; the indented lines
+below it where there is no syntax tree), `zo` unfolds, `za` toggles, `zM`
+folds every top-level block and `zR` unfolds everything. A fold shows as
+its first line followed by `⋯ N lines` (the `ui.virtual.fold` scope, or
+`comment`); `j` and `k` step over it, edits move it, and a jump or search
+into it opens it. Plugins can fold too.
+
+Splits can be resized: `C-w >` and `C-w <` widen and narrow the split,
+`C-w +` and `C-w -` make it taller and shorter (with a count, by that many
+columns or rows), `C-w =` makes them all the same size again. Plugins can
+open, resize, close and focus splits, choose their gutters, and draw their
+own buffers entirely (canvases).
 
 `:normal keys` (`:norm`) plays keys as if typed, like Vim's:
 `:normal dd`, `:normal ihello<esc>`.
@@ -161,7 +176,7 @@ fn saved() { status(`saved ${path()}`); }
 ```
 
 Or put the script in `init.rhai` in the config directory and let the
-plugin read it (`allow-files = "read"`, `allow-dirs = ["~/.config/helix"]`).
+plugin read it (`allow-files = "read"`, `allow-dirs = ["~/.config/pure"]`).
 Scripts can use `text()`, `path()`, `language()`, `mode()`,
 `selections()`, `set_selections()`, `selected()`, `replace_selections()`,
 `insert()`, `query()` (tree-sitter captures), `command(name, [args])`,
@@ -184,14 +199,14 @@ project). To have `pure some/dir` and `:open some/dir` open oil instead of
 the file picker:
 
 ```toml
-# ~/.config/helix/config.toml
+# ~/.config/pure/config.toml
 [editor]
 directory-handler = "oil/open"
 ```
 
 ## Settings and permissions
 
-`~/.config/helix/plugins.toml` has one table per plugin. Plugins can only do
+`~/.config/pure/plugins.toml` has one table per plugin. Plugins can only do
 what their `plugin.toml` asks for; running programs and touching files also
 need your consent here:
 
@@ -219,9 +234,15 @@ allow-key-override = true        # its keys may take precedence over yours
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
 
+[markdown]
+lazy = false                     # load at startup even if it would wait
+
 [my-ai-tool]
 allow-network = ["api.example.com", "*.example.org"]  # HTTPS hosts it may reach
 ```
+
+Some plugins load only when needed: when a file of their language opens or
+one of their commands runs (`:plugin-list` says which haven't loaded yet).
 
 Plugins that declare their settings have them checked when they load: a
 misspelled name or a wrong type is an error that names the setting. After
@@ -233,6 +254,11 @@ without reloading it; changing what it is allowed (`allow-…`), its keys or
 machine, such as the Competitive Companion browser extension. It listens
 on 127.0.0.1 only and accepts only JSON requests addressed to `localhost`,
 so web pages can't reach it.
+
+`allow-lsp` also lets a plugin be a language server itself (its hover,
+code actions, go-to-definition and the like show as any server's), hear
+language servers' notifications and change their replies before Pure uses
+them. Starting a language server program needs `allow-process` for it too.
 
 `allow-network` lets a plugin send HTTPS requests to the hosts listed
 (`*.example.org` means its subdomains). The editor sends them with `curl`,

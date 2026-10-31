@@ -285,18 +285,26 @@ impl<'t> DocumentFormatter<'t> {
             } else if let Some(grapheme) = self.graphemes.next() {
                 let codepoints = grapheme.len_chars() as u32;
 
-                if let Some(conceal) = self
-                    .annotations
-                    .conceal_at(char_pos)
-                    .filter(|_| LineEnding::from_rope_slice(&grapheme).is_none())
-                {
-                    // Swallow the hidden graphemes (never a line break) and
-                    // show them as one grapheme: the replacement, or nothing.
+                if let Some(conceal) = self.annotations.conceal_at(char_pos).filter(|conceal| {
+                    conceal.fold || LineEnding::from_rope_slice(&grapheme).is_none()
+                }) {
+                    // Swallow the hidden graphemes (never a line break,
+                    // unless folding) and show them as one grapheme: the
+                    // replacement, or nothing.
                     let mut end = char_pos + codepoints as usize;
+                    if LineEnding::from_rope_slice(&grapheme).is_some() {
+                        self.line_pos += 1;
+                    }
                     while end < conceal.end {
                         let mut rest = self.graphemes.clone();
                         match rest.next() {
-                            Some(next) if LineEnding::from_rope_slice(&next).is_none() => {
+                            Some(next)
+                                if conceal.fold || LineEnding::from_rope_slice(&next).is_none() =>
+                            {
+                                if LineEnding::from_rope_slice(&next).is_some() {
+                                    // Folded lines still count.
+                                    self.line_pos += 1;
+                                }
                                 end += next.len_chars();
                                 self.graphemes = rest;
                             }

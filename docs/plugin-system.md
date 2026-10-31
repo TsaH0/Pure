@@ -7,7 +7,7 @@ to use and write plugins). Differences from the plan below:
   typable command, e.g. `u = ":plugin-run text-tools/upper"`) instead of a new
   `@plugin:` keymap syntax. That avoids touching `MappableCommand` and keeps
   upstream merges simple.
-- Plugin settings live in `~/.config/helix/plugins.toml` instead of
+- Plugin settings live in `~/.config/pure/plugins.toml` instead of
   `config.toml`, so Helix's `Config` struct is unchanged.
 - Permissions are checked when a host function is called (it returns a
   "permission denied" error) rather than by not linking the function, which the
@@ -204,7 +204,7 @@ Kept small on purpose:
 
 ### Configuration, installation and permissions
 
-Plugins live in `~/.config/helix/plugins/<name>/` with the component and a
+Plugins live in `~/.config/pure/plugins/<name>/` with the component and a
 manifest:
 
 ```toml
@@ -242,7 +242,7 @@ Each phase ends with something usable and merged.
    hard-coded component, call `init`, have it call `set-status`. Measure build
    time, binary size and startup time with the compilation cache.
 2. **Commands and buffers**: the `editor` and `plugin` interfaces above minus
-   events; `MappableCommand::Plugin`; loading from `~/.config/helix/plugins`;
+   events; `MappableCommand::Plugin`; loading from `~/.config/pure/plugins`;
    the Rust SDK; two example plugins (sort lines, toggle TODO). Errors and
    timeouts disable the plugin with a message.
 3. **Events, permissions, limits**: event subscriptions with debouncing, the
