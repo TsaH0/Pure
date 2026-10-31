@@ -4652,3 +4652,165 @@ async fn plugins_control_splits_and_draw_canvases() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// A plugin as a language server (API 0.5 `lsp.serve`), like none-ls: the
+/// editor's requests reach the plugin's "lsp" service and its replies come
+/// back as a server's; `lsp.filter` changes replies; `lsp.listen` hears
+/// notifications.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_serve_as_language_servers() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    // Markdown: no other server for it is installed here.
+    let file = dir.path().join("notes.md");
+    std::fs::write(&file, "fn main() {}\n")?;
+    let mut config = helpers::test_config();
+    config.editor.lsp.enable = true;
+    let mut app = AppBuilder::new()
+        .with_config(config)
+        .with_file(&file, None)
+        .build()?;
+    let plugins = tempfile::tempdir()?;
+    let plugin = plugins.path().join("testplugin3");
+    std::fs::create_dir(&plugin)?;
+    std::fs::copy(
+        helix_plugin_dir().join("tests/fixtures/testplugin3.wasm"),
+        plugin.join("plugin.wasm"),
+    )?;
+    std::fs::write(
+        plugin.join("plugin.toml"),
+        format!("name = \"testplugin3\"\nversion = \"1\"\napi = \"0.5\"\npermissions = [{ALL}, \"lsp\"]\n"),
+    )?;
+    let settings = "[testplugin3]\nallow-lsp = true\nlsp-server = true\nlsp-listen = true\n";
+    helix_term::plugins::load_with_settings(&mut app.editor, plugins.path(), settings)?;
+    // The document gets the plugin as a server, which initializes.
+    let mut ready = false;
+    for _ in 0..50 {
+        deliver_events(&mut app).await;
+        let (_, doc) = helix_view::current_ref!(app.editor);
+        if doc
+            .language_servers()
+            .any(|ls| ls.name() == "testplugin3" && ls.is_initialized())
+        {
+            ready = true;
+            break;
+        }
+    }
+    assert!(
+        ready,
+        "the plugin's server never started: {:?}",
+        app.editor.get_status()
+    );
+
+    // A request through it: the plugin answers.
+    keys(&mut app, ":plugin-run testplugin3/lsp-request textDocument/hover {\"textDocument\":{\"uri\":\"file:///x\"},\"position\":{\"line\":0,\"character\":3}}<ret>").await;
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("lsp-reply"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert!(
+        status(&app).0.contains("from the plugin"),
+        "{}",
+        status(&app).0
+    );
+
+    // The editor's own goto-definition uses it.
+    keys(&mut app, "gd").await;
+    for _ in 0..50 {
+        let (view, doc) = helix_view::current_ref!(app.editor);
+        let range = doc.selection(view.id).primary();
+        if (range.from(), range.to()) == (3, 7) {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    let range = doc.selection(view.id).primary();
+    assert_eq!(
+        (range.from(), range.to()),
+        (3, 7),
+        "{:?}",
+        app.editor.get_status()
+    );
+
+    // Notifications from servers reach listeners.
+    let params = helix_lsp::jsonrpc::Params::Map(Default::default());
+    helix_term::plugins::lsp_notification("some-server", "window/logMessage", &params);
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("notified"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert_eq!(status(&app).0, "notified:window/logMessage");
+
+    // A filter changes replies; unloading takes the server away.
+    let settings = "[testplugin3]\nallow-lsp = true\nlsp-server = true\nlsp-filter = true\n";
+    helix_term::plugins::load_with_settings(&mut app.editor, plugins.path(), settings)?;
+    for _ in 0..50 {
+        deliver_events(&mut app).await;
+        let (_, doc) = helix_view::current_ref!(app.editor);
+        if doc
+            .language_servers()
+            .any(|ls| ls.name() == "testplugin3" && ls.is_initialized())
+        {
+            break;
+        }
+    }
+    keys(&mut app, ":plugin-run testplugin3/lsp-request textDocument/hover {\"textDocument\":{\"uri\":\"file:///x\"},\"position\":{\"line\":0,\"character\":3}}<ret>").await;
+    for _ in 0..50 {
+        if app
+            .editor
+            .get_status()
+            .is_some_and(|(s, _)| s.starts_with("lsp-reply"))
+        {
+            break;
+        }
+        deliver_events(&mut app).await;
+    }
+    assert!(status(&app).0.contains("filtered"), "{}", status(&app).0);
+    Ok(())
+}
+
+/// API 0.5 `lsp.start`: a plugin starts a language server program, which
+/// needs the program in allow-process.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_start_language_server_programs_with_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""lsp", "process""#,
+        "[testplugin3]\nallow-lsp = true\nallow-process = [\"my-server\"]\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-start mine other-server<ret>",
+    )
+    .await;
+    assert!(
+        status(&app).0.contains("allow-process"),
+        "{}",
+        status(&app).0
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/lsp-start mine my-server<ret>",
+    )
+    .await;
+    let added = app.editor.language_servers.added_servers();
+    assert!(
+        added.iter().any(|server| server.name == "mine"
+            && server.config.command == "my-server"
+            && server.languages == ["markdown"]),
+        "{added:?}"
+    );
+    Ok(())
+}

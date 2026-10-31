@@ -690,6 +690,29 @@ impl v0_5::helix::plugin::lsp::Host for State {
     ) -> std::result::Result<u32, String> {
         State::lsp_request(self, doc, server, method, params)
     }
+    fn serve(
+        &mut self,
+        languages: Vec<String>,
+        capabilities: String,
+    ) -> std::result::Result<(), String> {
+        State::lsp_serve(self, languages, capabilities)
+    }
+    fn listen(&mut self, methods: Vec<String>) -> std::result::Result<(), String> {
+        State::lsp_listen(self, methods)
+    }
+    fn filter(&mut self, methods: Vec<String>) -> std::result::Result<(), String> {
+        State::lsp_filter(self, methods)
+    }
+    fn start(
+        &mut self,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    ) -> std::result::Result<(), String> {
+        State::lsp_start(self, name, command, args, languages, config)
+    }
 }
 
 /// `hooks.on-key`.

@@ -1978,7 +1978,7 @@ impl Document {
 
     /// maintains the order as configured in the language_servers TOML array
     pub fn language_servers(&self) -> impl Iterator<Item = &helix_lsp::Client> {
-        self.language_config().into_iter().flat_map(move |config| {
+        let configured = self.language_config().into_iter().flat_map(move |config| {
             config.language_servers.iter().filter_map(move |features| {
                 let ls = &**self.language_servers.get(&features.name)?;
                 if ls.is_initialized() {
@@ -1987,7 +1987,18 @@ impl Document {
                     None
                 }
             })
-        })
+        });
+        // Servers added at runtime (plugins').
+        let added = self
+            .language_servers
+            .iter()
+            .filter(move |(name, _)| {
+                self.language_config()
+                    .is_none_or(|config| !config.language_servers.iter().any(|f| &f.name == *name))
+            })
+            .map(|(_, ls)| &**ls)
+            .filter(|ls| ls.is_initialized());
+        configured.chain(added)
     }
 
     pub fn remove_language_server_by_name(&mut self, name: &str) -> Option<Arc<Client>> {
@@ -1998,7 +2009,7 @@ impl Document {
         &self,
         feature: LanguageServerFeature,
     ) -> impl Iterator<Item = &helix_lsp::Client> {
-        self.language_config().into_iter().flat_map(move |config| {
+        let configured = self.language_config().into_iter().flat_map(move |config| {
             config.language_servers.iter().filter_map(move |features| {
                 let ls = &**self.language_servers.get(&features.name)?;
                 if ls.is_initialized()
@@ -2010,7 +2021,18 @@ impl Document {
                     None
                 }
             })
-        })
+        });
+        // Servers added at runtime (plugins'): every feature they support.
+        let added = self
+            .language_servers
+            .iter()
+            .filter(move |(name, _)| {
+                self.language_config()
+                    .is_none_or(|config| !config.language_servers.iter().any(|f| &f.name == *name))
+            })
+            .map(|(_, ls)| &**ls)
+            .filter(move |ls| ls.is_initialized() && ls.supports_feature(feature));
+        configured.chain(added)
     }
 
     pub fn supports_language_server(&self, id: LanguageServerId) -> bool {

@@ -23,6 +23,7 @@ pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
 mod http;
 mod listen;
+mod lsp_server;
 mod picker;
 mod popup;
 mod process;
@@ -129,6 +130,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     listen::stop_plugin(Some(plugin));
     watch::stop_plugin(Some(plugin));
     http::stop_plugin(Some(plugin));
+    lsp_server::stop_plugin(editor, Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -727,6 +729,7 @@ fn install(
     listen::stop_plugin(None);
     watch::stop_plugin(None);
     http::stop_plugin(None);
+    lsp_server::stop_plugin(editor, None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -2318,6 +2321,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::Window(action) => window_action(editor, action),
+            Action::LanguageServer(action) => lsp_server::apply(editor, action),
             Action::Canvas { doc, lines } => {
                 if let Some(doc) =
                     editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
@@ -2958,7 +2962,14 @@ fn run_editor_command(editor: &mut Editor, jobs: &mut Jobs, command: &str) {
 }
 
 /// Register the hooks that turn editor events into plugin events.
+/// A notification from language server `server`, for plugins listening.
+pub fn lsp_notification(server: &str, method: &str, params: &helix_lsp::jsonrpc::Params) {
+    let params = serde_json::to_value(params).unwrap_or(serde_json::Value::Null);
+    lsp_server::notification(server, method, &params);
+}
+
 pub fn register_hooks() {
+    lsp_server::install();
     register_hook!(move |event: &mut PostCommand<'_, '_>| {
         // Do not allocate a command name or lock anything unless requested.
         if wants(EventKind::PostCommand) && APPLYING.load(Ordering::Relaxed) == 0 {

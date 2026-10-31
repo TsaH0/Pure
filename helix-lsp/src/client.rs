@@ -1,7 +1,7 @@
 use crate::{
     file_operations::FileOperationsInterest,
     find_lsp_workspace, jsonrpc,
-    transport::{Payload, Transport},
+    transport::{Payload, ServerIn, ServerOut, Transport},
     Call, Error, LanguageServerId, OffsetEncoding, Result,
 };
 use log::info;
@@ -52,11 +52,38 @@ fn workspace_for_uri(uri: lsp::Url) -> WorkspaceFolder {
     }
 }
 
+/// An in-process server's stderr: nothing, ever (not the end of input).
+struct NoOutput;
+
+impl tokio::io::AsyncRead for NoOutput {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Pending
+    }
+}
+
+/// A language server `command` starting with this is served inside the
+/// editor by [`set_in_process_server`]'s function (Pure's plugins).
+pub const IN_PROCESS: &str = "\u{1}in-process:";
+
+static IN_PROCESS_SERVER: std::sync::OnceLock<fn(String, tokio::io::DuplexStream)> =
+    std::sync::OnceLock::new();
+
+/// Serve in-process language servers: `start(name, stream)` speaks LSP
+/// over `stream`, as a server program would over stdio.
+pub fn set_in_process_server(start: fn(String, tokio::io::DuplexStream)) {
+    let _ = IN_PROCESS_SERVER.set(start);
+}
+
 #[derive(Debug)]
 pub struct Client {
     id: LanguageServerId,
     name: String,
-    _process: Child,
+    /// `None` for an in-process server.
+    _process: Option<Child>,
     server_tx: UnboundedSender<Payload>,
     request_counter: AtomicU64,
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
@@ -224,26 +251,47 @@ impl Client {
         Arc<Notify>,
     )> {
         info!("Starting lsp {name:?} in root {root_path:?}");
-        // Resolve path to the binary
-        let cmd = helix_stdx::env::which(cmd)?;
+        let (reader, writer, stderr, process): (ServerOut, ServerIn, ServerOut, _) =
+            if let Some(server) = cmd.strip_prefix(IN_PROCESS) {
+                // Served inside the editor (a plugin's language server).
+                let start = IN_PROCESS_SERVER
+                    .get()
+                    .ok_or_else(|| anyhow::anyhow!("no in-process language servers"))?;
+                let (client_end, server_end) = tokio::io::duplex(1 << 20);
+                start(server.to_string(), server_end);
+                let (read, write) = tokio::io::split(client_end);
+                (Box::new(read), Box::new(write), Box::new(NoOutput), None)
+            } else {
+                // Resolve path to the binary
+                let cmd = helix_stdx::env::which(cmd)?;
 
-        let process = Command::new(cmd)
-            .envs(server_environment)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .current_dir(&root_path)
-            // make sure the process is reaped on drop
-            .kill_on_drop(true)
-            .spawn();
+                let process = Command::new(cmd)
+                    .envs(server_environment)
+                    .args(args)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .current_dir(&root_path)
+                    // make sure the process is reaped on drop
+                    .kill_on_drop(true)
+                    .spawn();
 
-        let mut process = process?;
+                let mut process = process?;
+                let stdin = process.stdin.take().expect("Failed to open stdin");
+                let stdout = process.stdout.take().expect("Failed to open stdout");
+                let stderr = process.stderr.take().expect("Failed to open stderr");
+                (
+                    Box::new(stdout),
+                    Box::new(stdin),
+                    Box::new(stderr),
+                    Some(process),
+                )
+            };
 
         // TODO: do we need bufreader/writer here? or do we use async wrappers on unblock?
-        let writer = BufWriter::new(process.stdin.take().expect("Failed to open stdin"));
-        let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
-        let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
+        let writer = BufWriter::new(writer);
+        let reader = BufReader::new(reader);
+        let stderr = BufReader::new(stderr);
 
         let (server_rx, server_tx, initialize_notify, shutdown_flushed) =
             Transport::start(reader, writer, stderr, id, name.clone());

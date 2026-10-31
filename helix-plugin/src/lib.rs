@@ -642,6 +642,8 @@ pub enum Action {
         id: u32,
         request: http::HttpRequest,
     },
+    /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
+    LanguageServer(v05::LspAction),
     /// A split (API 0.5 `windows`).
     Window(v05::WindowAction),
     /// Draw lines instead of a plugin buffer's text (`None` stops).

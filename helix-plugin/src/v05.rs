@@ -255,6 +255,32 @@ pub enum Callback2 {
     },
 }
 
+/// A plugin as or around language servers (API 0.5 `lsp`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LspAction {
+    Serve {
+        plugin: String,
+        languages: Vec<String>,
+        capabilities: String,
+    },
+    Listen {
+        plugin: String,
+        methods: Vec<String>,
+    },
+    Filter {
+        plugin: String,
+        methods: Vec<String>,
+    },
+    Start {
+        plugin: String,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    },
+}
+
 /// What a plugin does to splits (API 0.5 `windows`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowAction {
@@ -1729,6 +1755,126 @@ impl State {
             request,
         });
         Ok(id)
+    }
+}
+
+impl State {
+    /// The plugin registered service `name` (to serve the editor through).
+    fn need_own_service(&self, name: &str, function: &str) -> Result<(), String> {
+        if self.v05.own_services.iter().any(|s| s.name == name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "{function} needs the service \"{name}\": services.register it first"
+            ))
+        }
+    }
+
+    fn check_languages(languages: &[String]) -> Result<(), String> {
+        if languages.is_empty() || languages.len() > 64 {
+            return Err("1 to 64 languages".into());
+        }
+        if let Some(bad) = languages.iter().find(|l| l.is_empty() || l.len() > 64) {
+            return Err(format!("invalid language '{bad}'"));
+        }
+        Ok(())
+    }
+
+    fn check_methods(methods: &[String]) -> Result<(), String> {
+        if methods.is_empty() || methods.len() > 256 {
+            return Err("1 to 256 methods".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lsp_serve(
+        &mut self,
+        languages: Vec<String>,
+        capabilities: String,
+    ) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp", "lsp.serve")?;
+        Self::check_languages(&languages)?;
+        check_json("the capabilities", &capabilities)?;
+        if !capabilities.trim_start().starts_with('{') {
+            return Err("the capabilities must be a JSON object".into());
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Serve {
+                plugin,
+                languages,
+                capabilities,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_listen(&mut self, methods: Vec<String>) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp-notification", "lsp.listen")?;
+        Self::check_methods(&methods)?;
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Listen {
+                plugin,
+                methods,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_filter(&mut self, methods: Vec<String>) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need_own_service("lsp-filter", "lsp.filter")?;
+        Self::check_methods(&methods)?;
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Filter {
+                plugin,
+                methods,
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn lsp_start(
+        &mut self,
+        name: String,
+        command: String,
+        args: Vec<String>,
+        languages: Vec<String>,
+        config: Option<String>,
+    ) -> Result<(), String> {
+        self.need_lsp()?;
+        self.need(crate::Permission::Process)?;
+        let allowed = match &self.process {
+            crate::ProcessGrant::Any => true,
+            crate::ProcessGrant::Only(programs) => programs.contains(&command),
+            crate::ProcessGrant::None => false,
+        };
+        if !allowed {
+            return Err(format!(
+                "starting '{command}' needs it in allow-process in plugins.toml"
+            ));
+        }
+        if !crate::is_valid_name(&name) {
+            return Err(format!(
+                "invalid server name '{name}': use a-z, 0-9, '-' and '_'"
+            ));
+        }
+        Self::check_languages(&languages)?;
+        if let Some(config) = &config {
+            check_json("the config", config)?;
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::LanguageServer(LspAction::Start {
+                plugin,
+                name,
+                command,
+                args,
+                languages,
+                config,
+            }));
+        Ok(())
     }
 }
 

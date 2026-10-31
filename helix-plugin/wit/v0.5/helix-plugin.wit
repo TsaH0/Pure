@@ -923,6 +923,30 @@ interface lsp {
   /// Send request `method` with `params` (JSON) to `server` (default: the
   /// first that supports it).
   request: func(doc: document-id, server: option<string>, method: string, params: string) -> result<request-id, string>;
+
+  /// Be a language server (named after the plugin) for documents in
+  /// `languages`, like none-ls: the editor sends requests (hover, code
+  /// actions, definition, rename, formatting...) to this plugin's service
+  /// "lsp" (`services.register` it first), the method being the LSP method
+  /// and the payload its params (JSON); the reply (JSON) is the result.
+  /// `capabilities` is the `ServerCapabilities` (JSON) it has; set
+  /// `"positionEncoding": "utf-32"` for char positions. Notifications
+  /// aren't passed on (use the editor's events).
+  serve: func(languages: list<string>, capabilities: string) -> result<_, string>;
+  /// Hear these notifications from every language server
+  /// (`window/logMessage`, `$/progress`, a server's own) through this
+  /// plugin's service "lsp-notification": the method, and the payload
+  /// `{"server": name, "params": ...}`. "*" for all.
+  listen: func(methods: list<string>) -> result<_, string>;
+  /// Change the results of these requests the editor sends, before it uses
+  /// them, through this plugin's service "lsp-filter": the method, the
+  /// payload `{"server": name, "result": ...}`; the reply is the result to
+  /// use. A failing filter leaves the result as it was.
+  filter: func(methods: list<string>) -> result<_, string>;
+  /// Start language server program `command` for documents in `languages`,
+  /// as if `languages.toml` configured it (`config`: its settings, JSON).
+  /// Needs `allow-process` for the command too.
+  start: func(name: string, command: string, args: list<string>, languages: list<string>, config: option<string>) -> result<_, string>;
 }
 
 /// API 0.5 exports: synchronous hooks. Each has a 100 ms budget (250 ms

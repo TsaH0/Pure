@@ -115,6 +115,23 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
         if config.contains("provide-bad") {
             helix::plugin::services::register("Bad Name", "1.0.0", &[])?;
         }
+        // A language server for Rust: hover and definition; with
+        // `lsp-filter`, hover results are changed on their way back.
+        if config.contains("lsp-server") {
+            helix::plugin::services::register("lsp", "1.0.0", &[])?;
+            helix::plugin::lsp::serve(
+                &["rust".to_string(), "markdown".to_string()],
+                r#"{"hoverProvider": true, "definitionProvider": true, "positionEncoding": "utf-32"}"#,
+            )?;
+        }
+        if config.contains("lsp-filter") {
+            helix::plugin::services::register("lsp-filter", "1.0.0", &[])?;
+            helix::plugin::lsp::filter(&["textDocument/hover".to_string()])?;
+        }
+        if config.contains("lsp-listen") {
+            helix::plugin::services::register("lsp-notification", "1.0.0", &[])?;
+            helix::plugin::lsp::listen(&["window/logMessage".to_string()])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -199,6 +216,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "watch",
                 "lsp-servers",
                 "lsp-request",
+                "lsp-start",
                 "http",
                 "config",
             ]
@@ -847,6 +865,14 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("http:{id}"));
                 Ok(())
             }
+            // `lsp-start name command`: for Markdown documents.
+            "lsp-start" => helix::plugin::lsp::start(
+                &args[0],
+                &args[1],
+                &[],
+                &["markdown".to_string()],
+                None,
+            ),
             "lsp-request" => {
                 let doc = host::current_document().ok_or("no document")?;
                 let id = helix::plugin::lsp::request(doc, None, &args[0], args.get(1).map_or("null", String::as_str))?;
@@ -1227,6 +1253,33 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
         payload: String,
     ) -> Result<String, String> {
         record(format!("service:{caller}:{service}:{method}:{payload}"));
+        match service.as_str() {
+            "testplugin3.lsp" => {
+                return match method.as_str() {
+                    "textDocument/hover" => Ok(r#"{"contents": {"kind": "markdown", "value": "from the plugin"}}"#.into()),
+                    "textDocument/definition" => {
+                        // The same document, line 0, chars 3-7.
+                        let uri = payload
+                            .split("\"uri\":\"")
+                            .nth(1)
+                            .and_then(|rest| rest.split('"').next())
+                            .ok_or("no uri")?;
+                        Ok(format!(
+                            r#"{{"uri": "{uri}", "range": {{"start": {{"line": 0, "character": 3}}, "end": {{"line": 0, "character": 7}}}}}}"#
+                        ))
+                    }
+                    _ => Err(format!("unsupported {method}")),
+                };
+            }
+            "testplugin3.lsp-filter" => {
+                return Ok(r#"{"contents": {"kind": "markdown", "value": "filtered"}}"#.into());
+            }
+            "testplugin3.lsp-notification" => {
+                host::set_status(&format!("notified:{method}"));
+                return Ok("null".into());
+            }
+            _ => {}
+        }
         match method.as_str() {
             "echo" => Ok(payload),
             "fail" => Err("failed on purpose".into()),

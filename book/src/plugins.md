@@ -247,6 +247,11 @@ machine, such as the Competitive Companion browser extension. It listens
 on 127.0.0.1 only and accepts only JSON requests addressed to `localhost`,
 so web pages can't reach it.
 
+`allow-lsp` also lets a plugin be a language server itself (its hover,
+code actions, go-to-definition and the like show as any server's), hear
+language servers' notifications and change their replies before Pure uses
+them. Starting a language server program needs `allow-process` for it too.
+
 `allow-network` lets a plugin send HTTPS requests to the hosts listed
 (`*.example.org` means its subdomains). The editor sends them with `curl`,
 which must be installed; it never follows redirects and never connects to
