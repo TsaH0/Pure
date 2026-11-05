@@ -57,6 +57,11 @@ Ready-made examples are in
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `find-char` | `f`, `F`, `t`, `T` like Vim's: on the cursor's line, optional smart case; `repeat` and `repeat-reverse` (bind them to `;` and `,` if you like) |
 | `vim-registers` | Vim's numbered registers (`"0`, `"1`–`"9`, `"-`), done by a plugin; the same as `editor.registers = "vim"` |
+| `toggleterm` | Like toggleterm and vim-slime: `space t` opens a terminal below (your shell, or the `command` setting, e.g. a REPL) and closes it; `space ;` sends the selections or the line to it (needs `allow-process`) |
+| `dap-ui` | Like nvim-dap-ui: while the program you debug is stopped, a panel below shows its stack and local variables (needs `allow-debug = true`) |
+| `statusbar` | Like lualine and bufferline: a statusline in the mode's colours (mode, branch, file, diagnostics, language, position) and a tab line of the open buffers (`tabline = false` turns it off) |
+| `click` | Mouse actions: ctrl+click goes to the definition, alt+click to the references, a click on the gutter folds or unfolds the block there |
+| `undotree` | Like undotree: `space U` shows every revision of the undo tree, branches included; pick one to go back (or forward) to it |
 | `script` | Like `init.lua`: script the editor in [Rhai](https://rhai.rs) from `plugins.toml` or `init.rhai` in the config directory: define commands, bind keys, react to events; `:script/eval <code>` runs a line (see below) |
 | `markdown` | Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden `**`/backticks/link URLs); `toggle` |
 
@@ -140,6 +145,33 @@ with its register and count, to add to it or cancel it (`vim-registers`).
 A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
 unless you have bound something in that menu yourself: then your menu
 stays.
+
+`:terminal` (or `:term`) opens a terminal in a split below, running your
+shell or the program given (`:terminal python3`), like Neovim's. In insert
+mode every key goes to the program, Esc included, so vim, htop or a REPL
+work inside it; `C-\ C-n` goes back to normal mode, where the editor's
+keys work again (`C-w k` to the window above, `i` to type again). It
+follows the split's size, the mouse wheel scrolls back through what went
+off its top, and closing its buffer (`:buffer-close`) ends the program.
+Plugins can open terminals and write to them (`toggleterm`).
+
+Other programs can drive a running editor, as with Neovim's `--listen`.
+Start it with `pure --listen` (or `--listen=/path/to/socket`): it then
+takes requests on a Unix socket only you can use, and programs in its
+terminals find the socket in `$PURE_LISTEN`. From a shell:
+
+```sh
+pure --remote src/main.rs          # open files in it
+pure --remote-command 'write'      # run a command, as typed after `:`
+pure --remote-send 'ggdd'          # play keys, as if typed
+pure --remote-state                # its mode, file, cursor and documents, as JSON
+```
+
+(`--server=<path>` names the socket when `$PURE_LISTEN` isn't set.) Other
+programs can speak to the socket directly: one JSON request per line, such
+as `{"id": 1, "method": "command", "params": {"line": "open a.rs"}}`
+(methods `command`, `keys`, `open` and `state`), answered by one line with
+`result` or `error`.
 
 Code can be folded, like Vim: `zc` (or `zf`) folds the selected lines, or
 the syntax node around the cursor (a function, a block; the indented lines
@@ -234,6 +266,9 @@ allow-key-override = true        # its keys may take precedence over yours
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
 
+[dap-ui]
+allow-debug = true               # it may send requests to the debugger
+
 [markdown]
 lazy = false                     # load at startup even if it would wait
 
@@ -259,6 +294,11 @@ so web pages can't reach it.
 code actions, go-to-definition and the like show as any server's), hear
 language servers' notifications and change their replies before Pure uses
 them. Starting a language server program needs `allow-process` for it too.
+
+`allow-debug` lets a plugin send requests to a running debugger
+(`:debug-start`), such as evaluating an expression or listing variables,
+which can run code in the program being debugged. Seeing the stack and
+setting breakpoints need only the plugin's `debug` permission.
 
 `allow-network` lets a plugin send HTTPS requests to the hosts listed
 (`*.example.org` means its subdomains). The editor sends them with `curl`,

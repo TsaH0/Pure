@@ -484,6 +484,10 @@ pub struct Config {
     pub rainbow_brackets: bool,
     /// Whether to enable Kitty Keyboard Protocol
     pub kitty_keyboard_protocol: KittyKeyboardProtocolConfig,
+    /// Keys pressed while another is held (`"p+s"`: hold `p`, press `s`),
+    /// per mode, with the commands they run. Needs a terminal that reports
+    /// key releases (the kitty keyboard protocol).
+    pub chords: HashMap<crate::document::Mode, HashMap<String, ChordCommands>>,
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
@@ -613,6 +617,23 @@ impl Default for SmartTabConfig {
         SmartTabConfig {
             enable: true,
             supersede_menu: false,
+        }
+    }
+}
+
+/// What a chord runs: a command or several.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChordCommands {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ChordCommands {
+    pub fn commands(&self) -> &[String] {
+        match self {
+            Self::One(command) => std::slice::from_ref(command),
+            Self::Many(commands) => commands,
         }
     }
 }
@@ -1344,6 +1365,7 @@ impl Default for Config {
             editor_config: true,
             rainbow_brackets: false,
             kitty_keyboard_protocol: Default::default(),
+            chords: HashMap::new(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
         }
@@ -1430,6 +1452,8 @@ pub struct Editor {
     /// Statusline text from plugins, by `plugin/segment` (the `plugins`
     /// statusline element).
     pub plugin_statusline: BTreeMap<String, String>,
+    /// Statuslines, a tab line and winbars plugins draw.
+    pub plugin_bars: crate::bars::PluginBars,
     /// Plugin panels, at most one per dock (Pure).
     pub panels: Vec<crate::sidebar::Sidebar>,
 
@@ -1582,6 +1606,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             plugin_statusline: BTreeMap::new(),
+            plugin_bars: crate::bars::PluginBars::default(),
             panels: Vec::new(),
             workspace_trust,
             disk_change_warned: HashMap::new(),
@@ -2583,9 +2608,29 @@ impl Editor {
     }
 
     pub fn resize(&mut self, area: Rect) {
+        // Views gaining or losing a plugin's winbar need their areas redone.
+        if !self.plugin_bars.statuslines.is_empty() || !self.plugin_bars.winbars.is_empty() {
+            let tree = &self.tree;
+            self.plugin_bars
+                .statuslines
+                .retain(|view, _| tree.contains(*view));
+            self.plugin_bars
+                .winbars
+                .retain(|view, _| tree.contains(*view));
+        }
+        let bars = &self.plugin_bars;
+        let mut changed = false;
+        for (view, _) in self.tree.views_mut() {
+            let winbar = bars.winbar(view.id).is_some();
+            changed |= view.winbar != winbar;
+            view.winbar = winbar;
+        }
         if self.tree.resize(area) {
             self._refresh();
-        };
+        } else if changed {
+            self.tree.recalculate();
+            self._refresh();
+        }
     }
 
     pub fn focus(&mut self, view_id: ViewId) {

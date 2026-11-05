@@ -42,6 +42,11 @@ impl Layer {
     fn idx(self) -> usize {
         self.0 as usize
     }
+
+    /// A number for the layer, unique among a syntax's layers.
+    pub fn index(self) -> u32 {
+        self.0
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -132,6 +137,13 @@ impl Syntax {
 
     pub fn root(&self) -> Layer {
         self.root
+    }
+
+    /// Every layer: the root and the injected ones.
+    pub fn layers(&self) -> impl Iterator<Item = (Layer, &LayerData)> {
+        self.layers
+            .iter()
+            .map(|(idx, layer)| (Layer(idx as u32), layer))
     }
 
     pub fn tree(&self) -> &Tree {
@@ -261,6 +273,18 @@ impl LayerData {
     /// returns `Some` when passed the layer's language in `LanguageLoader::get_config`.
     pub fn tree(&self) -> Option<&Tree> {
         self.parse_tree.as_ref()
+    }
+
+    /// The byte ranges of the document this layer covers.
+    pub fn byte_ranges(&self) -> impl Iterator<Item = Range> + '_ {
+        self.ranges
+            .iter()
+            .map(|range| range.start_byte..range.end_byte)
+    }
+
+    /// The layer this one is injected into; `None` for the root.
+    pub fn parent(&self) -> Option<Layer> {
+        self.parent
     }
 
     /// A canonical textual representation of the locals of this layer, used in tests.

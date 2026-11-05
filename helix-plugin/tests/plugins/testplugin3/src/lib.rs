@@ -132,6 +132,17 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             helix::plugin::services::register("lsp-notification", "1.0.0", &[])?;
             helix::plugin::lsp::listen(&["window/logMessage".to_string()])?;
         }
+        // Clicks and scrolls, in the status; with `mouse-take` taken from
+        // the editor.
+        if config.contains("mouse") {
+            helix::plugin::services::register("mouse", "1.0.0", &[])?;
+            helix::plugin::mouse::listen(&["down".to_string(), "scroll".to_string()])?;
+        }
+        // Debugger events, recorded.
+        if config.contains("debug-listen") {
+            helix::plugin::services::register("debug-event", "1.0.0", &[])?;
+            helix::plugin::debug::listen(&["*".to_string()])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -196,6 +207,12 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "win",
                 "canvas",
                 "fold",
+                "history",
+                "term",
+                "debug",
+                "layers",
+                "bar",
+                "mouse-off",
                 "next-key",
                 "count-commands",
                 "call",
@@ -603,6 +620,163 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     _ => Err("which?".into()),
                 }
             }
+            // `layers` (in the status), `layers at POS`, `layers query N QUERY`.
+            "layers" => {
+                use helix::plugin::syntax;
+                let doc = host::current_document().ok_or("no document")?;
+                match args.first().map(String::as_str) {
+                    Some("at") => {
+                        let pos: u32 = args.get(1).ok_or("a position")?.parse().map_err(|_| "a position".to_string())?;
+                        let layer = syntax::layer_at(doc, pos, pos)?;
+                        let root = match layer {
+                            Some(layer) => syntax::layer_root(doc, layer)?.kind,
+                            None => "none".into(),
+                        };
+                        host::set_status(&format!("layer-at:{layer:?}:{root}"));
+                    }
+                    Some("query") => {
+                        let layer: u32 = args.get(1).ok_or("a layer")?.parse().map_err(|_| "a layer".to_string())?;
+                        let found = syntax::layer_query(doc, layer, &args[2..].join(" "), None)?;
+                        let names = found
+                            .iter()
+                            .flat_map(|m| m.captures.iter().map(|c| format!("{}={}..{}", c.name, c.node.start, c.node.end)))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("layer-query:{}", names.join(",")));
+                    }
+                    _ => {
+                        let layers = syntax::layers(doc)?
+                            .iter()
+                            .map(|layer| format!("{}:{}@{:?}{:?}", layer.index, layer.language, layer.parent, layer.ranges))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("layers:{}", layers.join(" ")));
+                    }
+                }
+                Ok(())
+            }
+            // `bar statusline|tabline|winbar [view|all] [off]`.
+            "bar" => {
+                use helix::plugin::bars::{self, Bar, Span};
+                let span = |text: &str, scope: &str| Span { text: text.into(), scope: scope.into() };
+                let view = match args.get(1).map(String::as_str) {
+                    None | Some("all") | Some("off") => None,
+                    Some(view) => Some(view.parse::<u64>().map_err(|_| "a view".to_string())?),
+                };
+                let bar = (!args.iter().any(|a| a == "off")).then(|| Bar {
+                    left: vec![span("L%{line}:%{column} %{filename}%{modified}", "#ff8800")],
+                    center: vec![span("C%{lines}", "")],
+                    right: vec![span("%{mode}R 100%%", "ui.statusline.normal")],
+                });
+                match args.first().map(String::as_str) {
+                    Some("statusline") => bars::set_statusline(view, bar.as_ref()),
+                    Some("tabline") => bars::set_tabline(bar.as_ref()),
+                    Some("winbar") => bars::set_winbar(view, bar.as_ref()),
+                    _ => Err("which bar?".into()),
+                }
+            }
+            // `debug session`, `debug breakpoints`, `debug bp PATH LINE...`,
+            // `debug eval EXPR`.
+            "debug" => {
+                use helix::plugin::debug;
+                match args.first().map(String::as_str) {
+                    Some("session") => {
+                        let status = match debug::session()? {
+                            None => "session:none".to_string(),
+                            Some(s) => format!(
+                                "session:{}:thread={:?}:frames={}",
+                                s.adapter,
+                                s.thread,
+                                s.frames
+                                    .iter()
+                                    .map(|f| format!("{}@{}", f.name, f.line))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                        };
+                        host::set_status(&status);
+                        Ok(())
+                    }
+                    Some("breakpoints") => {
+                        let list = debug::breakpoints()?
+                            .iter()
+                            .map(|b| format!("{}:{}", b.path.rsplit('/').next().unwrap_or_default(), b.line))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("breakpoints:{}", list.join(",")));
+                        Ok(())
+                    }
+                    Some("bp") => {
+                        let path = args.get(1).ok_or("a path")?;
+                        let breakpoints = args[2..]
+                            .iter()
+                            .map(|line| debug::Breakpoint {
+                                path: String::new(),
+                                line: line.parse().unwrap_or(0),
+                                condition: None,
+                                log_message: None,
+                                verified: false,
+                            })
+                            .collect::<Vec<_>>();
+                        debug::set_breakpoints(path, &breakpoints)
+                    }
+                    Some("eval") => {
+                        let frame = debug::session()?
+                            .and_then(|s| s.frames.first().map(|f| format!(r#", "frameId": {}"#, f.id)))
+                            .unwrap_or_default();
+                        let arguments = format!(
+                            r#"{{"expression": "{}"{frame}, "context": "watch"}}"#,
+                            args[1..].join(" ")
+                        );
+                        let id = debug::request("evaluate", &arguments)?;
+                        host::set_status(&format!("debug-request:{id}"));
+                        Ok(())
+                    }
+                    _ => Err("which?".into()),
+                }
+            }
+            // `term open ARGV...`, `term write ID TEXT` (Enter after it),
+            // `term screen ID`, `term exit ID`, `term close ID`.
+            "term" => {
+                use helix::plugin::terminal;
+                let id = |i: usize| -> Result<u32, String> {
+                    args.get(i).ok_or("an id")?.parse().map_err(|_| "an id".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("open") => {
+                        let id = terminal::open(&args[1..], Some(helix::plugin::windows::Side::Below))?;
+                        host::set_status(&format!("term:{id}"));
+                    }
+                    Some("write") => terminal::write(id(1)?, &format!("{}\r", args[2..].join(" ")))?,
+                    Some("screen") => {
+                        let rows = terminal::screen(id(1)?)?;
+                        host::set_status(&format!("screen:{}", rows.join("|").trim_end_matches('|')));
+                    }
+                    Some("exit") => host::set_status(&format!("exit:{:?}", terminal::exit_status(id(1)?)?)),
+                    Some("close") => terminal::close(id(1)?)?,
+                    _ => return Err("which?".into()),
+                }
+                Ok(())
+            }
+            // `history` (the tree, in the status) or `history N` (jump).
+            "history" => {
+                use helix::plugin::history;
+                let doc = host::current_document().ok_or("no document")?;
+                if let Some(revision) = args.first() {
+                    let revision = revision.parse().map_err(|_| "a revision".to_string())?;
+                    return history::jump(doc, revision);
+                }
+                let tree = history::revisions(doc)?;
+                let parents = tree
+                    .revisions
+                    .iter()
+                    .map(|revision| format!("{}+{}-{}", revision.parent, revision.inserted, revision.deleted))
+                    .collect::<Vec<_>>();
+                let timed = tree.revisions.iter().all(|revision| revision.time > 1_600_000_000_000);
+                host::set_status(&format!(
+                    "history:{} at {} timed:{timed}",
+                    parents.join(","),
+                    tree.current
+                ));
+                Ok(())
+            }
             // `fold first last`, `fold off first last`, `fold list`.
             "fold" => {
                 use helix::plugin::folds;
@@ -719,6 +893,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("discovered:{}", found.join(",")));
                 Ok(())
             }
+            "mouse-off" => helix::plugin::mouse::listen(&[]),
             "register-late" => helix::plugin::services::register("late", "1.0.0", &[]),
             "mark" => {
                 // mark position before|after
@@ -1294,6 +1469,15 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
             }
             "testplugin3.lsp-filter" => {
                 return Ok(r#"{"contents": {"kind": "markdown", "value": "filtered"}}"#.into());
+            }
+            "testplugin3.mouse" => {
+                host::set_status(&format!("mouse:{method}:{payload}"));
+                let take = CONFIG.with_borrow(|config| config.contains("mouse-take"));
+                return Ok(take.to_string());
+            }
+            "testplugin3.debug-event" => {
+                record(format!("debug-event:{method}"));
+                return Ok("null".into());
             }
             "testplugin3.lsp-notification" => {
                 host::set_status(&format!("notified:{method}"));

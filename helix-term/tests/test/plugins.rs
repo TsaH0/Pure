@@ -4888,3 +4888,536 @@ async fn plugins_fold_lines() -> anyhow::Result<()> {
     assert_eq!(status(&app).0, "folds:");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_read_the_undo_tree_and_jump_in_it() -> anyhow::Result<()> {
+    // Revision 1 is the test's text going in with the first insert; then
+    // two branches from it: "y" inserted, undone, and "z" inserted.
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, "ix<esc>").await;
+    let first = text(&app);
+    keys(&mut app, "iy<esc>").await;
+    let second = text(&app);
+    keys(&mut app, "uiz<esc>").await;
+    assert!(text(&app).contains('z') && !text(&app).contains('y'));
+    keys(&mut app, ":plugin-run testplugin3/history<ret>").await;
+    let (tree, _) = status(&app);
+    assert!(tree.starts_with("history:0+0-0,0+"), "{tree}");
+    assert!(tree.ends_with(",1+1-0,1+1-0 at 3 timed:true"), "{tree}");
+    keys(&mut app, ":plugin-run testplugin3/history 2<ret>").await;
+    assert_eq!(text(&app), second);
+    keys(&mut app, ":plugin-run testplugin3/history<ret>").await;
+    assert!(
+        status(&app).0.ends_with("at 2 timed:true"),
+        "{}",
+        status(&app).0
+    );
+    keys(&mut app, ":plugin-run testplugin3/history 1<ret>").await;
+    assert_eq!(text(&app), first);
+    keys(&mut app, ":plugin-run testplugin3/history 9<ret>").await;
+    assert!(
+        status(&app).0.contains("no revision 9"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}
+
+/// Send a mouse event at `row`, `column` of the screen.
+#[cfg(not(windows))]
+async fn mouse(app: &mut Application, kind: termina::event::MouseEventKind, row: u16, column: u16) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+    tx.send(Ok(termina::event::Event::Mouse(
+        termina::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: termina::event::Modifiers::NONE,
+        },
+    )))
+    .unwrap();
+    assert!(app.event_loop_until_idle(&mut stream).await);
+}
+
+/// Where char `pos` of the first line is on the screen.
+#[cfg(not(windows))]
+fn screen_pos(app: &Application, pos: u16) -> (u16, u16) {
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    (
+        view.area.top(),
+        view.area.left() + view.gutter_offset(doc) + pos,
+    )
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_and_take_mouse_events() -> anyhow::Result<()> {
+    use termina::event::{MouseButton, MouseEventKind};
+    let left = MouseEventKind::Down(MouseButton::Left);
+
+    // Heard, then the editor moves the cursor as usual.
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "[testplugin3]\nmouse = true\n");
+    let (row, column) = screen_pos(&app, 4);
+    mouse(&mut app, left, row, column).await;
+    let (heard, _) = status(&app);
+    assert!(heard.starts_with("mouse:down:"), "{heard}");
+    for part in [
+        r#""pos":4"#,
+        r#""line":0"#,
+        r#""gutter":false"#,
+        r#""button":"left""#,
+    ] {
+        assert!(heard.contains(part), "{part} in {heard}");
+    }
+    assert_eq!(cursor(&app), 4);
+    // On the gutter: no position, but the line.
+    let (row, _) = screen_pos(&app, 0);
+    mouse(&mut app, left, row, 0).await;
+    let (heard, _) = status(&app);
+    assert!(
+        heard.contains(r#""gutter":true"#) && heard.contains(r#""pos":null"#),
+        "{heard}"
+    );
+    assert!(heard.contains(r#""line":0"#), "{heard}");
+    mouse(&mut app, MouseEventKind::ScrollDown, row, column).await;
+    assert!(
+        status(&app).0.contains(r#""direction":"down""#),
+        "{}",
+        status(&app).0
+    );
+    // Kinds not listened to aren't heard (and a click clears the status).
+    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), row, column).await;
+    assert!(app.editor.get_status().is_none());
+    keys(&mut app, ":plugin-run testplugin3/mouse-off<ret>").await;
+    mouse(&mut app, left, row, column).await;
+    assert!(app.editor.get_status().is_none());
+
+    // Taken: the cursor stays.
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne two\n",
+        None,
+        "[testplugin3]\nmouse = true\nmouse-take = true\n",
+    );
+    let (row, column) = screen_pos(&app, 4);
+    mouse(&mut app, left, row, column).await;
+    assert!(status(&app).0.starts_with("mouse:down:"));
+    assert_eq!(cursor(&app), 0);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn click_example_folds_from_the_gutter() -> anyhow::Result<()> {
+    use termina::event::{MouseButton, MouseEventKind};
+    let left = MouseEventKind::Down(MouseButton::Left);
+    let (mut app, _dir) = app_with_example("click", "");
+    keys(&mut app, "%ca<ret>  b<ret>c<esc>gg").await;
+    let folds = |app: &Application| helix_view::doc!(app.editor).folds.len();
+    let (row, _) = screen_pos(&app, 0);
+    mouse(&mut app, left, row, 0).await;
+    assert_eq!(folds(&app), 1, "{:?}", app.editor.get_status());
+    mouse(&mut app, left, row, 0).await;
+    assert_eq!(folds(&app), 0);
+    // A plain click is the editor's: it moves the cursor.
+    let (row, column) = screen_pos(&app, 1);
+    mouse(&mut app, left, row + 1, column).await;
+    assert_eq!(cursor(&app), 3);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_draw_statuslines_tablines_and_winbars() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    let rows = |app: &Application| screen_rows(app);
+    let statusline = |app: &Application| {
+        let rows = rows(app);
+        rows[rows.len() - 2].clone()
+    };
+    keys(&mut app, ":plugin-run testplugin3/bar statusline<ret>l").await;
+    let line = statusline(&app);
+    assert!(line.starts_with("L1:2 [scratch]"), "{line:?}");
+    assert!(line.contains("C2"), "{line:?}");
+    assert!(line.trim_end().ends_with("NORR 100%"), "{line:?}");
+    // In insert mode, modified.
+    keys(&mut app, "ix").await;
+    assert!(
+        statusline(&app).starts_with("L1:3 [scratch][+]"),
+        "{:?}",
+        statusline(&app)
+    );
+    keys(&mut app, "<esc>").await;
+
+    // A winbar takes the view's top row: the text moves down.
+    let height = app.editor.tree.get(app.editor.tree.focus).area.height;
+    keys(&mut app, ":plugin-run testplugin3/bar winbar<ret>").await;
+    let screen = rows(&app);
+    assert!(screen[0].starts_with("L1:"), "{screen:?}");
+    assert!(screen[1].contains("oxne"), "{screen:?}");
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.height,
+        height - 1
+    );
+    // And a tab line above it.
+    keys(&mut app, ":plugin-run testplugin3/bar tabline<ret>").await;
+    let screen = rows(&app);
+    assert!(
+        screen[0].starts_with("L1:") && screen[1].starts_with("L1:"),
+        "{screen:?}"
+    );
+    assert!(screen[2].contains("oxne"), "{screen:?}");
+
+    // Off again: Pure's own.
+    for bar in ["statusline", "winbar", "tabline"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bar {bar} off<ret>"),
+        )
+        .await;
+    }
+    let screen = rows(&app);
+    assert!(screen[0].contains("oxne"), "{screen:?}");
+    assert!(!statusline(&app).starts_with('L'), "{:?}", statusline(&app));
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.height,
+        height
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statusbar_example_draws_a_statusline_and_buffer_tabs() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_example("statusbar", "");
+    keys(&mut app, "l").await;
+    let rows = screen_rows(&app);
+    let statusline = &rows[rows.len() - 2];
+    assert!(statusline.starts_with(" NOR "), "{statusline:?}");
+    assert!(statusline.trim_end().ends_with("1:2"), "{statusline:?}");
+    assert!(
+        rows[0].contains(" [scratch] ") && rows[0].contains("1 buffers"),
+        "{:?}",
+        rows[0]
+    );
+    keys(&mut app, ":new<ret>").await;
+    let rows = screen_rows(&app);
+    assert!(rows[0].contains("2 buffers"), "{:?}", rows[0]);
+    assert_eq!(rows[0].matches("[scratch]").count(), 2, "{:?}", rows[0]);
+    keys(&mut app, "i").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows[rows.len() - 2].starts_with(" INS "),
+        "{:?}",
+        rows[rows.len() - 2]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_see_injected_languages() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[#|]# T\n\n```rust\nfn main() {}\n```\n", None, "");
+    keys(&mut app, ":set-language markdown<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/layers<ret>").await;
+    let (layers, _) = status(&app);
+    assert!(layers.starts_with("layers:0:markdown@None"), "{layers}");
+    let rust = layers
+        .split(' ')
+        .find(|layer| layer.contains(":rust@"))
+        .unwrap_or_else(|| panic!("no rust layer in {layers}"));
+    assert!(rust.contains("@Some(0)"), "{rust}");
+    let index = rust.split(':').next().unwrap();
+    // "fn main() {}" starts at char 13.
+    keys(&mut app, ":plugin-run testplugin3/layers at 16<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        format!("layer-at:Some({index}):source_file")
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/layers query {index} (function_item name: (identifier) @name)<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, "layer-query:name=16..20");
+    keys(&mut app, ":plugin-run testplugin3/layers query 99 (x)<ret>").await;
+    assert!(
+        status(&app).0.contains("no syntax layer 99"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}
+
+/// A C program to debug and gdb (in its DAP mode) as C's debugger, the
+/// source open; `None` without gcc or gdb.
+#[cfg(unix)]
+async fn debuggable(app: &mut Application) -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
+    let have = |program: &str| {
+        std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_ok()
+    };
+    if !have("gcc") || !have("gdb") {
+        return None;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("main.c");
+    std::fs::write(
+        &source,
+        "int main(void) {\n  int x = 41;\n  x++;\n  return x - 42;\n}\n",
+    )
+    .unwrap();
+    let program = dir.path().join("main");
+    let built = std::process::Command::new("gcc")
+        .args(["-g", "-O0", "-o"])
+        .arg(&program)
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(built.success());
+    // C debugged by gdb (Pure's default is lldb-dap), stopping at main.
+    let gdb = r#"
+[[language]]
+name = "c"
+[language.debugger]
+name = "gdb"
+transport = "stdio"
+command = "gdb"
+args = ["--interpreter=dap", "-q", "-nx"]
+[[language.debugger.templates]]
+name = "binary"
+request = "launch"
+completion = ["filename"]
+args = { program = "{0}", stopAtBeginningOfMainSubprogram = true }
+"#;
+    app.editor
+        .syn_loader
+        .store(std::sync::Arc::new(helpers::test_syntax_loader(Some(
+            gdb.into(),
+        ))));
+    keys(app, &format!(":open {}<ret>", source.display())).await;
+    Some((dir, source, program))
+}
+
+/// A real debug session (gdb's DAP mode) seen and driven by a plugin.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_see_and_drive_the_debugger() -> anyhow::Result<()> {
+    let (mut app, _plugins) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""debug""#,
+        "[testplugin3]\nallow-debug = true\ndebug-listen = true\n",
+    );
+    let Some((_dir, source, program)) = debuggable(&mut app).await else {
+        return Ok(());
+    };
+
+    // Breakpoints, before and without a session.
+    keys(&mut app, ":plugin-run testplugin3/debug session<ret>").await;
+    assert_eq!(status(&app).0, "session:none");
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/debug bp {} 2<ret>",
+            source.display()
+        ),
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_eq!(status(&app).0, "breakpoints:main.c:2");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x<ret>").await;
+    assert!(
+        status(&app).0.contains("no debug session"),
+        "{}",
+        status(&app).0
+    );
+
+    // Stopped at the start of main, then a step (gdb takes breakpoints
+    // only while stopped): the stack, and an expression evaluated.
+    keys(
+        &mut app,
+        &format!(":debug-start binary {}<ret>", program.display()),
+    )
+    .await;
+    let wait_for_line = async |app: &mut Application, line: u32| {
+        let mut session = String::new();
+        for _ in 0..100 {
+            keys(app, ":plugin-run testplugin3/debug session<ret>").await;
+            session = status(app).0;
+            if session.contains(&format!("frames=main@{line}")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        session
+    };
+    let session = wait_for_line(&mut app, 1).await;
+    assert!(session.starts_with("session:gdb:thread=Some("), "{session}");
+    assert!(session.contains("frames=main@1"), "{session}");
+    keys(&mut app, ":plugin-run testplugin3/exec dap_next<ret>").await;
+    let session = wait_for_line(&mut app, 2).await;
+    assert!(session.contains("frames=main@2"), "{session}");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x + 1<ret>").await;
+    // (The reply can come before the request's status is read.)
+    let reply = match app.editor.get_status() {
+        Some((status, _)) if status.starts_with("lsp-reply:") => status.to_string(),
+        _ => wait_for_status(&mut app, |s| s.starts_with("lsp-reply:")).await,
+    };
+    assert!(reply.contains(r#"\"result\":\"42\""#), "{reply}");
+    let events = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        events
+            .iter()
+            .any(|line| line.contains("debug-event:stopped")),
+        "{events:?}"
+    );
+    // Plugins drive the session with the native commands too.
+    keys(&mut app, ":plugin-run testplugin3/exec dap_terminate<ret>").await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debugger_requests_need_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""debug""#, "");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x<ret>").await;
+    assert_error(&app, "allow-debug = true");
+    // Reading needs only the permission.
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_eq!(status(&app).0, "breakpoints:");
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_error(&app, "\"debug\"");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn dap_ui_example_shows_the_stack_and_locals() -> anyhow::Result<()> {
+    let (mut app, _plugins) = app_with_example("dap-ui", "[dap-ui]\nallow-debug = true\n");
+    let Some((_dir, _source, program)) = debuggable(&mut app).await else {
+        return Ok(());
+    };
+    keys(
+        &mut app,
+        &format!(":debug-start binary {}<ret>", program.display()),
+    )
+    .await;
+    let panel = |app: &Application| screen_rows(app).join("\n");
+    wait_for(&mut app, |app| {
+        panel(app).contains("main  main.c:2").then_some(())
+    })
+    .await;
+    keys(&mut app, "<space>Gn").await;
+    wait_for(&mut app, |app| {
+        panel(app).contains("x: int = 41").then_some(())
+    })
+    .await;
+    assert!(panel(&app).contains("main  main.c:3"), "{}", panel(&app));
+    keys(&mut app, "<space>Gt").await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_open_and_drive_terminals() -> anyhow::Result<()> {
+    // Without the grant for the program: refused.
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = [\"cat\"]\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/term open sh<ret>").await;
+    assert_error(&app, "sh");
+    keys(&mut app, ":plugin-run testplugin3/term screen 1<ret>").await;
+    assert_error(&app, "no terminal 1 of this plugin's");
+
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = [\"sh\"]\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/term open sh -c \"echo ready; exec cat\"<ret>",
+    )
+    .await;
+    let id = status_after(&status(&app).0, "term:").to_string();
+    assert_eq!(app.editor.tree.views().count(), 2);
+    // It starts in insert mode, taking the keys: give them back.
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    keys(&mut app, "<C-\\><C-n>").await;
+    let screen = async |app: &mut Application| {
+        keys(
+            app,
+            &format!(":plugin-run testplugin3/term screen {id}<ret>"),
+        )
+        .await;
+        status(app).0
+    };
+    let mut rows = String::new();
+    for _ in 0..100 {
+        rows = screen(&mut app).await;
+        if rows.contains("ready") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(rows.starts_with("screen:ready"), "{rows}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term write {id} from the plugin<ret>"),
+    )
+    .await;
+    for _ in 0..100 {
+        rows = screen(&mut app).await;
+        if rows.matches("from the plugin").count() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_eq!(rows, "screen:ready|from the plugin|from the plugin");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term exit {id}<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, "exit:None");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term close {id}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term screen {id}<ret>"),
+    )
+    .await;
+    assert_error(&app, "no terminal");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn toggleterm_example_opens_closes_and_sends() -> anyhow::Result<()> {
+    let settings = "[toggleterm]\nallow-process = [\"sh\"]\ncommand = [\"sh\"]\n";
+    let (mut app, _dir) = app_with_example("toggleterm", settings);
+    keys(&mut app, "%cecho sent-from-the-buffer<esc>").await;
+    keys(&mut app, "<space>t").await;
+    assert_eq!(app.editor.tree.views().count(), 2);
+    // Back to the buffer, then its line goes to the terminal.
+    keys(&mut app, "<C-\\><C-n><C-w>k<space>;").await;
+    wait_for(&mut app, |app| {
+        let rows = screen_rows(app);
+        // Typed (echoed), then printed by echo.
+        (rows
+            .iter()
+            .filter(|row| row.contains("sent-from-the-buffer"))
+            .count()
+            >= 2)
+            .then_some(())
+    })
+    .await;
+    keys(&mut app, "<space>t").await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+    Ok(())
+}

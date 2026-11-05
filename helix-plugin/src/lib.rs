@@ -77,6 +77,10 @@ pub enum Permission {
     /// Send HTTPS requests (API 0.5 `http`), only to the hosts the user
     /// lists in `allow-network`.
     Network,
+    /// See and drive the debugger (API 0.5 `debug`). Raw debugger requests
+    /// (which can run code in the program being debugged) also need
+    /// `allow-debug`.
+    Debug,
 }
 
 impl Permission {
@@ -92,6 +96,7 @@ impl Permission {
             Permission::Listen => "listen",
             Permission::Lsp => "lsp",
             Permission::Network => "network",
+            Permission::Debug => "debug",
         }
     }
 }
@@ -156,6 +161,8 @@ pub struct PluginSettings {
     pub key_override: bool,
     /// Requests to language servers (`allow-lsp`).
     pub lsp: bool,
+    /// Raw requests to the debugger (`allow-debug`).
+    pub debug: bool,
     /// Hosts HTTPS requests may go to (`allow-network`): names, IP
     /// addresses or `*.domain`.
     pub network: Vec<String>,
@@ -461,6 +468,10 @@ impl Manifest {
                 manifest.name
             );
         }
+        // Services see the editor's own calls as coming from "editor".
+        if manifest.name == "editor" {
+            bail!("the plugin name 'editor' is reserved");
+        }
         if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4" | "0.5") {
             bail!(
                 "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.5",
@@ -526,8 +537,37 @@ pub struct DocumentSnapshot {
     /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
     /// plugin is loaded. A copy shares the tree, so it is cheap.
     pub syntax: Option<helix_core::tree_sitter::Tree>,
+    /// Its syntax layers, the root (the same tree as `syntax`) first and
+    /// then the injected languages' (API 0.5 `syntax.layers`). Filled in
+    /// like `syntax`; shared between snapshots of the same revision.
+    pub layers: Option<std::sync::Arc<Vec<SyntaxLayer>>>,
     /// Its folds, `(first, last)` lines (API 0.5 `folds`).
     pub folds: Vec<(u32, u32)>,
+    /// Its undo history (API 0.5 `history`), filled in only while an API
+    /// 0.5 plugin is loaded. Shared between snapshots until it changes.
+    pub history: Option<std::sync::Arc<History>>,
+}
+
+/// A language in a document: the root one or one injected into it (code
+/// in Markdown, CSS in HTML).
+#[derive(Debug, Clone)]
+pub struct SyntaxLayer {
+    pub language: String,
+    pub tree: helix_core::tree_sitter::Tree,
+    /// The byte ranges it covers.
+    pub ranges: Vec<(u32, u32)>,
+    /// The index of the layer it is injected into.
+    pub parent: Option<u32>,
+}
+
+/// A document's undo history: a tree of revisions.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct History {
+    /// Revision 0 is the text as it was loaded; every other has a parent
+    /// before it.
+    pub revisions: Vec<v05::Revision>,
+    /// The revision the text is at.
+    pub current: u32,
 }
 
 /// The editor state a plugin call can read.
@@ -550,6 +590,11 @@ pub struct Snapshot {
     pub views: Vec<v05::ViewInfo>,
     /// What the UI shows (API 0.5).
     pub ui: v05::UiState,
+    /// The debugger and the breakpoints (API 0.5 `debug`), filled in only
+    /// while an API 0.5 plugin has the `debug` permission.
+    pub debug: Option<v05::DebugState>,
+    /// The terminals plugins opened (API 0.5 `terminal`).
+    pub terminals: Vec<v05::TerminalHandle>,
 }
 
 impl Default for Snapshot {
@@ -566,6 +611,8 @@ impl Default for Snapshot {
             completion_menu: None,
             views: Vec::new(),
             ui: v05::UiState::default(),
+            debug: None,
+            terminals: Vec::new(),
         }
     }
 }
@@ -646,6 +693,58 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Open a terminal running `argv` (API 0.5 `terminal.open`), in a split
+    /// (`below`, or to the right) or in place of the focused view.
+    TerminalOpen {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        split: Option<bool>,
+    },
+    TerminalWrite {
+        id: u32,
+        data: String,
+    },
+    TerminalClose(u32),
+    /// A raw request to the debugger (API 0.5 `debug.request`); the reply
+    /// goes to `callbacks2.on-lsp-reply`.
+    DebugRequest {
+        plugin: String,
+        id: u32,
+        command: String,
+        arguments: String,
+    },
+    /// Replace the breakpoints of a file (API 0.5 `debug.set-breakpoints`).
+    SetBreakpoints {
+        path: PathBuf,
+        breakpoints: Vec<v05::BreakpointInfo>,
+    },
+    /// Hear these debugger events through the plugin's "debug-event"
+    /// service; none stops.
+    DebugListen {
+        plugin: String,
+        events: Vec<String>,
+    },
+    /// Set (or with `None` remove) one of the plugin's bars (API 0.5
+    /// `bars`); `view` `None` is every view.
+    Bar {
+        plugin: String,
+        kind: v05::BarKind,
+        view: Option<u64>,
+        bar: Option<v05::Bar>,
+    },
+    /// Hear these kinds of mouse events through the plugin's "mouse"
+    /// service (API 0.5 `mouse.listen`); none stops.
+    Mouse {
+        plugin: String,
+        kinds: Vec<String>,
+    },
+    /// Make a document's text that of one of its revisions (API 0.5
+    /// `history.jump`).
+    HistoryJump {
+        doc: DocumentId,
+        revision: u32,
+    },
     /// Fold (or unfold) lines `first..=last` of a document (API 0.5).
     Fold {
         doc: DocumentId,
@@ -3210,6 +3309,7 @@ impl PluginHost {
             v05: v05::V05 {
                 key_override: settings.key_override,
                 lsp: settings.lsp,
+                debug: settings.debug,
                 network: settings.network,
                 editor: self.editor_fns,
                 marks: self.marks.clone(),

@@ -17,6 +17,8 @@ mod test {
 
     mod auto_pairs;
     mod auto_reload;
+    #[cfg(not(windows))]
+    mod chords;
     mod command_line;
     mod commands;
     mod long_lines;
@@ -25,6 +27,10 @@ mod test {
     mod plugins;
     mod quickfix;
     mod registers;
+    #[cfg(unix)]
+    mod remote;
     mod splits;
     mod substitute;
+    #[cfg(unix)]
+    mod terminal;
 }

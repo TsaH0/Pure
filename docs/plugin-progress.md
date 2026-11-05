@@ -918,3 +918,32 @@ Plugin startup numbers need a warm compilation cache: the first start after
 a new binary or plugin set compiles the plugins (seconds of CPU in the
 background), and runs that alternate between two plugin sets in one data
 directory keep recompiling.
+
+## The rest of the gaps with Neovim (2026-11-05)
+
+Eight more: undo-tree access (`history`, example `undotree`), mouse events
+(`mouse`, `click`), statuslines, tab lines and winbars (`bars`,
+`statusbar`), injected languages' syntax trees (`syntax.layers`), the
+debugger (`debug`, `dap-ui`; tested against gdb's DAP mode), terminals
+(`:terminal` and `terminal`, `toggleterm`), driving the editor from other
+programs (`pure --listen`, `--remote...`) and hold-key chords
+(`[editor.chords]`). Measured with `docs/bench/vs-helix.py` on the 257 KB
+Rust file, release builds of master before them and after (medians):
+
+| | Before | After |
+| --- | --- | --- |
+| Startup to first frame (25 runs) | 290 ms | 296 ms (ranges overlap) |
+| CPU, start then quit | 415 ms | 417 ms |
+| CPU, editing session (5 runs) | 15.41 s | 15.49 s (ranges overlap) |
+| Idle over 5 s: wake-ups, CPU | 0, 0 ms | 0, 0 ms |
+| Heap after startup | 16.6 MiB | 16.6 MiB |
+
+Peak RSS is ~3 MiB higher, all of it more of the binary paged in
+(file-backed); the binary is 64.2 MB (was 63.6). Nothing new runs unless
+asked for: no plugin listens to the mouse or the debugger, no bar is set,
+no terminal or socket is open and no chord is configured, so each feature
+costs a flag check at most.
+
+Not done, and why: plugin-shipped tree-sitter grammars (native code can't
+be sandboxed; plugins query the editor's own trees instead), and a
+plugin registry (a hosted index, not editor work).

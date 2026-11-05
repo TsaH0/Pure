@@ -289,6 +289,182 @@ mod folds_impl {
     }
 }
 
+mod terminal_impl {
+    use super::*;
+    use v0_5::helix::plugin::terminal::Host;
+    use v0_5::helix::plugin::windows::Side;
+
+    impl Host for State {
+        fn open(
+            &mut self,
+            argv: Vec<String>,
+            side: Option<Side>,
+        ) -> std::result::Result<u32, String> {
+            let split = side.map(|side| matches!(side, Side::Below));
+            self.terminal_open(argv, split)
+        }
+        fn write(&mut self, id: u32, data: String) -> std::result::Result<(), String> {
+            self.terminal_write(id, data)
+        }
+        fn screen(&mut self, id: u32) -> std::result::Result<Vec<String>, String> {
+            Ok(self.terminal_screen(id)?.0)
+        }
+        fn exit_status(&mut self, id: u32) -> std::result::Result<Option<i32>, String> {
+            Ok(self.terminal_screen(id)?.1)
+        }
+        fn close(&mut self, id: u32) -> std::result::Result<(), String> {
+            self.terminal_close(id)
+        }
+    }
+}
+
+mod debug_impl {
+    use super::*;
+    use crate::v05::BreakpointInfo;
+    use v0_5::helix::plugin::debug::{Breakpoint, Frame, Host, SessionInfo};
+
+    impl Host for State {
+        fn session(&mut self) -> std::result::Result<Option<SessionInfo>, String> {
+            Ok(self.debug_state()?.session.map(|session| SessionInfo {
+                adapter: session.adapter,
+                thread: session.thread,
+                threads: session.threads,
+                frames: session
+                    .frames
+                    .into_iter()
+                    .map(|frame| Frame {
+                        id: frame.id,
+                        name: frame.name,
+                        path: frame.path,
+                        line: frame.line,
+                        column: frame.column,
+                    })
+                    .collect(),
+                active_frame: session.active_frame,
+            }))
+        }
+        fn breakpoints(&mut self) -> std::result::Result<Vec<Breakpoint>, String> {
+            Ok(self
+                .debug_state()?
+                .breakpoints
+                .into_iter()
+                .map(|b| Breakpoint {
+                    path: b.path,
+                    line: b.line,
+                    condition: b.condition,
+                    log_message: b.log_message,
+                    verified: b.verified,
+                })
+                .collect())
+        }
+        fn set_breakpoints(
+            &mut self,
+            path: String,
+            breakpoints: Vec<Breakpoint>,
+        ) -> std::result::Result<(), String> {
+            let breakpoints = breakpoints
+                .into_iter()
+                .map(|b| BreakpointInfo {
+                    path: path.clone(),
+                    line: b.line,
+                    condition: b.condition,
+                    log_message: b.log_message,
+                    verified: false,
+                })
+                .collect();
+            State::set_breakpoints(self, path, breakpoints)
+        }
+        fn request(
+            &mut self,
+            command: String,
+            arguments: String,
+        ) -> std::result::Result<u32, String> {
+            self.debug_request(command, arguments)
+        }
+        fn listen(&mut self, events: Vec<String>) -> std::result::Result<(), String> {
+            self.debug_listen(events)
+        }
+    }
+}
+
+mod bars_impl {
+    use super::*;
+    use crate::v05::BarKind;
+    use v0_5::helix::plugin::bars::{Bar, Host, Span};
+
+    fn bar(bar: Option<Bar>) -> Option<crate::v05::Bar> {
+        let spans = |spans: Vec<Span>| {
+            spans
+                .into_iter()
+                .map(|span| (span.text, span.scope))
+                .collect()
+        };
+        bar.map(|bar| crate::v05::Bar {
+            left: spans(bar.left),
+            center: spans(bar.center),
+            right: spans(bar.right),
+        })
+    }
+
+    impl Host for State {
+        fn set_statusline(
+            &mut self,
+            view: Option<u64>,
+            b: Option<Bar>,
+        ) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Statusline, view, bar(b))
+        }
+        fn set_tabline(&mut self, b: Option<Bar>) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Tabline, None, bar(b))
+        }
+        fn set_winbar(
+            &mut self,
+            view: Option<u64>,
+            b: Option<Bar>,
+        ) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Winbar, view, bar(b))
+        }
+    }
+}
+
+mod mouse_impl {
+    use super::*;
+    use v0_5::helix::plugin::mouse::Host;
+
+    impl Host for State {
+        fn listen(&mut self, kinds: Vec<String>) -> std::result::Result<(), String> {
+            State::mouse_listen(self, kinds)
+        }
+    }
+}
+
+mod history_impl {
+    use super::*;
+    use v0_5::helix::plugin::history::{Host, Revision, Tree};
+
+    impl Host for State {
+        fn revisions(&mut self, doc: u32) -> std::result::Result<Tree, String> {
+            let history = State::history(self, doc)?;
+            Ok(Tree {
+                revisions: history
+                    .revisions
+                    .into_iter()
+                    .map(|revision| Revision {
+                        parent: revision.parent,
+                        time: revision.time,
+                        inserted: revision.inserted,
+                        deleted: revision.deleted,
+                    })
+                    .collect(),
+                current: history.current,
+            })
+        }
+        fn jump(&mut self, doc: u32, revision: u32) -> std::result::Result<(), String> {
+            State::history_jump(self, doc, revision)
+        }
+    }
+}
+
 mod windows_impl {
     use super::*;
     use crate::v05::WindowAction as W;
@@ -390,7 +566,7 @@ mod http_impl {
 mod syntax_impl {
     use super::*;
     use crate::syntax::{self as syn, SyntaxNode};
-    use v0_5::helix::plugin::syntax::{Capture, Host, Node, QueryMatch};
+    use v0_5::helix::plugin::syntax::{Capture, Host, Layer, Node, QueryMatch};
 
     fn node(node: SyntaxNode) -> Node {
         Node {
@@ -410,7 +586,96 @@ mod syntax_impl {
         }
     }
 
+    fn matches(found: Vec<syn::QueryMatch>) -> Vec<QueryMatch> {
+        found
+            .into_iter()
+            .map(|found| QueryMatch {
+                pattern: found.pattern,
+                captures: found
+                    .captures
+                    .into_iter()
+                    .map(|(name, found)| Capture {
+                        name,
+                        node: node(found),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
     impl Host for State {
+        fn layers(&mut self, doc: u32) -> std::result::Result<Vec<Layer>, String> {
+            Ok(State::syntax_layers(self, doc)?
+                .into_iter()
+                .map(|layer| Layer {
+                    index: layer.index,
+                    language: layer.language,
+                    parent: layer.parent,
+                    ranges: layer.ranges,
+                })
+                .collect())
+        }
+        fn layer_at(
+            &mut self,
+            doc: u32,
+            from: u32,
+            to: u32,
+        ) -> std::result::Result<Option<u32>, String> {
+            State::syntax_layer_at(self, doc, from, to)
+        }
+        fn layer_query(
+            &mut self,
+            doc: u32,
+            layer: u32,
+            source: String,
+            range: Option<(u32, u32)>,
+        ) -> std::result::Result<Vec<QueryMatch>, String> {
+            Ok(matches(State::layer_query(
+                self, doc, layer, &source, range,
+            )?))
+        }
+        fn layer_root(&mut self, doc: u32, layer: u32) -> std::result::Result<Node, String> {
+            self.with_layer(doc, layer, |tree, text| Ok(node(syn::root(tree, text))))
+        }
+        fn layer_node_at(
+            &mut self,
+            doc: u32,
+            layer: u32,
+            from: u32,
+            to: u32,
+            named: bool,
+        ) -> std::result::Result<Option<Node>, String> {
+            self.with_layer(doc, layer, |tree, text| {
+                Ok(syn::node_at(tree, text, from, to, named).map(node))
+            })
+        }
+        fn layer_parent(
+            &mut self,
+            doc: u32,
+            layer: u32,
+            of: Node,
+        ) -> std::result::Result<Option<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_layer(doc, layer, |tree, text| syn::parent(tree, text, &of))?
+                .map(node))
+        }
+        fn layer_children(
+            &mut self,
+            doc: u32,
+            layer: u32,
+            of: Node,
+            named: bool,
+        ) -> std::result::Result<Vec<Node>, String> {
+            let of = from_node(of);
+            Ok(self
+                .with_layer(doc, layer, |tree, text| {
+                    syn::children(tree, text, &of, named)
+                })?
+                .into_iter()
+                .map(node)
+                .collect())
+        }
         fn language(&mut self, doc: u32) -> Option<String> {
             State::syntax_language(self, doc).ok().flatten()
         }

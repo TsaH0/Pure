@@ -1,0 +1,20 @@
+name = "toggleterm"
+version = "0.1.0"
+api = "0.5"
+description = "Like toggleterm and vim-slime: a terminal below to open and close with one key, and the selection sent to it"
+# The terminal runs your shell: grant it with `allow-process = true` (or
+# the shell's name) under [toggleterm] in plugins.toml.
+permissions = ["read-buffers", "process"]
+wasm = "plugin.wasm"
+
+[keys.normal.space]
+t = "toggle"
+";" = "send"
+
+[keys.select.space]
+";" = "send"
+
+[settings.command]
+type = "string-list"
+default = []
+description = "The program to run (your shell when empty), e.g. [\"python3\"] for a REPL"

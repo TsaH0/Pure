@@ -76,6 +76,11 @@ inject into `format!` and friends and whose highlights and locals are Rust's.
 
 Startup on a 257 KB Rust file went from 341 ms to 273 ms.
 
+### Layer access (`tree-house`)
+
+For plugins' syntax API over injected languages: `Syntax::layers`,
+`LayerData::byte_ranges`, `LayerData::parent` and `Layer::index`.
+
 ## Testing
 
 `helix-core/tests/incremental_syntax.rs` applies random edits to documents in

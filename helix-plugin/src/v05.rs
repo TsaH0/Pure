@@ -3,7 +3,7 @@
 
 use crate::{DocumentId, Mode, State};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// Where a plugin key binding sits among the keymaps.
@@ -116,6 +116,111 @@ pub enum Step {
         count: Option<u32>,
     },
     SetMode(Mode),
+}
+
+/// Reads a terminal's screen rows and exit status (if it ended).
+pub type TerminalReader = Arc<dyn Fn() -> Option<(Vec<String>, Option<i32>)> + Send + Sync>;
+
+/// A terminal a plugin opened, as snapshots carry it: its screen is read
+/// when asked for.
+#[derive(Clone)]
+pub struct TerminalHandle {
+    pub id: u32,
+    pub owner: String,
+    /// The screen's rows and the exit status, if it ended.
+    pub read: TerminalReader,
+}
+
+impl std::fmt::Debug for TerminalHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalHandle")
+            .field("id", &self.id)
+            .field("owner", &self.owner)
+            .finish()
+    }
+}
+
+/// Terminals plugins open are numbered from here; the editor's own are
+/// below.
+pub const PLUGIN_TERMINALS: u32 = 1 << 31;
+static NEXT_TERMINAL: AtomicU32 = AtomicU32::new(PLUGIN_TERMINALS);
+
+/// The debugger as plugins see it (API 0.5 `debug`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DebugState {
+    /// The running session, if there is one.
+    pub session: Option<DebugSession>,
+    pub breakpoints: Vec<BreakpointInfo>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DebugSession {
+    /// The debug adapter's name.
+    pub adapter: String,
+    /// The thread being looked at.
+    pub thread: Option<u64>,
+    /// Threads and their states ("stopped", "running"...).
+    pub threads: Vec<(u64, String)>,
+    /// The stack of the thread being looked at, innermost first.
+    pub frames: Vec<StackFrame>,
+    pub active_frame: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StackFrame {
+    pub id: u64,
+    pub name: String,
+    pub path: Option<String>,
+    /// 0-based.
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BreakpointInfo {
+    pub path: String,
+    /// 0-based.
+    pub line: u32,
+    pub condition: Option<String>,
+    pub log_message: Option<String>,
+    /// The debugger accepted it.
+    pub verified: bool,
+}
+
+/// Which bar a plugin sets (API 0.5 `bars`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarKind {
+    Statusline,
+    Tabline,
+    Winbar,
+}
+
+/// A bar: left, centre and right parts of `(text, scope)` spans.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bar {
+    pub left: Vec<(String, String)>,
+    pub center: Vec<(String, String)>,
+    pub right: Vec<(String, String)>,
+}
+
+/// A syntax layer as plugins see it (API 0.5 `syntax.layers`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerInfo {
+    pub index: u32,
+    pub language: String,
+    pub parent: Option<u32>,
+    /// Char ranges.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// One revision of a document's undo history (API 0.5 `history`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Revision {
+    pub parent: u32,
+    /// Milliseconds since 1970.
+    pub time: u64,
+    pub inserted: u32,
+    pub deleted: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +423,8 @@ pub(crate) struct V05 {
     pub key_override: bool,
     /// The user's `allow-lsp`.
     pub lsp: bool,
+    /// The user's `allow-debug`.
+    pub debug: bool,
     /// The user's `allow-network`.
     pub network: Vec<String>,
     pub editor: EditorFns,
@@ -388,6 +495,7 @@ impl Default for V05 {
         Self {
             key_override: false,
             lsp: false,
+            debug: false,
             network: Vec::new(),
             editor: EditorFns::default(),
             key_bindings: Vec::new(),
@@ -1181,6 +1289,219 @@ impl State {
         });
         Ok(())
     }
+    pub(crate) fn terminal_open(
+        &mut self,
+        argv: Vec<String>,
+        split: Option<bool>,
+    ) -> Result<u32, String> {
+        // The shell when no program is given: it needs the grant too.
+        let program = if argv.is_empty() {
+            vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".into())]
+        } else {
+            argv.clone()
+        };
+        self.need_process(&program)?;
+        if argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 64 << 10 {
+            return Err("at most 256 arguments and 64 KiB".into());
+        }
+        let id = NEXT_TERMINAL.fetch_add(1, Ordering::Relaxed);
+        self.actions.push(crate::Action::TerminalOpen {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            split,
+        });
+        Ok(id)
+    }
+    fn own_terminal(&self, id: u32) -> Result<&TerminalHandle, String> {
+        self.snapshot
+            .terminals
+            .iter()
+            .find(|terminal| terminal.id == id && terminal.owner == self.plugin)
+            .ok_or_else(|| format!("no terminal {id} of this plugin's"))
+    }
+    pub(crate) fn terminal_write(&mut self, id: u32, data: String) -> Result<(), String> {
+        self.need(crate::Permission::Process)?;
+        // A terminal opened in this call isn't in the snapshot yet.
+        let opened_now = self.actions.iter().any(
+            |action| matches!(action, crate::Action::TerminalOpen { id: opened, .. } if *opened == id),
+        );
+        if !opened_now {
+            self.own_terminal(id)?;
+        }
+        if data.len() > 1 << 20 {
+            return Err("at most 1 MiB at a time".into());
+        }
+        self.actions.push(crate::Action::TerminalWrite { id, data });
+        Ok(())
+    }
+    pub(crate) fn terminal_screen(
+        &mut self,
+        id: u32,
+    ) -> Result<(Vec<String>, Option<i32>), String> {
+        self.need(crate::Permission::Process)?;
+        let terminal = self.own_terminal(id)?;
+        (terminal.read)().ok_or_else(|| format!("terminal {id} is closed"))
+    }
+    pub(crate) fn terminal_close(&mut self, id: u32) -> Result<(), String> {
+        self.need(crate::Permission::Process)?;
+        self.own_terminal(id)?;
+        self.actions.push(crate::Action::TerminalClose(id));
+        Ok(())
+    }
+    pub(crate) fn debug_state(&mut self) -> Result<DebugState, String> {
+        self.need(crate::Permission::Debug)?;
+        Ok(self.snapshot.debug.clone().unwrap_or_default())
+    }
+    pub(crate) fn set_breakpoints(
+        &mut self,
+        path: String,
+        breakpoints: Vec<BreakpointInfo>,
+    ) -> Result<(), String> {
+        self.need(crate::Permission::Debug)?;
+        let path = std::path::PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("the path must be absolute".into());
+        }
+        if breakpoints.len() > 1000 {
+            return Err("at most 1000 breakpoints a file".into());
+        }
+        self.actions
+            .push(crate::Action::SetBreakpoints { path, breakpoints });
+        Ok(())
+    }
+    pub(crate) fn debug_request(
+        &mut self,
+        command: String,
+        arguments: String,
+    ) -> Result<u32, String> {
+        self.need(crate::Permission::Debug)?;
+        if !self.v05.debug {
+            return Err(format!(
+                "debugger requests need allow-debug = true under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        if self.context == crate::CallContext::Init {
+            return Err("debug.request can't be used from init".into());
+        }
+        if self
+            .snapshot
+            .debug
+            .as_ref()
+            .is_none_or(|debug| debug.session.is_none())
+        {
+            return Err("no debug session is running".into());
+        }
+        // The editor's own: they would confuse its view of the session.
+        if [
+            "initialize",
+            "launch",
+            "attach",
+            "disconnect",
+            "terminate",
+            "restart",
+        ]
+        .contains(&command.as_str())
+        {
+            return Err(format!("'{command}' is the editor's to send"));
+        }
+        if command.is_empty() || command.len() > 256 {
+            return Err("a command of 1 to 256 bytes".into());
+        }
+        check_json("the arguments", &arguments)?;
+        let id = self.request(crate::PendingKind::Lsp)?;
+        self.actions.push(crate::Action::DebugRequest {
+            plugin: self.plugin.clone(),
+            id,
+            command,
+            arguments,
+        });
+        Ok(id)
+    }
+    pub(crate) fn debug_listen(&mut self, events: Vec<String>) -> Result<(), String> {
+        self.need(crate::Permission::Debug)?;
+        if !events.is_empty() {
+            self.need_own_service("debug-event", "debug.listen")?;
+        }
+        if events.len() > 64 || events.iter().any(|e| e.is_empty() || e.len() > 64) {
+            return Err("at most 64 event names".into());
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::DebugListen { plugin, events });
+        Ok(())
+    }
+    pub(crate) fn set_bar(
+        &mut self,
+        kind: BarKind,
+        view: Option<u64>,
+        bar: Option<Bar>,
+    ) -> Result<(), String> {
+        if let Some(view) = view {
+            if !self.snapshot.views.iter().any(|v| v.id == view) {
+                return Err(format!("no view {view}"));
+            }
+        }
+        if let Some(bar) = &bar {
+            let spans = bar.left.len() + bar.center.len() + bar.right.len();
+            let bytes: usize = [&bar.left, &bar.center, &bar.right]
+                .iter()
+                .flat_map(|part| part.iter())
+                .map(|(text, scope)| text.len() + scope.len())
+                .sum();
+            if spans > 256 || bytes > 16 << 10 {
+                return Err("a bar holds at most 256 spans and 16 KiB".into());
+            }
+        }
+        let plugin = self.plugin.clone();
+        self.actions.push(crate::Action::Bar {
+            plugin,
+            kind,
+            view,
+            bar,
+        });
+        Ok(())
+    }
+    pub(crate) fn mouse_listen(&mut self, kinds: Vec<String>) -> Result<(), String> {
+        if !kinds.is_empty() {
+            self.need_own_service("mouse", "mouse.listen")?;
+        }
+        if let Some(bad) = kinds
+            .iter()
+            .find(|kind| !["down", "up", "drag", "scroll"].contains(&kind.as_str()))
+        {
+            return Err(format!(
+                "unknown mouse event '{bad}': down, up, drag or scroll"
+            ));
+        }
+        let plugin = self.plugin.clone();
+        self.actions.push(crate::Action::Mouse { plugin, kinds });
+        Ok(())
+    }
+    pub(crate) fn history(&mut self, doc: DocumentId) -> Result<crate::History, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        Ok(self
+            .document(doc)?
+            .history
+            .as_deref()
+            .cloned()
+            .unwrap_or_default())
+    }
+    pub(crate) fn history_jump(&mut self, doc: DocumentId, revision: u32) -> Result<(), String> {
+        self.need(crate::Permission::EditBuffers)?;
+        let document = self.document(doc)?;
+        let count = document
+            .history
+            .as_ref()
+            .map_or(1, |history| history.revisions.len());
+        if revision as usize >= count {
+            return Err(format!("no revision {revision}: the document has {count}"));
+        }
+        self.actions
+            .push(crate::Action::HistoryJump { doc, revision });
+        Ok(())
+    }
     pub(crate) fn folds(&mut self, doc: DocumentId) -> Result<Vec<(u32, u32)>, String> {
         self.need(crate::Permission::ReadBuffers)?;
         Ok(self.document(doc)?.folds.clone())
@@ -1240,6 +1561,99 @@ impl State {
         Ok(self
             .syntax_tree(doc)?
             .map(|(tree, text)| crate::syntax::root(tree, text)))
+    }
+    /// The tree of layer `layer` of `doc`.
+    fn layer_tree(
+        &self,
+        doc: DocumentId,
+        layer: u32,
+    ) -> Result<(&helix_core::tree_sitter::Tree, &helix_core::Rope), String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let layer = document
+            .layers
+            .as_ref()
+            .and_then(|layers| layers.get(layer as usize))
+            .ok_or_else(|| format!("document {doc} has no syntax layer {layer}"))?;
+        Ok((&layer.tree, &document.text))
+    }
+    pub(crate) fn syntax_layers(&mut self, doc: DocumentId) -> Result<Vec<LayerInfo>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let text = &document.text;
+        let len = text.len_bytes();
+        let char_at = |byte: u32| text.byte_to_char((byte as usize).min(len)) as u32;
+        Ok(document
+            .layers
+            .iter()
+            .flat_map(|layers| layers.iter())
+            .enumerate()
+            .map(|(index, layer)| LayerInfo {
+                index: index as u32,
+                language: layer.language.clone(),
+                parent: layer.parent,
+                ranges: layer
+                    .ranges
+                    .iter()
+                    .map(|(start, end)| (char_at(*start), char_at(*end)))
+                    .collect(),
+            })
+            .collect())
+    }
+    /// The innermost layer covering chars `from..to`.
+    pub(crate) fn syntax_layer_at(
+        &mut self,
+        doc: DocumentId,
+        from: u32,
+        to: u32,
+    ) -> Result<Option<u32>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let Some(layers) = &document.layers else {
+            return Ok(None);
+        };
+        let text = &document.text;
+        let byte = |pos: u32| text.char_to_byte((pos as usize).min(text.len_chars())) as u32;
+        let (from, to) = (byte(from), byte(to.max(from)));
+        let depth = |mut layer: u32| {
+            let mut depth = 0;
+            while let Some(parent) = layers.get(layer as usize).and_then(|l| l.parent) {
+                layer = parent;
+                depth += 1;
+            }
+            depth
+        };
+        Ok(layers
+            .iter()
+            .enumerate()
+            .filter(|(_, layer)| {
+                layer
+                    .ranges
+                    .iter()
+                    .any(|(start, end)| *start <= from && to <= *end)
+            })
+            .map(|(index, _)| index as u32)
+            .max_by_key(|index| depth(*index)))
+    }
+    pub(crate) fn layer_query(
+        &mut self,
+        doc: DocumentId,
+        layer: u32,
+        source: &str,
+        range: Option<(u32, u32)>,
+    ) -> Result<Vec<crate::syntax::QueryMatch>, String> {
+        let (tree, text) = self.layer_tree(doc, layer)?;
+        crate::syntax::query(tree, text, source, range)
+    }
+    /// Run `f` on the tree of layer `layer` of `doc`.
+    pub(crate) fn with_layer<T>(
+        &mut self,
+        doc: DocumentId,
+        layer: u32,
+        f: impl FnOnce(&helix_core::tree_sitter::Tree, &helix_core::Rope) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let (tree, text) = self.layer_tree(doc, layer)?;
+        f(tree, text)
     }
     /// Run `f` on the tree of `doc`, which must have one.
     pub(crate) fn with_syntax<T>(
@@ -2211,18 +2625,20 @@ impl crate::PluginHost {
             call.method.clone(),
             call.payload.clone(),
         );
-        let result = plugin.call(
-            snapshot.clone(),
-            crate::CallContext::Event,
-            limit,
-            move |guest, store| {
-                Box::pin(async move {
-                    guest
-                        .call_service(store, &caller, &service, &method, &payload)
-                        .await
-                })
-            },
-        );
+        // A click is the user's, like a key: the plugin may show UI and
+        // run commands, as from its key bindings.
+        let context = if call.caller == "editor" && call.service == "mouse" {
+            crate::CallContext::Callback
+        } else {
+            crate::CallContext::Event
+        };
+        let result = plugin.call(snapshot.clone(), context, limit, move |guest, store| {
+            Box::pin(async move {
+                guest
+                    .call_service(store, &caller, &service, &method, &payload)
+                    .await
+            })
+        });
         plugin.store.data_mut().v05.chain.clear();
         match result {
             Ok((Ok(reply), actions)) => match check_json("the reply", &reply) {
@@ -2366,6 +2782,9 @@ impl crate::PluginHost {
             if state.v05.lsp {
                 grants.push("allow-lsp".into());
             }
+            if state.v05.debug {
+                grants.push("allow-debug".into());
+            }
             if !state.v05.network.is_empty() {
                 grants.push(format!("allow-network = {:?}", state.v05.network));
             }
@@ -2389,6 +2808,7 @@ impl crate::PluginHost {
                     "allow-listen",
                 ),
                 (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
+                (crate::Permission::Debug, state.v05.debug, "allow-debug"),
                 (
                     crate::Permission::Network,
                     !state.v05.network.is_empty(),

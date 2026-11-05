@@ -200,6 +200,43 @@ pub mod http {
     }
 }
 
+/// Bars: the statusline, a tab line and winbars, drawn by the plugin.
+pub mod bars {
+    pub use super::plugin::bars::*;
+
+    /// A span in `scope` ("" for the bar's own style).
+    pub fn span(text: &str, scope: &str) -> Span {
+        Span {
+            text: text.into(),
+            scope: scope.into(),
+        }
+    }
+}
+
+/// Mouse events on documents.
+pub mod mouse {
+    pub use super::plugin::mouse::*;
+
+    /// Hear `kinds` ("down", "up", "drag", "scroll") with `handler`: it
+    /// gets the kind and the event's JSON (see the WIT) and returns whether
+    /// it takes the event from the editor. Call it from `init`.
+    pub fn on(
+        kinds: &[&str],
+        mut handler: impl FnMut(&str, &str) -> Result<bool, String> + 'static,
+    ) -> Result<(), String> {
+        super::services::provide("mouse", "1.0.0", &["editor"], move |_caller, kind, payload| {
+            handler(kind, payload).map(|taken| taken.to_string())
+        })?;
+        let kinds: Vec<String> = kinds.iter().map(|kind| kind.to_string()).collect();
+        listen(&kinds)
+    }
+}
+
+/// Undo history, a tree: read it, jump to a revision.
+pub mod history {
+    pub use super::plugin::history::*;
+}
+
 /// Folded lines: fold, unfold, list.
 pub mod folds {
     pub use super::plugin::folds::*;
@@ -382,6 +419,43 @@ pub mod lsp {
         let id = plugin::lsp::request(doc, server, method, params)?;
         REPLIES.with_borrow_mut(|replies| replies.insert(id, Box::new(reply)));
         Ok(id)
+    }
+}
+
+/// Terminals: open one running a program, write to it, read its screen.
+pub mod terminal {
+    pub use super::plugin::terminal::*;
+}
+
+/// The debugger: session, breakpoints, requests and events.
+pub mod debug {
+    use super::*;
+    pub use plugin::debug::{breakpoints, session, set_breakpoints, Breakpoint, Frame, SessionInfo};
+
+    /// Send `command` with `arguments` (JSON) to the running debugger;
+    /// `reply` gets the response's body (JSON) or the error.
+    pub fn request(
+        command: &str,
+        arguments: &str,
+        reply: impl FnOnce(Result<String, String>) -> Result<(), String> + 'static,
+    ) -> Result<RequestId, String> {
+        let id = plugin::debug::request(command, arguments)?;
+        REPLIES.with_borrow_mut(|replies| replies.insert(id, Box::new(reply)));
+        Ok(id)
+    }
+
+    /// Hear the debugger's `events` ("stopped", "output"... or "*") with
+    /// `handler`, which gets the event's name and body (JSON). Call it from
+    /// `init`.
+    pub fn on(
+        events: &[&str],
+        mut handler: impl FnMut(&str, &str) -> Result<(), String> + 'static,
+    ) -> Result<(), String> {
+        super::services::provide("debug-event", "1.0.0", &["editor"], move |_caller, event, body| {
+            handler(event, body).map(|()| "null".to_string())
+        })?;
+        let events: Vec<String> = events.iter().map(|event| event.to_string()).collect();
+        plugin::debug::listen(&events)
     }
 }
 

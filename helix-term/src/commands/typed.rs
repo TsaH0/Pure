@@ -2174,6 +2174,26 @@ fn debug_eval(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> a
     Ok(())
 }
 
+/// `:terminal [program args...]`: a terminal in a split below, running the
+/// program (the shell by default), in insert mode.
+fn terminal(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        let argv: Vec<String> = args.into_iter().map(|arg| arg.to_string()).collect();
+        crate::terminal::open(cx.editor, &argv, Action::HorizontalSplit)?;
+        cx.editor.mode = Mode::Insert;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = args;
+        anyhow::bail!("terminals need a Unix system")
+    }
+}
+
 fn debug_start(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
@@ -4384,6 +4404,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
+        name: "terminal",
+        aliases: &["term"],
+        doc: "Open a terminal in a split below, running a program (your shell by default). Keys go to it in insert mode; C-\\ C-n goes back to normal mode.",
+        fun: terminal,
+        completer: CommandCompleter::all(completers::program),
+        signature: Signature {
+            positionals: (0, None),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
         name: "debug-start",
         aliases: &["dbg"],
         doc: "Start a debug session from a given template with given parameters.",
@@ -5114,6 +5145,11 @@ pub static TYPABLE_COMMAND_MAP: LazyLock<HashMap<&'static str, &'static TypableC
             })
             .collect()
     });
+
+/// Run `line` as if typed after `:` (`pure --remote-command`).
+pub fn run_command_line(cx: &mut compositor::Context, line: &str) -> anyhow::Result<()> {
+    execute_command_line(cx, line, PromptEvent::Validate)
+}
 
 fn execute_command_line(
     cx: &mut compositor::Context,

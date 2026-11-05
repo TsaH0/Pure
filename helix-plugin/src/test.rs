@@ -75,6 +75,8 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             language_servers: Vec::new(),
             syntax: None,
             folds: Vec::new(),
+            history: None,
+            layers: None,
         },
     );
     Snapshot {
@@ -96,6 +98,8 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             focused: true,
         }],
         ui: crate::v05::UiState::default(),
+        debug: None,
+        terminals: Vec::new(),
     }
 }
 
@@ -154,6 +158,7 @@ fn manifest_parsing() {
         err("name = \"Bad Name\"\nversion = \"1\"\napi = \"0.1\"").contains("invalid plugin name")
     );
     assert!(err("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").contains("needs plugin API 9.9"));
+    assert!(err("name = \"editor\"\nversion = \"1\"\napi = \"0.5\"").contains("reserved"));
     assert!(
         err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nunknown = 1").contains("unknown field")
     );
@@ -4251,6 +4256,8 @@ fn conceals_are_checked_against_the_text() {
             language_servers: Vec::new(),
             syntax: None,
             folds: Vec::new(),
+            history: None,
+            layers: None,
         },
     );
     state

@@ -1016,9 +1016,10 @@ interface callbacks2 {
 }
 
 /// API 0.5: documents' syntax trees (tree-sitter), for outlines, text
-/// objects, motions and structural edits. Needs `read-buffers`. Covers the
-/// document's own language, not languages injected into it. Positions are
-/// char offsets, like the rest of the API.
+/// objects, motions and structural edits. Needs `read-buffers`. `query`,
+/// `node-at` and the rest cover the document's own language; the
+/// `layer-*` functions the languages injected into it. Positions are char
+/// offsets, like the rest of the API.
 interface syntax {
   use types.{document-id};
 
@@ -1067,6 +1068,32 @@ interface syntax {
   prev-sibling: func(doc: document-id, node: node, named: bool) -> result<option<node>, string>;
   /// The tree under `node` as an S-expression, for debugging.
   sexp: func(doc: document-id, node: node) -> result<string, string>;
+
+  /// A language in the document: the document's own (layer 0) or one
+  /// injected into it (code blocks in Markdown, CSS and JavaScript in
+  /// HTML, SQL in strings...).
+  record layer {
+    /// For the `layer-*` functions; valid for this revision of the
+    /// document.
+    index: u32,
+    language: string,
+    /// The layer it is injected into; none for layer 0.
+    parent: option<u32>,
+    /// The chars it covers.
+    ranges: list<tuple<u32, u32>>,
+  }
+
+  /// The document's layers, layer 0 first; none without a tree.
+  layers: func(doc: document-id) -> result<list<layer>, string>;
+  /// The innermost layer covering chars `from..to`.
+  layer-at: func(doc: document-id, %from: u32, to: u32) -> result<option<u32>, string>;
+  /// As `query`, `root`, `node-at`, `parent` and `children`, in layer
+  /// `layer`'s tree (positions are still the document's).
+  layer-query: func(doc: document-id, layer: u32, source: string, range: option<tuple<u32, u32>>) -> result<list<query-match>, string>;
+  layer-root: func(doc: document-id, layer: u32) -> result<node, string>;
+  layer-node-at: func(doc: document-id, layer: u32, %from: u32, to: u32, named: bool) -> result<option<node>, string>;
+  layer-parent: func(doc: document-id, layer: u32, node: node) -> result<option<node>, string>;
+  layer-children: func(doc: document-id, layer: u32, node: node, named: bool) -> result<list<node>, string>;
 }
 
 /// API 0.5: HTTPS requests, only to hosts the user lists for the plugin
@@ -1165,6 +1192,165 @@ interface folds {
   %list: func(doc: document-id) -> result<list<tuple<u32, u32>>, string>;
 }
 
+/// API 0.5: undo history, a tree (undotree). Needs `read-buffers`;
+/// `jump` needs `edit-buffers`.
+interface history {
+  use types.{document-id};
+
+  record revision {
+    /// Revision 0 is the text as loaded; it is its own parent.
+    parent: u32,
+    /// When it was made, in milliseconds since 1970.
+    time: u64,
+    /// Chars it inserted and deleted.
+    inserted: u32,
+    deleted: u32,
+  }
+
+  record tree {
+    /// Indexed by revision number.
+    revisions: list<revision>,
+    /// The revision the text is at.
+    current: u32,
+  }
+
+  /// The undo tree of `doc`. Changes still being typed (insert mode)
+  /// aren't a revision yet.
+  revisions: func(doc: document-id) -> result<tree, string>;
+  /// Make the text that of `revision`, as `:earlier`/`:later` along the
+  /// tree would. Happens after the call.
+  jump: func(doc: document-id, revision: u32) -> result<_, string>;
+}
+
+/// API 0.5: mouse clicks, drags and scrolls on documents. Register the
+/// service "mouse" (`services.register`) first: each event is a call to it
+/// from "editor", the method its kind ("down", "up", "drag", "scroll") and
+/// the payload JSON:
+///
+///   {"button": "left" | "right" | "middle" | null,
+///    "direction": "up" | "down" | "left" | "right" | null (scrolls),
+///    "view": 7, "doc": 1,
+///    "pos": char under the pointer, or null (in the gutter, past the end),
+///    "line": the line it is on, or null,
+///    "gutter": true when on the gutter,
+///    "row": 3, "column": 10 (in the view),
+///    "modifiers": ["shift", "ctrl", "alt"]}
+///
+/// Reply "true" to take the event: the editor then does nothing with it
+/// (and later plugins don't hear it). Calls are made right away, during
+/// the event, so keep them quick.
+interface mouse {
+  /// Hear these kinds of events, in place of the ones heard before; none
+  /// stops.
+  listen: func(kinds: list<string>) -> result<_, string>;
+}
+
+/// API 0.5: bars a plugin draws: the statusline (in place of Pure's), a
+/// tab line at the top of the screen and a bar at the top of views (a
+/// winbar). `%{name}` in their text is filled in when drawn: `mode`,
+/// `file`, `filename`, `modified` ("[+]"), `line`, `column`, `lines`,
+/// `percent`, `language`, `branch`, `selections`, `errors`, `warnings`,
+/// `buffers`; `%%` is a "%". Set them again when what else they show
+/// changes. They go when the plugin is disabled.
+interface bars {
+  /// Text in a style: a theme scope ("ui.statusline.normal"), a style
+  /// written out ("fg:#ff8800 bold"), "mode" for the current mode's
+  /// statusline colours, or "" for the bar's own.
+  record span { text: string, scope: string }
+
+  record bar {
+    left: list<span>,
+    /// Centred (but never over the left part).
+    center: list<span>,
+    right: list<span>,
+  }
+
+  /// The statusline of every view (`view` none) or of one view; none
+  /// gives Pure's back.
+  set-statusline: func(view: option<u64>, bar: option<bar>) -> result<_, string>;
+  /// A row at the top of the screen, in place of the buffer line.
+  set-tabline: func(bar: option<bar>) -> result<_, string>;
+  /// A row at the top of every view (`view` none) or of one.
+  set-winbar: func(view: option<u64>, bar: option<bar>) -> result<_, string>;
+}
+
+/// API 0.5: the debugger (Pure's DAP support: `:debug-start`,
+/// `space G`). Needs the `debug` permission; `request` also needs
+/// `allow-debug = true` (it can evaluate code in the program being
+/// debugged). Lines are 0-based.
+interface debug {
+  use types.{request-id};
+
+  record frame {
+    id: u64,
+    name: string,
+    path: option<string>,
+    line: u32,
+    column: u32,
+  }
+
+  record session-info {
+    /// The debug adapter's name.
+    adapter: string,
+    /// The thread being looked at.
+    thread: option<u64>,
+    /// Every thread and its state ("stopped", "running"...).
+    threads: list<tuple<u64, string>>,
+    /// The stack of the thread being looked at, innermost first.
+    frames: list<frame>,
+    active-frame: option<u32>,
+  }
+
+  record breakpoint {
+    /// Absolute.
+    path: string,
+    line: u32,
+    condition: option<string>,
+    log-message: option<string>,
+    /// The debugger accepted it (ignored when setting).
+    verified: bool,
+  }
+
+  /// The running session, if there is one.
+  session: func() -> result<option<session-info>, string>;
+  /// The breakpoints of every file.
+  breakpoints: func() -> result<list<breakpoint>, string>;
+  /// Make `breakpoints` the breakpoints of the file `path` (an empty list
+  /// removes them; their paths are ignored), and tell a running debugger.
+  set-breakpoints: func(path: string, breakpoints: list<breakpoint>) -> result<_, string>;
+  /// Send the running debugger request `command` ("evaluate", "scopes",
+  /// "variables", "setVariable"...) with `arguments` (JSON). The reply
+  /// (the response's body, JSON) comes to `callbacks2.on-lsp-reply`.
+  request: func(command: string, arguments: string) -> result<request-id, string>;
+  /// Hear the debugger's events ("stopped", "output", "terminated"... or
+  /// "*" for all), in place of those heard before. Register the service
+  /// "debug-event" first: each event is a call to it from "editor", the
+  /// method the event's name, the payload its body (JSON).
+  listen: func(events: list<string>) -> result<_, string>;
+}
+
+/// API 0.5: terminals (`:terminal`) a plugin opens: a program on a
+/// pseudo-terminal, drawn in a view; in insert mode the user's keys go to
+/// it. Needs `process` and `allow-process` for the program (for the
+/// user's shell when none is given). A plugin sees only its own
+/// terminals.
+interface terminal {
+  use windows.{side};
+
+  /// Open a terminal running `argv` (the user's shell when empty) in a
+  /// split at `side`, or in place of the focused view; its id. It starts
+  /// after the call.
+  open: func(argv: list<string>, side: option<side>) -> result<u32, string>;
+  /// Send `data` to the program, as if typed ("\r" is Enter).
+  write: func(id: u32, data: string) -> result<_, string>;
+  /// The screen's rows, as text.
+  screen: func(id: u32) -> result<list<string>, string>;
+  /// The program's exit status once it ended.
+  exit-status: func(id: u32) -> result<option<s32>, string>;
+  /// Close it: its buffer goes and its program is ended.
+  close: func(id: u32) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1199,6 +1385,11 @@ world helix-plugin {
   import panels2;
   import windows;
   import folds;
+  import history;
+  import mouse;
+  import bars;
+  import debug;
+  import terminal;
   export plugin;
   export callbacks;
   export events;

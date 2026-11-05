@@ -21,9 +21,11 @@
 pub mod install;
 pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
+mod debug;
 mod http;
 mod listen;
 mod lsp_server;
+mod mouse;
 mod picker;
 mod popup;
 mod process;
@@ -34,6 +36,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -131,6 +134,9 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     watch::stop_plugin(Some(plugin));
     http::stop_plugin(Some(plugin));
     lsp_server::stop_plugin(editor, Some(plugin));
+    mouse::stop_plugin(Some(plugin));
+    debug::stop_plugin(Some(plugin));
+    editor.plugin_bars.clear_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -730,6 +736,9 @@ fn install(
     watch::stop_plugin(None);
     http::stop_plugin(None);
     lsp_server::stop_plugin(editor, None);
+    mouse::stop_plugin(None);
+    debug::stop_plugin(None);
+    editor.plugin_bars.clear_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -752,6 +761,7 @@ fn install(
         Ordering::Relaxed,
     );
     HAS_V05.store(host.as_ref().is_some_and(has_v05), Ordering::Relaxed);
+    debug::WANTED.store(host.as_ref().is_some_and(wants_debug), Ordering::Relaxed);
     clear_plugin_diagnostics(editor);
     COMPLETIONS.lock().clear();
     *MARKS.lock() = host.as_ref().map(PluginHost::marks);
@@ -896,6 +906,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-listen");
     table.remove("allow-key-override");
     table.remove("allow-lsp");
+    table.remove("allow-debug");
     table.remove("allow-network");
     table.remove("lazy");
     table.remove("keys");
@@ -909,6 +920,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             listen: allowed_ports(settings, name)?,
             key_override: flag(settings, name, "allow-key-override")?,
             lsp: flag(settings, name, "allow-lsp")?,
+            debug: flag(settings, name, "allow-debug")?,
             network: allowed_hosts(settings, name)?,
             eager: settings
                 .get(name)
@@ -1198,6 +1210,15 @@ struct UiFlags {
     picker: bool,
     popup: bool,
     pending: Vec<helix_view::input::KeyEvent>,
+}
+
+fn wants_debug(host: &PluginHost) -> bool {
+    host.plugins().iter().any(|p| {
+        p.disabled().is_none()
+            && p.manifest()
+                .permissions
+                .contains(&helix_plugin::Permission::Debug)
+    })
 }
 
 fn has_v05(host: &PluginHost) -> bool {
@@ -1742,6 +1763,213 @@ fn view_for(editor: &Editor, doc: DocumentId) -> Option<ViewId> {
         .map(|(view, _)| view.id)
 }
 
+runtime_local! {
+    /// The undo history of each document as plugins see it, kept so a
+    /// snapshot only adds the revisions made since the last one.
+    static HISTORIES: Mutex<std::collections::BTreeMap<DocumentId, Arc<helix_plugin::History>>> =
+        Mutex::new(std::collections::BTreeMap::new());
+}
+
+runtime_local! {
+    /// Each document's syntax layers as plugins see them, with the
+    /// revision they are of.
+    static LAYERS: Mutex<std::collections::BTreeMap<DocumentId, (i32, Arc<Vec<helix_plugin::SyntaxLayer>>)>> =
+        Mutex::new(std::collections::BTreeMap::new());
+}
+
+/// `doc`'s syntax layers for plugins, made again only when the document
+/// changed.
+fn syntax_layers(
+    editor: &Editor,
+    doc: &helix_view::Document,
+) -> Option<Arc<Vec<helix_plugin::SyntaxLayer>>> {
+    let syntax = doc.syntax()?;
+    let version = doc.version();
+    let mut cache = LAYERS.lock();
+    if let Some((cached, layers)) = cache.get(&doc.id()) {
+        if *cached == version {
+            return Some(layers.clone());
+        }
+    }
+    let loader = editor.syn_loader.load();
+    // The root first, then the others; parents by their index here.
+    let mut order: Vec<_> = syntax
+        .layers()
+        .filter(|(_, layer)| layer.tree().is_some())
+        .map(|(layer, _)| layer)
+        .collect();
+    order.sort_by_key(|layer| (*layer != syntax.root_layer(), layer.index()));
+    let index_of = |layer: helix_core::Layer| {
+        order
+            .iter()
+            .position(|other| *other == layer)
+            .map(|i| i as u32)
+    };
+    let layers: Vec<_> = order
+        .iter()
+        .filter_map(|layer| {
+            let data = syntax.layer(*layer);
+            Some(helix_plugin::SyntaxLayer {
+                language: loader.language(data.language).config().language_id.clone(),
+                tree: data.tree()?.clone(),
+                ranges: data
+                    .byte_ranges()
+                    .map(|range| (range.start, range.end.min(doc.text().len_bytes() as u32)))
+                    .collect(),
+                parent: data.parent().and_then(index_of),
+            })
+        })
+        .collect();
+    let layers = Arc::new(layers);
+    cache.insert(doc.id(), (version, layers.clone()));
+    Some(layers)
+}
+
+/// `doc`'s undo history for plugins: the last one, unless it changed.
+fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
+    let history = doc.history.take();
+    let count = history.revision_count();
+    let current = history.current_revision() as u32;
+    let mut histories = HISTORIES.lock();
+    let cached = histories.entry(doc.id()).or_default();
+    if cached.revisions.len() != count || cached.current != current {
+        let known = cached.revisions.len().min(count);
+        // Revisions are only ever added: the known ones stay as they were.
+        let mut revisions = cached.revisions[..known].to_vec();
+        let (now, wall) = (std::time::Instant::now(), std::time::SystemTime::now());
+        revisions.extend((known..count).filter_map(|n| {
+            let info = history.revision_info(n)?;
+            let time = wall
+                .checked_sub(now.saturating_duration_since(info.timestamp))
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |time| time.as_millis() as u64);
+            Some(helix_plugin::v05::Revision {
+                parent: info.parent as u32,
+                time,
+                inserted: info.inserted as u32,
+                deleted: info.deleted as u32,
+            })
+        }));
+        *cached = Arc::new(helix_plugin::History { revisions, current });
+    }
+    let snapshot = cached.clone();
+    drop(histories);
+    doc.history.set(history);
+    snapshot
+}
+
+/// Set (or remove) one of `plugin`'s bars.
+fn set_bar(
+    editor: &mut Editor,
+    plugin: String,
+    kind: helix_plugin::v05::BarKind,
+    view: Option<u64>,
+    bar: Option<helix_plugin::v05::Bar>,
+) {
+    use helix_plugin::v05::BarKind;
+    use helix_view::bars;
+    let spans = |spans: Vec<(String, String)>| {
+        spans
+            .into_iter()
+            .map(|(text, scope)| bars::Span { text, scope })
+            .collect()
+    };
+    let bar = bar.map(|bar| {
+        (
+            plugin.clone(),
+            bars::Bar {
+                left: spans(bar.left),
+                center: spans(bar.center),
+                right: spans(bar.right),
+            },
+        )
+    });
+    let view = match view {
+        Some(number) => match view_by_number(editor, number) {
+            Some(view) => Some(view),
+            None => return,
+        },
+        None => None,
+    };
+    let all = &mut editor.plugin_bars;
+    // Another plugin's bar stays unless this one replaces it.
+    let mine = |slot: &Option<(String, bars::Bar)>| {
+        slot.as_ref().is_none_or(|(owner, _)| *owner == plugin)
+    };
+    match (kind, view) {
+        (BarKind::Statusline, None) if bar.is_some() || mine(&all.statusline) => {
+            all.statusline = bar
+        }
+        (BarKind::Tabline, _) if bar.is_some() || mine(&all.tabline) => all.tabline = bar,
+        (BarKind::Winbar, None) if bar.is_some() || mine(&all.winbar) => all.winbar = bar,
+        (BarKind::Statusline, Some(view)) => set_view_bar(&mut all.statuslines, view, &plugin, bar),
+        (BarKind::Winbar, Some(view)) => set_view_bar(&mut all.winbars, view, &plugin, bar),
+        _ => {}
+    }
+    helix_event::request_redraw();
+}
+
+fn set_view_bar(
+    bars: &mut HashMap<ViewId, (String, helix_view::bars::Bar)>,
+    view: ViewId,
+    plugin: &str,
+    bar: Option<(String, helix_view::bars::Bar)>,
+) {
+    match bar {
+        Some(bar) => {
+            bars.insert(view, bar);
+        }
+        None => {
+            if bars.get(&view).is_some_and(|(owner, _)| owner == plugin) {
+                bars.remove(&view);
+            }
+        }
+    }
+}
+
+/// A call from the editor to `plugin`'s `service`.
+fn editor_call(
+    plugin: &str,
+    service: &str,
+    method: &str,
+    payload: String,
+) -> helix_plugin::v05::ServiceCall {
+    helix_plugin::v05::ServiceCall {
+        caller: "editor".into(),
+        id: 0,
+        provider: plugin.into(),
+        service: service.into(),
+        method: method.into(),
+        payload,
+        chain: Vec::new(),
+    }
+}
+
+/// Make `call` now and apply what the plugin asked for; its reply.
+fn serve_now(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    call: &helix_plugin::v05::ServiceCall,
+) -> Result<String, String> {
+    let snapshot = snapshot(editor);
+    match with_host(|host| host.serve(call, &snapshot)) {
+        Some((reply, actions)) => {
+            apply(editor, Some(jobs), actions);
+            reply
+        }
+        None => Err("plugins aren't loaded".into()),
+    }
+}
+
+/// Tell plugins about a mouse event; whether one took it.
+pub fn mouse_event(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    event: &helix_view::input::MouseEvent,
+) -> bool {
+    mouse::handle(editor, jobs, event)
+}
+
 /// What plugins can see of the editor. Cheap: ropes are reference counted.
 pub fn snapshot(editor: &Editor) -> Snapshot {
     let (views, ui) = views_and_ui(editor);
@@ -1776,6 +2004,16 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     },
                     syntax: if HAS_V05.load(Ordering::Relaxed) {
                         doc.syntax().map(|syntax| syntax.tree().clone())
+                    } else {
+                        None
+                    },
+                    history: if HAS_V05.load(Ordering::Relaxed) {
+                        Some(history(doc))
+                    } else {
+                        None
+                    },
+                    layers: if HAS_V05.load(Ordering::Relaxed) {
+                        syntax_layers(editor, doc)
                     } else {
                         None
                     },
@@ -1818,7 +2056,20 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         } else {
             Default::default()
         },
+        debug: debug::state(editor),
+        #[cfg(unix)]
+        terminals: crate::terminal::plugin_terminals()
+            .into_iter()
+            .map(|(id, owner, read)| helix_plugin::v05::TerminalHandle { id, owner, read })
+            .collect(),
+        #[cfg(not(unix))]
+        terminals: Vec::new(),
     }
+}
+
+/// The debugger sent an event: tell the plugins listening.
+pub fn debug_event(name: &str, body: Option<&serde_json::Value>) {
+    debug::event(name, body);
 }
 
 /// Apply the actions of a plugin call. `jobs` is needed to run commands; it is
@@ -2333,6 +2584,21 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::Window(action) => window_action(editor, action),
+            Action::HistoryJump { doc, revision } => {
+                let Some(doc) = editor_doc_id(editor, doc) else {
+                    continue;
+                };
+                let Some(view) = view_for(editor, doc) else {
+                    continue;
+                };
+                let (view, doc) = (
+                    editor.tree.get_mut(view),
+                    editor.documents.get_mut(&doc).expect("a view shows it"),
+                );
+                if doc.jump_to_revision(view, revision as usize) {
+                    helix_event::request_redraw();
+                }
+            }
             Action::Fold {
                 doc,
                 first,
@@ -2351,6 +2617,52 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::LanguageServer(action) => lsp_server::apply(editor, action),
+            Action::Mouse { plugin, kinds } => mouse::listen(plugin, kinds),
+            Action::DebugRequest {
+                plugin,
+                id,
+                command,
+                arguments,
+            } => debug::request(editor, plugin, id, command, arguments),
+            Action::SetBreakpoints { path, breakpoints } => {
+                debug::set_breakpoints(editor, path, breakpoints)
+            }
+            Action::DebugListen { plugin, events } => debug::listen(plugin, events),
+            #[cfg(unix)]
+            Action::TerminalOpen {
+                plugin,
+                id,
+                argv,
+                split,
+            } => {
+                use helix_view::editor::Action as Open;
+                let action = match split {
+                    Some(true) => Open::HorizontalSplit,
+                    Some(false) => Open::VerticalSplit,
+                    None => Open::Replace,
+                };
+                match crate::terminal::open_as(editor, &argv, action, Some(id), Some(plugin)) {
+                    // As `:terminal`: ready to type in.
+                    Ok(_) => editor.mode = Mode::Insert,
+                    Err(err) => editor.set_error(err.to_string()),
+                }
+            }
+            #[cfg(unix)]
+            Action::TerminalWrite { id, data } => {
+                crate::terminal::write(id, data.as_bytes());
+            }
+            #[cfg(unix)]
+            Action::TerminalClose(id) => crate::terminal::close_with_buffer(editor, id),
+            #[cfg(not(unix))]
+            Action::TerminalOpen { .. }
+            | Action::TerminalWrite { .. }
+            | Action::TerminalClose(_) => editor.set_error("terminals need a Unix system"),
+            Action::Bar {
+                plugin,
+                kind,
+                view,
+                bar,
+            } => set_bar(editor, plugin, kind, view, bar),
             Action::Canvas { doc, lines } => {
                 if let Some(doc) =
                     editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))
@@ -3025,6 +3337,8 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        HISTORIES.lock().remove(&event.doc.id());
+        LAYERS.lock().remove(&event.doc.id());
         if let Some(marks) = &*MARKS.lock() {
             marks
                 .lock()
@@ -3093,6 +3407,10 @@ fn refresh_wanted(editor: &mut Editor) {
     );
     HAS_V05.store(
         with_host(|host| has_v05(host)).unwrap_or(false),
+        Ordering::Relaxed,
+    );
+    debug::WANTED.store(
+        with_host(|host| wants_debug(host)).unwrap_or(false),
         Ordering::Relaxed,
     );
     for plugin in disabled {

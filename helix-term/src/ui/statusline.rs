@@ -54,6 +54,14 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
 
     surface.set_style(viewport.with_height(1), base_style);
 
+    // A plugin's own statusline.
+    let editor = context.editor;
+    if let Some(bar) = editor.plugin_bars.statusline(context.view.id) {
+        let at = Some((context.doc, context.view));
+        crate::ui::bars::render(editor, at, bar, viewport, surface, base_style);
+        return;
+    }
+
     // Left side of the status line.
 
     let config = context.editor.config();

@@ -1,0 +1,9 @@
+name = "undotree"
+version = "0.1.0"
+api = "0.5"
+description = "Browse the undo tree and jump to any revision, like undotree"
+permissions = ["read-buffers", "edit-buffers"]
+wasm = "plugin.wasm"
+
+[keys.normal.space]
+U = "show"

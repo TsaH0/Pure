@@ -53,6 +53,15 @@ pub struct History {
     current: usize,
 }
 
+/// What [`History::revision_info`] tells about a revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevisionInfo {
+    pub parent: usize,
+    pub timestamp: Instant,
+    pub inserted: usize,
+    pub deleted: usize,
+}
+
 /// A single point in history. See [History] for more information.
 #[derive(Debug, Clone)]
 struct Revision {
@@ -112,6 +121,37 @@ impl History {
     #[inline]
     pub fn current_revision(&self) -> usize {
         self.current
+    }
+
+    /// How many revisions there are, the original text (revision 0)
+    /// included.
+    #[inline]
+    pub fn revision_count(&self) -> usize {
+        self.revisions.len()
+    }
+
+    /// Revision `n`: its parent, when it was made, and how many chars it
+    /// inserted and deleted.
+    pub fn revision_info(&self, n: usize) -> Option<RevisionInfo> {
+        let revision = self.revisions.get(n)?;
+        let (mut inserted, mut deleted) = (0, 0);
+        for (from, to, fragment) in revision.transaction.changes_iter() {
+            deleted += to - from;
+            inserted += fragment.map_or(0, |text| text.chars().count());
+        }
+        Some(RevisionInfo {
+            parent: revision.parent,
+            timestamp: revision.timestamp,
+            inserted,
+            deleted,
+        })
+    }
+
+    /// The transactions that turn the current text into revision `to`'s
+    /// (along the tree, like `:earlier`); `None` if there is no such
+    /// revision.
+    pub fn jump(&mut self, to: usize) -> Option<Vec<Transaction>> {
+        (to < self.revisions.len()).then(|| self.jump_to(to))
     }
 
     #[inline]

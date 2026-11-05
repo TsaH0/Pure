@@ -10,6 +10,8 @@ pub const QUOTE: &str = "Immortal enlightenment is repentant enlightenment; perh
 pub mod application;
 pub mod args;
 mod auto_reload;
+#[cfg(not(windows))]
+mod chords;
 pub mod commands;
 pub mod compositor;
 pub mod config;
@@ -24,6 +26,10 @@ pub mod plugins;
 #[cfg(not(feature = "plugins"))]
 #[path = "plugins_disabled.rs"]
 pub mod plugins;
+#[cfg(unix)]
+pub mod remote;
+#[cfg(unix)]
+pub mod terminal;
 pub mod ui;
 
 #[cfg(not(windows))]

@@ -258,6 +258,18 @@ impl Client {
     where
         R::Arguments: serde::Serialize,
     {
+        let arguments = serde_json::to_value(arguments).map_err(Error::from);
+        let call =
+            arguments.map(|arguments| self.call_raw(R::COMMAND.to_string(), Some(arguments)));
+        async move { call?.await }
+    }
+
+    /// Execute a RPC request named `command` on the debugger.
+    pub fn call_raw(
+        &self,
+        command: String,
+        arguments: Option<Value>,
+    ) -> impl Future<Output = Result<Value>> {
         let server_tx = self.server_tx.clone();
         let id = self.next_request_id();
 
@@ -265,14 +277,12 @@ impl Client {
             use std::time::Duration;
             use tokio::time::timeout;
 
-            let arguments = Some(serde_json::to_value(arguments)?);
-
             let (callback_tx, mut callback_rx) = channel(1);
 
             let req = Request {
                 back_ch: Some(callback_tx),
                 seq: id,
-                command: R::COMMAND.to_string(),
+                command,
                 arguments,
             };
 

@@ -26,6 +26,8 @@ pub struct Config {
     pub enable_mouse_capture: bool,
     pub force_enable_extended_underlines: bool,
     pub kitty_keyboard_protocol: KittyKeyboardProtocolConfig,
+    /// Ask for key releases too (for chords).
+    pub report_key_releases: bool,
 }
 
 impl From<&EditorConfig> for Config {
@@ -34,6 +36,7 @@ impl From<&EditorConfig> for Config {
             enable_mouse_capture: config.mouse,
             force_enable_extended_underlines: config.undercurl,
             kitty_keyboard_protocol: config.kitty_keyboard_protocol,
+            report_key_releases: !config.chords.is_empty(),
         }
     }
 }

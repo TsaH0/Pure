@@ -741,7 +741,16 @@ impl Application {
                 helix_event::request_redraw();
             }
             EditorEvent::DebuggerEvent((id, payload)) => {
+                let event = match &payload {
+                    helix_dap::Payload::Event(event) => {
+                        Some((event.event.clone(), event.body.clone()))
+                    }
+                    _ => None,
+                };
                 let needs_render = self.editor.handle_debugger_message(id, payload).await;
+                if let Some((name, body)) = event {
+                    crate::plugins::debug_event(&name, body.as_ref());
+                }
                 if needs_render {
                     self.render().await;
                 }
@@ -765,6 +774,30 @@ impl Application {
     }
 
     pub async fn handle_terminal_events(&mut self, event: std::io::Result<TerminalEvent>) {
+        // Keys held for chords wait; chords run in their place.
+        #[cfg(not(windows))]
+        if let Ok(termina::Event::Key(key)) = &event {
+            if !self.editor.config().chords.is_empty() {
+                let keys = crate::chords::filter(
+                    &mut self.editor,
+                    &mut self.compositor,
+                    &mut self.jobs,
+                    *key,
+                );
+                for key in keys {
+                    self.handle_terminal_event(Ok(termina::Event::Key(key)))
+                        .await;
+                }
+                if !self.editor.should_close() {
+                    self.render().await;
+                }
+                return;
+            }
+        }
+        self.handle_terminal_event(event).await
+    }
+
+    async fn handle_terminal_event(&mut self, event: std::io::Result<TerminalEvent>) {
         #[cfg(not(windows))]
         use termina::escape::csi;
 
