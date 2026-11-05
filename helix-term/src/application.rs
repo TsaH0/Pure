@@ -774,6 +774,30 @@ impl Application {
     }
 
     pub async fn handle_terminal_events(&mut self, event: std::io::Result<TerminalEvent>) {
+        // Keys held for chords wait; chords run in their place.
+        #[cfg(not(windows))]
+        if let Ok(termina::Event::Key(key)) = &event {
+            if !self.editor.config().chords.is_empty() {
+                let keys = crate::chords::filter(
+                    &mut self.editor,
+                    &mut self.compositor,
+                    &mut self.jobs,
+                    key.clone(),
+                );
+                for key in keys {
+                    self.handle_terminal_event(Ok(termina::Event::Key(key)))
+                        .await;
+                }
+                if !self.editor.should_close() {
+                    self.render().await;
+                }
+                return;
+            }
+        }
+        self.handle_terminal_event(event).await
+    }
+
+    async fn handle_terminal_event(&mut self, event: std::io::Result<TerminalEvent>) {
         #[cfg(not(windows))]
         use termina::escape::csi;
 

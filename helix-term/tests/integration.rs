@@ -17,6 +17,8 @@ mod test {
 
     mod auto_pairs;
     mod auto_reload;
+    #[cfg(not(windows))]
+    mod chords;
     mod command_line;
     mod commands;
     mod long_lines;

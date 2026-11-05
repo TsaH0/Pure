@@ -306,10 +306,19 @@ impl TerminaBackend {
         )
     }
 
+    fn keyboard_flags(&self) -> csi::KittyKeyboardFlags {
+        let flags = csi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
+            .union(csi::KittyKeyboardFlags::REPORT_ALTERNATE_KEYS);
+        // Chords need to know when keys are let go.
+        if self.config.report_key_releases {
+            flags.union(csi::KittyKeyboardFlags::REPORT_EVENT_TYPES)
+        } else {
+            flags
+        }
+    }
+
     fn enable_extensions(&mut self) -> io::Result<()> {
-        const KEYBOARD_FLAGS: csi::KittyKeyboardFlags =
-            csi::KittyKeyboardFlags::DISAMBIGUATE_ESCAPE_CODES
-                .union(csi::KittyKeyboardFlags::REPORT_ALTERNATE_KEYS);
+        let keyboard_flags = self.keyboard_flags();
 
         match self.capabilities.kitty_keyboard {
             KittyKeyboardSupport::None | KittyKeyboardSupport::Partial => (),
@@ -317,7 +326,7 @@ impl TerminaBackend {
                 write!(
                     self.terminal,
                     "{}",
-                    Csi::Keyboard(csi::Keyboard::PushFlags(KEYBOARD_FLAGS))
+                    Csi::Keyboard(csi::Keyboard::PushFlags(keyboard_flags))
                 )?;
             }
             KittyKeyboardSupport::Some => {
@@ -325,7 +334,7 @@ impl TerminaBackend {
                     self.terminal,
                     "{}{}",
                     // Enable the flags we need.
-                    Csi::Keyboard(csi::Keyboard::PushFlags(KEYBOARD_FLAGS)),
+                    Csi::Keyboard(csi::Keyboard::PushFlags(keyboard_flags)),
                     // Then request the current flags. We need to check if the terminal enabled
                     // all of the flags we require.
                     Csi::Keyboard(csi::Keyboard::QueryFlags),
@@ -341,8 +350,8 @@ impl TerminaBackend {
                 let Event::Csi(Csi::Keyboard(csi::Keyboard::ReportFlags(flags))) = event else {
                     unreachable!();
                 };
-                if flags != KEYBOARD_FLAGS {
-                    log::info!("Turning off enhanced keyboard support because the terminal enabled different flags. Requested {KEYBOARD_FLAGS:?} but got {flags:?}");
+                if flags != keyboard_flags {
+                    log::info!("Turning off enhanced keyboard support because the terminal enabled different flags. Requested {keyboard_flags:?} but got {flags:?}");
                     write!(
                         self.terminal,
                         "{}",
@@ -448,6 +457,17 @@ impl Backend for TerminaBackend {
             }
         }
         self.capabilities.extended_underlines |= self.config.force_enable_extended_underlines;
+        // Chords set or removed: key releases reported or not.
+        if self.config.report_key_releases != config.report_key_releases
+            && self.capabilities.kitty_keyboard == KittyKeyboardSupport::Full
+        {
+            write!(
+                self.terminal,
+                "{}{}",
+                Csi::Keyboard(csi::Keyboard::PopFlags(1)),
+                Csi::Keyboard(csi::Keyboard::PushFlags(self.keyboard_flags()))
+            )?;
+        }
         Ok(())
     }
 

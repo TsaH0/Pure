@@ -484,6 +484,10 @@ pub struct Config {
     pub rainbow_brackets: bool,
     /// Whether to enable Kitty Keyboard Protocol
     pub kitty_keyboard_protocol: KittyKeyboardProtocolConfig,
+    /// Keys pressed while another is held (`"p+s"`: hold `p`, press `s`),
+    /// per mode, with the commands they run. Needs a terminal that reports
+    /// key releases (the kitty keyboard protocol).
+    pub chords: HashMap<crate::document::Mode, HashMap<String, ChordCommands>>,
     pub buffer_picker: BufferPickerConfig,
     /// Workspace-trust configuration.
     pub workspace_trust: WorkspaceTrustConfig,
@@ -613,6 +617,23 @@ impl Default for SmartTabConfig {
         SmartTabConfig {
             enable: true,
             supersede_menu: false,
+        }
+    }
+}
+
+/// What a chord runs: a command or several.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChordCommands {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ChordCommands {
+    pub fn commands(&self) -> &[String] {
+        match self {
+            Self::One(command) => std::slice::from_ref(command),
+            Self::Many(commands) => commands,
         }
     }
 }
@@ -1344,6 +1365,7 @@ impl Default for Config {
             editor_config: true,
             rainbow_brackets: false,
             kitty_keyboard_protocol: Default::default(),
+            chords: HashMap::new(),
             buffer_picker: BufferPickerConfig::default(),
             workspace_trust: WorkspaceTrustConfig::default(),
         }

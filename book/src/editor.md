@@ -21,6 +21,7 @@
   - [`[editor.gutters.code-action-hint]` Section](#editorgutterscode-action-hint-section)
 - [`[editor.soft-wrap]` Section](#editorsoft-wrap-section)
 - [`[editor.smart-tab]` Section](#editorsmart-tab-section)
+- [`[editor.chords]` Section](#editorchords-section)
 - [`[editor.inline-diagnostics]` Section](#editorinline-diagnostics-section)
 - [`[editor.word-completion]` Section](#editorword-completion-section)
 - [`[editor.workspace-trust]` Section](#editorworkspace-trust-section)
@@ -537,6 +538,30 @@ S-tab = "move_parent_node_start"
 tab = "extend_parent_node_end"
 S-tab = "extend_parent_node_start"
 ```
+
+### `[editor.chords]` Section
+
+Chords are keys pressed while another is held: `"p+s"` means hold `p`,
+then press `s`. They are bound per mode to a command or a list of
+commands, like keys:
+
+```toml
+[editor.chords.normal]
+"p+s" = "paste_after"                                   # hold p, press s
+"p+w" = "paste_before"
+"p+j" = ["open_below", "normal_mode", "paste_before"]   # on a new line below
+"space+f" = "file_picker"
+```
+
+They need a terminal that tells when keys are let go: one with the kitty
+keyboard protocol (kitty, WezTerm, foot, Ghostty, recent Alacritty...), with
+`kitty-keyboard-protocol` not `"disabled"`. Elsewhere chords never happen
+and keys work as usual.
+
+A key that starts a chord waits: pressed and let go on its own, it does what
+it always does when it is let go; held while a chord's second key is
+pressed, the chord runs instead. Such a key doesn't repeat while held.
+Chords apply to the editor's own keys, not in prompts and pickers.
 
 ### `[editor.inline-diagnostics]` Section
 
