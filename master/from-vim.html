@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Migrating from Vim</title>
+        <title>Migrating from Vim - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -190,13 +190,13 @@
 <li><a href="#comment-lines-completion-search">Comment lines, Completion, Search</a></li>
 <li><a href="#file-actions">File actions</a></li>
 </ul>
-<p>Helix’s editing model is strongly inspired from Vim and Kakoune, and a notable
-difference from Vim (and the most striking similarity to Kakoune) is that Helix
+<p>Pure’s editing model is strongly inspired from Vim and Kakoune, and a notable
+difference from Vim (and the most striking similarity to Kakoune) is that Pure
 follows the <code>selection → action</code> model. This means that whatever you are
 going to act on (a word, a paragraph, a line, etc.) is selected first and the
 action itself (delete, change, yank, etc.) comes second. A cursor is simply a
 single width selection.</p>
-<p><em>Note:</em> As Helix is inspired by Vim and <a href="https://github.com/mawww/kakoune">Kakoune</a>, the keybindings are similar but also have some differences. The content of this page is inspired by <a href="https://github.com/mawww/kakoune/wiki/Migrating-from-Vim">Kakoune Wiki</a>.</p>
+<p><em>Note:</em> As Pure is inspired by Vim and <a href="https://github.com/mawww/kakoune">Kakoune</a>, the keybindings are similar but also have some differences. The content of this page is inspired by <a href="https://github.com/mawww/kakoune/wiki/Migrating-from-Vim">Kakoune Wiki</a>.</p>
 <p>NOTE: Unlike vim, <code>f</code>, <code>F</code>, <code>t</code> and <code>T</code> are not confined to the current line.</p>
 <h2 id="deletechange-commands"><a class="header" href="#deletechange-commands">Delete/Change Commands</a></h2>
 <p>delete a word:</p>
@@ -217,7 +217,7 @@ single width selection.</p>
 <p>copy a line:</p>
 <ul>
 <li>vim: <code>yy</code></li>
-<li>helix: <code>Xy</code> (<code>X</code> extends all selections to whole lines)</li>
+<li>helix: <code>xy</code> (<code>x</code> selects whole lines; <code>X</code> does the same upwards)</li>
 </ul>
 <p>global replace:</p>
 <ul>
@@ -319,8 +319,8 @@ single width selection.</p>
 <li>vim: <code>ma</code> to set bookmark with name a. Use <code>`a</code> to go back to this bookmarked location.</li>
 <li>helix: there are no named bookmarks, but you can save a location in the jumplist with <code>C-s</code>, then jump back to that location by opening the jumplist picker with <code>&lt;space&gt;-j</code>, or back in the jumplist with <code>C-o</code> and forward with <code>C-i</code></li>
 </ul>
-<p>Helix allows <a href="https://docs.helix-editor.com/keymap.html#insert-mode">some limited movement in <code>insert</code> mode</a> without switching to <code>normal</code> mode.</p>
-<p>Unlike Vim, under Helix, the cursor shape is the same (block) in insert mode and normal mode by default.
+<p>Pure allows <a href="https://docs.helix-editor.com/keymap.html#insert-mode">some limited movement in <code>insert</code> mode</a> without switching to <code>normal</code> mode.</p>
+<p>Unlike Vim, under Pure, the cursor shape is the same (block) in insert mode and normal mode by default.
 This can be adjusted in configuration:</p>
 <pre><code class="language-toml">[editor.cursor-shape]
 insert = "bar"

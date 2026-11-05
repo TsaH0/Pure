@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Themes</title>
+        <title>Themes - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -193,7 +193,7 @@ light = "catppuccin_latte"
 # fallback = "catppuccin_frappe"
 </code></pre>
 <h2 id="creating-a-theme"><a class="header" href="#creating-a-theme">Creating a theme</a></h2>
-<p>Create a file with the name of your theme as the file name (i.e <code>mytheme.toml</code>) and place it in your <code>themes</code> directory (i.e <code>~/.config/helix/themes</code> or <code>%AppData%\helix\themes</code> on Windows). The directory might have to be created beforehand.</p>
+<p>Create a file with the name of your theme as the file name (i.e <code>mytheme.toml</code>) and place it in your <code>themes</code> directory (i.e <code>~/.config/pure/themes</code> or <code>%AppData%\pure\themes</code> on Windows). The directory might have to be created beforehand.</p>
 <blockquote>
 <p>💡 The names “default” and “base16_default” are reserved for built-in themes
 and cannot be overridden by user-defined themes.</p>
@@ -213,7 +213,7 @@ key = "#ffffff"
 </code></pre>
 <p>Color values must be either a <a href="https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/hex-color">CSS hex RGB string</a> or a name declared in the <a href="#color-palettes"><code>palette</code></a>.</p>
 <blockquote>
-<p>💡 Note that Helix doesn’t support transparency (alpha channel).</p>
+<p>💡 Note that Pure doesn’t support transparency (alpha channel).</p>
 </blockquote>
 <p>For inspiration, you can find the default <code>theme.toml</code>
 <a href="https://github.com/helix-editor/helix/blob/master/theme.toml">here</a> and
@@ -615,6 +615,9 @@ See also <a href="https://github.com/helix-editor/helix/issues/2380">#2380</a></
 <tr><td><code>ui.bufferline.background</code></td><td>Style for bufferline background</td></tr>
 <tr><td><code>ui.popup</code></td><td>Documentation popups (e.g. Space + k)</td></tr>
 <tr><td><code>ui.popup.info</code></td><td>Prompt for multiple key options</td></tr>
+<tr><td><code>ui.cmdline.popup</code></td><td>The popup and panel command lines (<code>editor.cmdline.style</code>), falls back to <code>ui.popup</code></td></tr>
+<tr><td><code>ui.cmdline.border</code></td><td>Its border, falls back to <code>ui.window</code></td></tr>
+<tr><td><code>ui.cmdline.title</code></td><td>Its title, falls back to <code>ui.text.focus</code></td></tr>
 <tr><td><code>ui.picker.header</code></td><td>Header row area in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column</code></td><td>Column names in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column.active</code></td><td>The column name in pickers with multiple columns where the cursor is entering into.</td></tr>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Key remapping</title>
+        <title>Key remapping - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -183,7 +183,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h2 id="key-remapping"><a class="header" href="#key-remapping">Key remapping</a></h2>
-<p>Helix currently supports one-way key remapping through a simple TOML configuration
+<p>Pure currently supports one-way key remapping through a simple TOML configuration
 file. (More powerful solutions such as rebinding via commands will be
 available in the future).</p>
 <p>There are three kinds of commands that can be used in keymaps:</p>
@@ -205,7 +205,7 @@ command sequences are executed. Modifier keys (e.g. Alt+o) can be used
 like <code>"&lt;A-o&gt;"</code>, e.g. <code>"@miw&lt;A-o&gt;"</code></li>
 </ul>
 <p>To remap keys, create a <code>config.toml</code> file in your <code>helix</code> configuration
-directory (default <code>~/.config/helix</code> on Linux systems) with a structure like
+directory (default <code>~/.config/pure</code> on Linux systems) with a structure like
 this:</p>
 <blockquote>
 <p>💡 To set a modifier + key as a keymap, type <code>A-X = ...</code> or  <code>C-X = ...</code> for Alt + X or Ctrl + X. Combine with Shift using a dash, e.g. <code>C-S-esc</code>.
@@ -214,7 +214,7 @@ Within macros, wrap them in <code>&lt;&gt;</code>, e.g. <code>&lt;A-X&gt;</code>
 <pre><code class="language-toml"># At most one section each of 'keys.normal', 'keys.insert' and 'keys.select'
 [keys.normal]
 C-s = ":w" # Maps Ctrl-s to the typable command :w which is an alias for :write (save file)
-C-o = ":open ~/.config/helix/config.toml" # Maps Ctrl-o to opening of the helix config file
+C-o = ":open ~/.config/pure/config.toml" # Maps Ctrl-o to opening of the helix config file
 a = "move_char_left" # Maps the 'a' key to the move_char_left command
 w = "move_line_up" # Maps the 'w' key move_line_up
 "C-S-esc" = "extend_line" # Maps Ctrl-Shift-Escape to extend_line

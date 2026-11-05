@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Workspace trust</title>
+        <title>Workspace trust - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -183,7 +183,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="workspace-trust"><a class="header" href="#workspace-trust">Workspace trust</a></h1>
-<p>Helix has several features that can execute arbitrary code:</p>
+<p>Pure has several features that can execute arbitrary code:</p>
 <ul>
 <li>Language servers (LSP)</li>
 <li>Debug adapters (DAP)</li>
@@ -191,7 +191,7 @@
 <li>Git integration (filters and other commands in a repository’s <code>.git/config</code>)</li>
 </ul>
 <p>To protect against malicious projects (a checked-out PR, a freshly cloned
-repository, etc.) Helix gates these behind explicit per-workspace trust.
+repository, etc.) Pure gates these behind explicit per-workspace trust.
 By default language servers start automatically (their binaries come from
 <code>$PATH</code>, not from the workspace) and debug adapters may be launched, but
 loading <code>.helix/config.toml</code> or <code>.helix/languages.toml</code> and trusting a
@@ -199,9 +199,9 @@ repository’s <code>.git/config</code> requires opting in. Note that debug adap
 are never started automatically — you launch them yourself — but the same
 trust level still gates whether they may run. The model is intentionally
 similar to <a href="https://direnv.net/">direnv</a>: you run <code>:workspace-trust</code> once
-per workspace and Helix remembers across sessions.</p>
+per workspace and Pure remembers across sessions.</p>
 <h2 id="granting-trust"><a class="header" href="#granting-trust">Granting trust</a></h2>
-<p>When Helix opens a file inside a workspace it has never seen before, a
+<p>When Pure opens a file inside a workspace it has never seen before, a
 modal trust prompt asks:</p>
 <ul>
 <li><strong>Trust</strong> — allow the workspace permanently.</li>
@@ -209,7 +209,7 @@ modal trust prompt asks:</p>
 </ul>
 <p><code>&lt;Esc&gt;</code> (or any other dismissal) caches “untrusted for this session” so
 the prompt doesn’t re-fire for every file you open in the workspace. The
-next time you start Helix in that workspace, it’ll prompt again.</p>
+next time you start Pure in that workspace, it’ll prompt again.</p>
 <p>A small <code>[⚠]</code> indicator appears in the bottom-right of the editor (next
 to the macro-recording <code>[@]</code>) whenever the workspace is in restricted mode
 <em>and</em> running <code>:workspace-trust</code> would change observable behavior — i.e.
@@ -220,9 +220,9 @@ when there’s a local config to load or an LSP that would start.</p>
 <p>Run <code>:workspace-untrust</code> to revoke a workspace’s trust grant. The next time
 you open a file in that workspace, you’re back to the untrusted hint.</p>
 <h2 id="detecting-changes-after-trust-was-granted"><a class="header" href="#detecting-changes-after-trust-was-granted">Detecting changes after trust was granted</a></h2>
-<p>When you trust a workspace, Helix records a hash of every file under
+<p>When you trust a workspace, Pure records a hash of every file under
 <code>.helix/</code>. If those files change afterwards (a malicious checkout, an
-inadvertent rebase, etc.) Helix detects the mismatch on the next open and
+inadvertent rebase, etc.) Pure detects the mismatch on the next open and
 reports the workspace as <em>stale</em>:</p>
 <pre><code>Workspace `.helix/` config changed since `:workspace-trust`. Local config
 not loaded. Run `:workspace-trust` to re-allow.
@@ -240,10 +240,10 @@ hash = sha256:abc123...
 excluded = false
 </code></pre>
 <ul>
-<li>Linux, macOS: <code>~/.local/share/helix/workspace_trust/</code></li>
-<li>Windows: <code>%AppData%\Roaming\helix\workspace_trust\</code></li>
+<li>Linux, macOS: <code>~/.local/share/pure/workspace_trust/</code></li>
+<li>Windows: <code>%AppData%\Roaming\pure\workspace_trust\</code></li>
 </ul>
-<p>The one-file-per-workspace shape is safe under multiple concurrent Helix
+<p>The one-file-per-workspace shape is safe under multiple concurrent Pure
 instances — different workspaces never write the same file.</p>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <p>Settings live under <code>[editor.workspace-trust]</code>:</p>
@@ -316,7 +316,7 @@ genuinely disruptive to your workflow. An explicit <code>:workspace-exclude</cod
 still overrides a matching pattern.</p>
 </blockquote>
 <h2 id="git-trust"><a class="header" href="#git-trust">Git trust</a></h2>
-<p>Workspace trust also gates how Helix opens git repositories. Untrusted
+<p>Workspace trust also gates how Pure opens git repositories. Untrusted
 workspaces are opened in <a href="https://github.com/Byron/gitoxide">gix</a>’s
 <code>Trust::Reduced</code> mode; trusted workspaces use <code>Trust::Full</code>.</p>
 <p>Under <code>Trust::Reduced</code>, gix still runs the full filter pipeline (so
@@ -325,7 +325,7 @@ configuration coming from the untrusted, repository-local <code>.git/config</cod
 That means <code>filter.*.clean</code> / <code>filter.*.smudge</code> drivers and similar
 keys that would otherwise execute external programs are dropped until you
 trust the workspace.</p>
-<p>Helix forces this trust level explicitly rather than letting gix infer it
+<p>Pure forces this trust level explicitly rather than letting gix infer it
 from <code>.git</code> directory ownership — a malicious <code>.git/config</code> in a directory
 you happen to own is still treated as untrusted until you run
 <code>:workspace-trust</code>.</p>

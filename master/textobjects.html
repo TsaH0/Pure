@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Textobjects</title>
+        <title>Textobjects - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -183,7 +183,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h2 id="selecting-and-manipulating-text-with-textobjects"><a class="header" href="#selecting-and-manipulating-text-with-textobjects">Selecting and manipulating text with textobjects</a></h2>
-<p>In Helix, textobjects are a way to select, manipulate and operate on a piece of
+<p>In Pure, textobjects are a way to select, manipulate and operate on a piece of
 text in a structured way. They allow you to refer to blocks of text based on
 their structure or purpose, such as a word, sentence, paragraph, or even a
 function or block of code.</p>
@@ -204,6 +204,9 @@ function or block of code.</p>
 <tr><td><code>p</code></td><td>Paragraph</td></tr>
 <tr><td><code>(</code>, <code>[</code>, <code>'</code>, etc.</td><td>Specified surround pairs</td></tr>
 <tr><td><code>m</code></td><td>The closest surround pair</td></tr>
+<tr><td><code>b</code> / <code>B</code> / <code>r</code> / <code>A</code></td><td><code>( )</code> / <code>{ }</code> / <code>[ ]</code> / <code>&lt; &gt;</code></td></tr>
+<tr><td><code>d</code> / <code>s</code></td><td><code>" "</code> / <code>' '</code></td></tr>
+<tr><td><code>q</code></td><td>The closest quotes (<code>"</code>, <code>'</code> or <code>`</code>)</td></tr>
 <tr><td><code>f</code></td><td>Function</td></tr>
 <tr><td><code>t</code></td><td>Type (or Class)</td></tr>
 <tr><td><code>a</code></td><td>Argument/parameter</td></tr>
@@ -214,6 +217,10 @@ function or block of code.</p>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p>💡 The pair letters <code>b</code>, <code>B</code>, <code>r</code>, <code>A</code>, <code>d</code> and <code>s</code> also work with the surround
+commands <code>ms</code>, <code>md</code> and <code>mr</code> (e.g. <code>msb</code> adds parentheses).</p>
+</blockquote>
 <blockquote>
 <p>💡 <code>f</code>, <code>t</code>, etc. need a tree-sitter grammar active for the current
 document and a special tree-sitter query file to work properly. <a href="./lang-support.html">Only

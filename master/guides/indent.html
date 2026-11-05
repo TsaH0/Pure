@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding indent queries</title>
+        <title>Adding indent queries - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -183,7 +183,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h2 id="adding-indent-queries"><a class="header" href="#adding-indent-queries">Adding indent queries</a></h2>
-<p>Helix uses tree-sitter to correctly indent new lines. This requires a
+<p>Pure uses tree-sitter to correctly indent new lines. This requires a
 tree-sitter grammar and an <code>indent.scm</code> query file placed in
 <code>runtime/queries/{language}/indents.scm</code>.</p>
 <p>The indent level of a line is <strong>the number of <code>@indent</code> scopes that contain
@@ -194,7 +194,7 @@ level, <code>@align</code> aligns to a column, etc. (see <a href="#capture-types
 <p>Note that it matters where these scopes <em>begin</em>: multiple scopes that open on
 the same physical line only increase the indent by 1 (the same-line rule). See
 <a href="#capture-types">Capture types</a>.</p>
-<p>By default, Helix uses the <code>hybrid</code> indentation heuristic. This means that
+<p>By default, Pure uses the <code>hybrid</code> indentation heuristic. This means that
 indent queries are not used to compute the expected absolute indentation of a
 line but rather the expected difference in indentation between the new and an
 already existing line. This difference is then added to the actual indentation
@@ -203,7 +203,7 @@ harder to find, it is recommended to disable it when testing via
 <code>:set indent-heuristic tree-sitter</code>. The rest of this guide assumes that
 the <code>tree-sitter</code> heuristic is used.</p>
 <h2 id="indent-queries"><a class="header" href="#indent-queries">Indent queries</a></h2>
-<p>When Helix is inserting a new line through <code>o</code>, <code>O</code>, or <code>&lt;ret&gt;</code>, to determine
+<p>When Pure is inserting a new line through <code>o</code>, <code>O</code>, or <code>&lt;ret&gt;</code>, to determine
 the indent level for the new line, the query in <code>indents.scm</code> is run on the
 document. The starting position of the query is the end of the line above where
 a new line will be inserted.</p>

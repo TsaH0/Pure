@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding tags queries</title>
+        <title>Adding tags queries - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -185,13 +185,13 @@
                         <h2 id="adding-tags-queries"><a class="header" href="#adding-tags-queries">Adding tags queries</a></h2>
 <p>See tree-sitter’s documentation on <a href="https://tree-sitter.github.io/tree-sitter/4-code-navigation.html">Code Navigation Systems</a> for more
 background on tags queries.</p>
-<p>Helix provides LSP-like features such as document and workspace symbol pickers
+<p>Pure provides LSP-like features such as document and workspace symbol pickers
 out-of-the-box for languages with <code>tags.scm</code> queries based on syntax trees. To
 be analyzed a language must have a tree-sitter grammar and a <code>tags.scm</code> query
 file which pattern matches interesting nodes from syntax trees.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/tags.scm</code>
-when contributing to Helix. You may place these under your local runtime
-directory (<code>~/.config/helix/runtime</code> in Linux for example) for the sake of
+when contributing to Pure. You may place these under your local runtime
+directory (<code>~/.config/pure/runtime</code> in Linux for example) for the sake of
 testing.</p>
 <h2 id="captures"><a class="header" href="#captures">Captures</a></h2>
 <h3 id="definition"><a class="header" href="#definition"><code>@definition.*</code></a></h3>

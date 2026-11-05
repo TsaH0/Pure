@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Keymap</title>
+        <title>Keymap - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -224,7 +224,7 @@
 <p>💡 Mappings marked (<strong>TS</strong>) require a tree-sitter grammar for the file type.</p>
 </blockquote>
 <blockquote>
-<p>⚠️ Some terminals’ default key mappings conflict with Helix’s. If any of the mappings described on this page do not work as expected, check your terminal’s mappings to ensure they do not conflict. See the <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">wiki</a> for known conflicts.</p>
+<p>⚠️ Some terminals’ default key mappings conflict with Pure’s. If any of the mappings described on this page do not work as expected, check your terminal’s mappings to ensure they do not conflict. See the <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">wiki</a> for known conflicts.</p>
 </blockquote>
 <h2 id="normal-mode"><a class="header" href="#normal-mode">Normal mode</a></h2>
 <p>Normal mode is the default mode when you launch helix. You can return to it from other modes by pressing the <code>Escape</code> key.</p>
@@ -307,7 +307,7 @@
 <tr><td><code>Ctrl-x</code></td><td>Decrement object (number) under cursor</td><td><code>decrement</code></td></tr>
 <tr><td><code>Q</code></td><td>Start/stop macro recording to the selected register (experimental)</td><td><code>record_macro</code></td></tr>
 <tr><td><code>q</code></td><td>Play back a recorded macro from the selected register (experimental)</td><td><code>replay_macro</code></td></tr>
-<tr><td><code>Ctrl-z</code></td><td>Suspend Helix and return to the shell (resume with <code>fg</code>)</td><td><code>suspend</code></td></tr>
+<tr><td><code>Ctrl-z</code></td><td>Suspend Pure and return to the shell (resume with <code>fg</code>)</td><td><code>suspend</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -320,7 +320,7 @@
 <tbody>
 <tr><td><code>|</code></td><td>Pipe each selection through shell command, replacing with output</td><td><code>shell_pipe</code></td></tr>
 <tr><td><code>Alt-|</code></td><td>Pipe each selection into shell command, ignoring output</td><td><code>shell_pipe_to</code></td></tr>
-<tr><td><code>!</code></td><td>Run shell command, inserting output before each selection</td><td><code>shell_insert_output</code></td></tr>
+<tr><td><code>!</code></td><td>Run a shell command like Vim’s <code>:!</code> (on a cleared screen), press any key to return</td><td><code>run_and_wait</code></td></tr>
 <tr><td><code>Alt-!</code></td><td>Run shell command, appending output after each selection</td><td><code>shell_append_output</code></td></tr>
 <tr><td><code>$</code></td><td>Pipe each selection into shell command, keep selections where command returned 0</td><td><code>shell_keep_pipe</code></td></tr>
 </tbody>
@@ -337,6 +337,7 @@
 <tr><td><code>S</code></td><td>Split selection into sub selections on regex matches</td><td><code>split_selection</code></td></tr>
 <tr><td><code>Alt-s</code></td><td>Split selection on newlines</td><td><code>split_selection_on_newline</code></td></tr>
 <tr><td><code>Alt-minus</code></td><td>Merge selections</td><td><code>merge_selections</code></td></tr>
+<tr><td><code>Alt-m</code></td><td>Select inside the next bracket or quote pair on the line (again: the next pair inside)</td><td><code>select_inside_next_pair</code></td></tr>
 <tr><td><code>Alt-_</code></td><td>Merge consecutive selections</td><td><code>merge_consecutive_selections</code></td></tr>
 <tr><td><code>&amp;</code></td><td>Align selection in columns</td><td><code>align_selections</code></td></tr>
 <tr><td><code>_</code></td><td>Trim whitespace from the selection</td><td><code>trim_selections</code></td></tr>
@@ -353,7 +354,7 @@
 <tr><td><code>Alt-)</code></td><td>Rotate selection contents forward</td><td><code>rotate_selection_contents_forward</code></td></tr>
 <tr><td><code>%</code></td><td>Select entire file</td><td><code>select_all</code></td></tr>
 <tr><td><code>x</code></td><td>Select current line, if already selected, extend to next line</td><td><code>extend_line_below</code></td></tr>
-<tr><td><code>X</code></td><td>Extend selection to line bounds (line-wise selection)</td><td><code>extend_to_line_bounds</code></td></tr>
+<tr><td><code>X</code></td><td>Select current line, if already selected, extend to previous line</td><td><code>extend_line_above</code></td></tr>
 <tr><td><code>Alt-x</code></td><td>Shrink selection to line bounds (line-wise selection)</td><td><code>shrink_to_line_bounds</code></td></tr>
 <tr><td><code>J</code></td><td>Join lines inside selection</td><td><code>join_selections</code></td></tr>
 <tr><td><code>Alt-J</code></td><td>Join lines inside selection and select the inserted space</td><td><code>join_selections_space</code></td></tr>
@@ -546,6 +547,11 @@ useful when you’re simply looking over text and not actively editing it.</p>
 <tr><td><code>a</code></td><td>Apply code action (<strong>LSP</strong>)</td><td><code>code_action</code></td></tr>
 <tr><td><code>h</code></td><td>Select symbol references (<strong>LSP</strong>)</td><td><code>select_references_to_symbol_under_cursor</code></td></tr>
 <tr><td><code>'</code></td><td>Open last fuzzy picker</td><td><code>last_picker</code></td></tr>
+<tr><td><code>x</code></td><td>Run a shell command, output in <code>*compilation*</code> (Emacs <code>M-x compile</code>)</td><td><code>compile</code></td></tr>
+<tr><td><code>X</code></td><td>Show or hide <code>*compilation*</code> (<code>C-j</code> hides it, <code>Esc</code> closes it)</td><td><code>toggle_compilation</code></td></tr>
+<tr><td><code>z</code></td><td>Run shell command, inserting output before each selection</td><td><code>shell_insert_output</code></td></tr>
+<tr><td><code>q</code></td><td>Open the quickfix list (<code>]q</code>/<code>[q</code> to step through it)</td><td><code>quickfix_picker</code></td></tr>
+<tr><td><code>v</code></td><td><code>:s/\v</code> on the selections (or the line): a very magic substitute</td><td><code>substitute_very_magic</code></td></tr>
 <tr><td><code>w</code></td><td>Enter <a href="#window-mode">window mode</a></td><td>N/A</td></tr>
 <tr><td><code>c</code></td><td>Comment/uncomment selections</td><td><code>toggle_comments</code></td></tr>
 <tr><td><code>C</code></td><td>Block comment/uncomment selections</td><td><code>toggle_block_comments</code></td></tr>
@@ -637,6 +643,10 @@ useful when you’re simply looking over text and not actively editing it.</p>
 <tr><td><code>[G</code></td><td>Go to first change</td><td><code>goto_first_change</code></td></tr>
 <tr><td><code>[x</code></td><td>Go to next (X)HTML element</td><td><code>goto_next_xml_element</code></td></tr>
 <tr><td><code>]x</code></td><td>Go to previous (X)HTML element</td><td><code>goto_prev_xml_element</code></td></tr>
+<tr><td><code>]q</code></td><td>Go to next quickfix entry</td><td><code>quickfix_next</code></td></tr>
+<tr><td><code>[q</code></td><td>Go to previous quickfix entry</td><td><code>quickfix_prev</code></td></tr>
+<tr><td><code>]Q</code></td><td>Go to last quickfix entry</td><td><code>quickfix_last</code></td></tr>
+<tr><td><code>[Q</code></td><td>Go to first quickfix entry</td><td><code>quickfix_first</code></td></tr>
 <tr><td><code>]Space</code></td><td>Add newline below</td><td><code>add_newline_below</code></td></tr>
 <tr><td><code>[Space</code></td><td>Add newline above</td><td><code>add_newline_above</code></td></tr>
 </tbody>
@@ -644,7 +654,7 @@ useful when you’re simply looking over text and not actively editing it.</p>
 </div>
 <h2 id="insert-mode"><a class="header" href="#insert-mode">Insert mode</a></h2>
 <p>Accessed by typing <code>i</code> in <a href="#normal-mode">normal mode</a>.</p>
-<p>Insert mode bindings are minimal by default. Helix is designed to
+<p>Insert mode bindings are minimal by default. Pure is designed to
 be a modal editor, and this is reflected in the user experience and internal
 mechanics. Changes to the text are only saved for undos when
 escaping from insert mode to normal mode.</p>
@@ -658,7 +668,7 @@ to get the smoothest experience.</p>
 <tr><th>Key</th><th>Description</th><th>Command</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Escape</code></td><td>Switch to normal mode</td><td><code>normal_mode</code></td></tr>
+<tr><td><code>Escape</code>, <code>Ctrl-c</code></td><td>Switch to normal mode (<code>Ctrl-c</code> also when the completion menu is open)</td><td><code>normal_mode</code></td></tr>
 <tr><td><code>Ctrl-s</code></td><td>Commit undo checkpoint</td><td><code>commit_undo_checkpoint</code></td></tr>
 <tr><td><code>Ctrl-x</code></td><td>Autocomplete</td><td><code>completion</code></td></tr>
 <tr><td><code>Ctrl-r</code></td><td>Insert a register content</td><td><code>insert_register</code></td></tr>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Building from source</title>
+        <title>Building from source - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -184,7 +184,7 @@
                     <main>
                         <h2 id="building-from-source"><a class="header" href="#building-from-source">Building from source</a></h2>
 <ul>
-<li><a href="#configuring-helixs-runtime-files">Configuring Helix’s runtime files</a>
+<li><a href="#configuring-pures-runtime-files">Configuring Pure’s runtime files</a>
 <ul>
 <li><a href="#linux-and-macos">Linux and macOS</a></li>
 <li><a href="#windows">Windows</a></li>
@@ -197,7 +197,7 @@
 <li><a href="#building-the-debian-package">Building the Debian package</a></li>
 </ul>
 <p>Requirements:</p>
-<p>Clone the Helix GitHub repository into a directory of your choice. The
+<p>Clone the Pure GitHub repository (<code>https://github.com/TsaH0/helix-editor-custom</code>) into a directory of your choice. The
 examples in this documentation assume installation into either <code>~/src/</code> on
 Linux and macOS, or <code>%userprofile%\src\</code> on Windows.</p>
 <ul>
@@ -227,7 +227,7 @@ cargo install \
    --path helix-term \
    --locked
 </code></pre>
-<p>Either command will create the <code>hx</code> executable and construct the tree-sitter
+<p>Either command will create the <code>pure</code> executable and construct the tree-sitter
 grammars in the local <code>runtime</code> folder.</p>
 </li>
 </ol>
@@ -236,23 +236,23 @@ grammars in the local <code>runtime</code> folder.</p>
 </blockquote>
 <blockquote>
 <p>💡 Tree-sitter grammars can be fetched and compiled if not pre-packaged. Fetch
-grammars with <code>hx --grammar fetch</code> and compile them with
-<code>hx --grammar build</code>. This will install them in
+grammars with <code>pure --grammar fetch</code> and compile them with
+<code>pure --grammar build</code>. This will install them in
 the <code>runtime</code> directory within the user’s helix config directory (more
 <a href="#multiple-runtime-directories">details below</a>).</p>
 </blockquote>
 <blockquote>
 <p>💡 If you only want to build <em>some</em> grammars, see <a href="./languages.html#choosing-grammars"><code>use-grammars</code></a></p>
 </blockquote>
-<h3 id="configuring-helixs-runtime-files"><a class="header" href="#configuring-helixs-runtime-files">Configuring Helix’s runtime files</a></h3>
+<h3 id="configuring-pures-runtime-files"><a class="header" href="#configuring-pures-runtime-files">Configuring Pure’s runtime files</a></h3>
 <h4 id="linux-and-macos"><a class="header" href="#linux-and-macos">Linux and macOS</a></h4>
-<p>The <strong>runtime</strong> directory is one below the Helix source, so either export a
+<p>The <strong>runtime</strong> directory is one below the Pure source, so either export a
 <code>HELIX_RUNTIME</code> environment variable to point to that directory and add it to
 your <code>~/.bashrc</code> or equivalent:</p>
 <pre><code class="language-sh">export HELIX_RUNTIME=~/src/helix/runtime
 </code></pre>
 <p>Or, create a symbolic link:</p>
-<pre><code class="language-sh">ln -Tsf $PWD/runtime ~/.config/helix/runtime
+<pre><code class="language-sh">ln -Tsf $PWD/runtime ~/.config/pure/runtime
 </code></pre>
 <h4 id="windows"><a class="header" href="#windows">Windows</a></h4>
 <p>Either set the <code>HELIX_RUNTIME</code> environment variable to point to the runtime files using the Windows setting (search for
@@ -271,7 +271,7 @@ Cmd:</p>
 <tr><th>Method</th><th>Command</th></tr>
 </thead>
 <tbody>
-<tr><td>PowerShell</td><td><code>New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\helix\runtime"</code></td></tr>
+<tr><td>PowerShell</td><td><code>New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\pure\runtime"</code></td></tr>
 <tr><td>Cmd</td><td><code>cd %appdata%\helix</code> <br /> <code>mklink /D runtime "%userprofile%\src\helix\runtime"</code></td></tr>
 </tbody>
 </table>
@@ -281,7 +281,7 @@ Cmd:</p>
 Cmd as an administrator.</p>
 </blockquote>
 <h4 id="multiple-runtime-directories"><a class="header" href="#multiple-runtime-directories">Multiple runtime directories</a></h4>
-<p>When Helix finds multiple runtime directories it will search through them for files in the
+<p>When Pure finds multiple runtime directories it will search through them for files in the
 following order:</p>
 <ol>
 <li><code>runtime/</code> sibling directory to <code>$CARGO_MANIFEST_DIR</code> directory (this is intended for
@@ -290,12 +290,12 @@ developing and testing helix only).</li>
 <li><code>$HELIX_RUNTIME</code></li>
 <li>Distribution-specific fallback directory (set at compile time—not run time—
 with the <code>HELIX_DEFAULT_RUNTIME</code> environment variable)</li>
-<li><code>runtime/</code> subdirectory of path to Helix executable.</li>
+<li><code>runtime/</code> subdirectory of path to Pure executable.</li>
 </ol>
 <p>This order also sets the priority for selecting which file will be used if multiple runtime
 directories have files with the same name.</p>
 <h4 id="note-to-packagers"><a class="header" href="#note-to-packagers">Note to packagers</a></h4>
-<p>If you are making a package of Helix for end users, to provide a good out of
+<p>If you are making a package of Pure for end users, to provide a good out of
 the box experience, you should set the <code>HELIX_DEFAULT_RUNTIME</code> environment
 variable at build time (before invoking <code>cargo build</code>) to a directory which
 will store the final runtime files after installation. For example, say you want
@@ -305,33 +305,33 @@ script could follow are:</p>
 <li><code>export HELIX_DEFAULT_RUNTIME=/usr/lib/helix/runtime</code></li>
 <li><code>cargo build --profile opt --locked</code></li>
 <li><code>cp -r runtime $BUILD_DIR/usr/lib/helix/</code></li>
-<li><code>cp target/opt/hx $BUILD_DIR/usr/bin/hx</code></li>
+<li><code>cp target/opt/pure $BUILD_DIR/usr/bin/pure</code></li>
 </ol>
-<p>This way the resulting <code>hx</code> binary will always look for its runtime directory in
-<code>/usr/lib/helix/runtime</code> if the user has no custom runtime in <code>~/.config/helix</code>
+<p>This way the resulting <code>pure</code> binary will always look for its runtime directory in
+<code>/usr/lib/helix/runtime</code> if the user has no custom runtime in <code>~/.config/pure</code>
 or <code>HELIX_RUNTIME</code>.</p>
 <h3 id="validating-the-installation"><a class="header" href="#validating-the-installation">Validating the installation</a></h3>
-<p>To make sure everything is set up as expected you should run the Helix health
+<p>To make sure everything is set up as expected you should run the Pure health
 check:</p>
-<pre><code class="language-sh">hx --health
+<pre><code class="language-sh">pure --health
 </code></pre>
 <p>For more information on the health check results refer to
 <a href="https://github.com/helix-editor/helix/wiki/Healthcheck">Health check</a>.</p>
 <h3 id="configure-the-desktop-shortcut"><a class="header" href="#configure-the-desktop-shortcut">Configure the desktop shortcut</a></h3>
 <p>If your desktop environment supports the
 <a href="https://specifications.freedesktop.org/menu-spec/menu-spec-latest.html">XDG desktop menu</a>
-you can configure Helix to show up in the application menu by copying the
+you can configure Pure to show up in the application menu by copying the
 provided <code>.desktop</code> and icon files to their correct folders:</p>
 <pre><code class="language-sh">cp contrib/Helix.desktop ~/.local/share/applications
 cp contrib/helix.png ~/.icons # or ~/.local/share/icons
 </code></pre>
 <p>It is recommended to convert the links in the <code>.desktop</code> file to absolute paths to avoid potential problems:</p>
-<pre><code class="language-sh">sed -i -e "s|Exec=hx %F|Exec=$(readlink -f ~/.cargo/bin/hx) %F|g" \
+<pre><code class="language-sh">sed -i -e "s|Exec=pure %F|Exec=$(readlink -f ~/.cargo/bin/pure) %F|g" \
   -e "s|Icon=helix|Icon=$(readlink -f ~/.icons/helix.png)|g" ~/.local/share/applications/Helix.desktop
 </code></pre>
 <p>To use another terminal than the system default, you can modify the <code>.desktop</code>
 file. For example, to use <code>kitty</code>:</p>
-<pre><code class="language-sh">sed -i "s|Exec=hx %F|Exec=kitty hx %F|g" ~/.local/share/applications/Helix.desktop
+<pre><code class="language-sh">sed -i "s|Exec=pure %F|Exec=kitty pure %F|g" ~/.local/share/applications/Helix.desktop
 sed -i "s|Terminal=true|Terminal=false|g" ~/.local/share/applications/Helix.desktop
 </code></pre>
 <h3 id="building-the-debian-package"><a class="header" href="#building-the-debian-package">Building the Debian package</a></h3>
@@ -341,13 +341,17 @@ from source to match your system’s dependencies.</p>
 <p>Install <code>cargo-deb</code>, the tool used for building the <code>.deb</code> file:</p>
 <pre><code class="language-sh">cargo install cargo-deb
 </code></pre>
-<p>After cloning and entering the Helix repository as previously described,
+<p>To build without plugin support (no Wasmtime: a smaller binary and a faster
+build), disable the default <code>plugins</code> feature:</p>
+<pre><code class="language-sh">cargo install --path helix-term --locked --no-default-features --features git
+</code></pre>
+<p>After cloning and entering the Pure repository as previously described,
 use the following command to build the release binary and package it into a <code>.deb</code> file in a single step.</p>
 <pre><code class="language-sh">cargo deb -- --locked
 </code></pre>
 <blockquote>
 <p>💡 This locks you into the <code>--release</code> profile. But you can also build helix in any way you like.
-As long as you leave a <code>target/release/hx</code> file, it will get packaged with <code>cargo deb --no-build</code></p>
+As long as you leave a <code>target/release/pure</code> file, it will get packaged with <code>cargo deb --no-build</code></p>
 </blockquote>
 <blockquote>
 <p>💡 Don’t worry about the following:</p>

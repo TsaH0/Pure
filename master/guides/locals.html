@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding locals queries</title>
+        <title>Adding locals queries - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -183,13 +183,13 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h2 id="adding-locals-queries"><a class="header" href="#adding-locals-queries">Adding Locals Queries</a></h2>
-<p><code>locals.scm</code> queries teach Helix about variable scopes and definitions so that
+<p><code>locals.scm</code> queries teach Pure about variable scopes and definitions so that
 local variables can be highlighted distinctly from global ones. When a
 <code>@local.reference</code> identifier is resolved to a <code>@local.definition</code>, it inherits
 the highlight class of that definition rather than the class assigned by
 <code>highlights.scm</code>.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/locals.scm</code> when
-contributing to Helix. Like other query files, <code>locals.scm</code> may reuse another
+contributing to Pure. Like other query files, <code>locals.scm</code> may reuse another
 language’s with <code>; inherits: &lt;lang&gt;</code> on the first line. Locals are resolved in
 their own pass with their own precedence, independently of <code>highlights.scm</code>.</p>
 <h2 id="captures"><a class="header" href="#captures">Captures</a></h2>
@@ -217,7 +217,7 @@ causes matching references to be highlighted as <code>variable.parameter</code>.
 <code>function</code>, <code>namespace</code>, <code>type</code>, <code>constant</code>, etc.</p>
 <h3 id="localreference"><a class="header" href="#localreference"><code>@local.reference</code></a></h3>
 <p>Marks an identifier node as a potential reference to a local definition.
-Helix searches enclosing scopes for a matching definition and, if found,
+Pure searches enclosing scopes for a matching definition and, if found,
 highlights the reference with that definition’s class instead.</p>
 <pre><code class="language-scm">(identifier) @local.reference
 </code></pre>
@@ -239,7 +239,7 @@ reference resolution for nodes it matches.</p>
 <p>The convention is to use a capture name beginning with an underscore (e.g. <code>@_</code>,
 <code>@_keyword</code>) to make the discard intent clear, but any non-<code>@local.*</code> name works.</p>
 <h2 id="how-definitions-and-references-are-matched"><a class="header" href="#how-definitions-and-references-are-matched">How definitions and references are matched</a></h2>
-<p>Helix matches references to definitions by comparing the text of the reference
+<p>Pure matches references to definitions by comparing the text of the reference
 node against the text of definitions visible from the current scope. Definitions
 in inner scopes shadow those in outer scopes. If no definition is found the
 reference is left with its <code>highlights.scm</code> highlight.</p>

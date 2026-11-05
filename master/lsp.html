@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Language servers</title>
+        <title>Language servers - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -183,13 +183,13 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="language-servers"><a class="header" href="#language-servers">Language servers</a></h1>
-<p>Helix has built-in support for the <a href="https://microsoft.github.io/language-server-protocol/">Language Server Protocol</a>, providing
+<p>Pure has built-in support for the <a href="https://microsoft.github.io/language-server-protocol/">Language Server Protocol</a>, providing
 IDE-like features — diagnostics, completion, goto-definition, rename and more,
 for any language that has a server configured. Language servers are separate
 programs you install yourself: the <a href="./lang-support.html">language support</a> page
 lists which languages ship with a server configured, and the
 <a href="https://github.com/helix-editor/helix/wiki/Language-Server-Configurations">language server configuration wiki</a> has per-server installation notes.</p>
-<p>Run <code>hx --health &lt;language&gt;</code> to check whether Helix found the configured server
+<p>Run <code>pure --health &lt;language&gt;</code> to check whether Pure found the configured server
 for a language. After changing a server’s configuration, <code>:lsp-restart</code> reloads
 it and <code>:lsp-stop</code> stops it; <code>:lsp-workspace-command</code> runs a command the server
 exposes for the workspace.</p>

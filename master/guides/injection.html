@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding injection queries</title>
+        <title>Adding injection queries - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -185,8 +185,8 @@
                         <h2 id="adding-injection-queries"><a class="header" href="#adding-injection-queries">Adding Injection Queries</a></h2>
 <p>Writing language injection queries allows one to highlight a specific node as a different language.
 In addition to the <a href="https://tree-sitter.github.io/tree-sitter/3-syntax-highlighting.html#language-injection">standard</a> language injection options used by tree-sitter, there
-are a few Helix specific extensions that allow for more control.</p>
-<p>Injection drives more than highlighting: within an injected region Helix also
+are a few Pure specific extensions that allow for more control.</p>
+<p>Injection drives more than highlighting: within an injected region Pure also
 uses the injected language’s own indentation, textobjects, and comment tokens —
 so, for example, editing JavaScript inside an HTML <code>&lt;script&gt;</code> indents and
 comments as JavaScript.</p>
@@ -211,9 +211,9 @@ Marks the content to be highlighted as the language captured with <code>@injecti
 </li>
 <li>
 <p><code>@injection.filename</code> (extension):
-The captured node may contain a filename with a file-extension known to Helix,
+The captured node may contain a filename with a file-extension known to Pure,
 highlighting <code>@injection.content</code> as that language. This uses the language extensions defined in
-both the default languages.toml distributed with Helix, as well as user defined languages.</p>
+both the default languages.toml distributed with Pure, as well as user defined languages.</p>
 </li>
 <li>
 <p><code>@injection.shebang</code> (extension):

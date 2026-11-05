@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Editor</title>
+        <title>Editor - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -208,6 +208,7 @@
 </li>
 <li><a href="#editorsoft-wrap-section"><code>[editor.soft-wrap]</code> Section</a></li>
 <li><a href="#editorsmart-tab-section"><code>[editor.smart-tab]</code> Section</a></li>
+<li><a href="#editorchords-section"><code>[editor.chords]</code> Section</a></li>
 <li><a href="#editorinline-diagnostics-section"><code>[editor.inline-diagnostics]</code> Section</a></li>
 <li><a href="#editorword-completion-section"><code>[editor.word-completion]</code> Section</a></li>
 <li><a href="#editorworkspace-trust-section"><code>[editor.workspace-trust]</code> Section</a></li>
@@ -224,13 +225,14 @@
 <tr><td><code>mouse-yank-register</code></td><td>Which register to use for mouse yanks.</td><td> <code>*</code></td></tr>
 <tr><td><code>middle-click-paste</code></td><td>Middle click paste support</td><td><code>true</code></td></tr>
 <tr><td><code>default-yank-register</code></td><td>Default register used for yank/paste</td><td><code>'"'</code></td></tr>
+<tr><td><code>registers</code></td><td><code>"helix"</code>: a yank or delete only fills the register it uses. <code>"vim"</code>: also like Vim/Neovim when no register is named: a yank goes to <code>"0</code> too; a delete or change spanning lines goes to <code>"1</code> and the older ones move to <code>"2</code>–<code>"9</code>; a smaller one goes to <code>"-</code>. <code>""</code> still has the last yank or delete, <code>"_</code> discards, <code>"a</code>–<code>"z</code> and <code>"+</code> are as before</td><td><code>"helix"</code></td></tr>
 <tr><td><code>scroll-lines</code></td><td>Number of lines to scroll per scroll wheel step</td><td><code>3</code></td></tr>
 <tr><td><code>shell</code></td><td>Shell to use when running external commands</td><td>Unix: <code>["sh", "-c"]</code><br />Windows: <code>["cmd", "/C"]</code></td></tr>
 <tr><td><code>line-number</code></td><td>Line number display: <code>absolute</code> simply shows each line’s number, while <code>relative</code> shows the distance from the current line. When unfocused or in insert mode, <code>relative</code> will still show absolute line numbers</td><td><code>"absolute"</code></td></tr>
 <tr><td><code>cursorline</code></td><td>Highlight all lines with a cursor</td><td><code>false</code></td></tr>
 <tr><td><code>cursorcolumn</code></td><td>Highlight all columns with a cursor</td><td><code>false</code></td></tr>
 <tr><td><code>continue-comments</code></td><td>if helix should automatically add a line comment token if you create a new line inside a comment.</td><td><code>true</code></td></tr>
-<tr><td><code>gutters</code></td><td>Gutters to display: Available are <code>diagnostics</code> and <code>diff</code> and <code>line-numbers</code> and <code>spacer</code> and <code>code-action-hint</code>, note that <code>diagnostics</code> also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty</td><td><code>["diagnostics", "spacer", "line-numbers", "spacer", "diff"]</code></td></tr>
+<tr><td><code>gutters</code></td><td>Gutters to display: Available are <code>diagnostics</code> and <code>diff</code> and <code>line-numbers</code> and <code>spacer</code> and <code>code-action-hint</code> and <code>plugins</code> (signs plugins set), note that <code>diagnostics</code> also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty</td><td><code>["diagnostics", "spacer", "line-numbers", "spacer", "diff"]</code></td></tr>
 <tr><td><code>auto-completion</code></td><td>Enable automatic pop up of auto-completion</td><td><code>true</code></td></tr>
 <tr><td><code>path-completion</code></td><td>Enable filepath completion. Show files and directories if an existing path at the cursor was recognized, either absolute or relative to the current opened document or current working directory (if the buffer is not yet saved). Defaults to true.</td><td><code>true</code></td></tr>
 <tr><td><code>auto-format</code></td><td>Enable automatic formatting on save<sup class="footnote-reference" id="fr-3-1"><a href="#footnote-3">1</a></sup></td><td><code>true</code></td></tr>
@@ -239,7 +241,10 @@
 <tr><td><code>preview-completion-insert</code></td><td>Whether to apply completion item instantly when selected</td><td><code>true</code></td></tr>
 <tr><td><code>completion-trigger-len</code></td><td>The min-length of word under cursor to trigger autocompletion</td><td><code>2</code></td></tr>
 <tr><td><code>completion-replace</code></td><td>Whether to make completions always replace the entire word and not just the part before the cursor</td><td><code>false</code></td></tr>
+<tr><td><code>directory-handler</code></td><td>A plugin command that opens directories passed on the command line or to <code>:open</code> (it gets the directory as its argument), e.g. <code>"oil/open"</code>. Without it, or if it fails, the file picker opens</td><td>unset</td></tr>
+<tr><td><code>auto-reload</code></td><td>Reload files other programs change on disk, like Vim’s <code>autoread</code>: buffers without unsaved changes follow the file; for the others you get a warning (<code>:reload</code> takes the disk’s version, <code>:w!</code> keeps yours). The directories of open files are watched, so a change is seen at once and an idle editor never wakes; where watching isn’t possible (out of inotify watches, say) it checks every second instead. Also checked when the terminal regains focus. FIFOs and devices are never read</td><td><code>true</code></td></tr>
 <tr><td><code>auto-info</code></td><td>Whether to display info boxes</td><td><code>true</code></td></tr>
+<tr><td><code>icons</code></td><td>File type icons in the file explorer (<code>space e</code>) and file picker (<code>space f</code>). They are <a href="https://www.nerdfonts.com">Nerd Font</a> glyphs: your terminal’s font must be a Nerd Font</td><td><code>false</code></td></tr>
 <tr><td><code>true-color</code></td><td>Whether to override automatic detection of terminal truecolor support in the event of a false negative</td><td><code>false</code></td></tr>
 <tr><td><code>undercurl</code></td><td>Whether to override automatic detection of terminal undercurl support in the event of a false negative</td><td><code>false</code></td></tr>
 <tr><td><code>rulers</code></td><td>List of column positions at which to display the rulers. Can be overridden by language specific <code>rulers</code> in <code>languages.toml</code> file</td><td><code>[]</code></td></tr>
@@ -263,14 +268,56 @@
 </tbody>
 </table>
 </div>
+<h3 id="editorcmdline-section"><a class="header" href="#editorcmdline-section"><code>[editor.cmdline]</code> Section</a></h3>
+<p>How the command line (<code>:</code>) and other prompts (search, prompts of commands
+and plugins) look.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Description</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>style</code></td><td><code>"bottom"</code>: the last line, completions above it. <code>"popup"</code>: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. <code>"panel"</code>: the input on the last line, the completions in a box above the statusline, one per row, like Runyte</td><td><code>"bottom"</code></td></tr>
+<tr><td><code>popup-width</code></td><td>Width of the popup or panel in percent of the screen (the panel is left-aligned)</td><td><code>70</code></td></tr>
+<tr><td><code>popup-rows</code></td><td>Most completions the popup or panel lists</td><td><code>15</code></td></tr>
+<tr><td><code>descriptions</code></td><td>In the popup and panel, show each command’s category, what it does and its aliases (plugin commands too)</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-toml">[editor.cmdline]
+style = "popup"
+</code></pre>
+<p>A Runyte-like editor: the panel across the whole width, and a statusline
+with the mode as a coloured block, then the file and the workspace:</p>
+<pre><code class="language-toml">[editor.cmdline]
+style = "panel"
+popup-width = 100
+popup-rows = 22
+
+[editor]
+color-modes = true
+
+[editor.statusline]
+left = ["mode", "separator", "file-name", "separator", "workspace-diagnostics"]
+right = ["diagnostics", "selections", "position"]
+separator = "│"
+mode.normal = "NOR"
+mode.insert = "INS"
+mode.select = "SEL"
+</code></pre>
+<p>Its colors come from <code>ui.cmdline.popup</code>, <code>ui.cmdline.border</code> and
+<code>ui.cmdline.title</code> (falling back to <code>ui.popup</code>, <code>ui.window</code> and
+<code>ui.text.focus</code>), and the selected row from <code>ui.menu.selected</code>; the mode
+blocks from <code>ui.statusline.normal</code>, <code>ui.statusline.insert</code> and
+<code>ui.statusline.select</code> (see <a href="./themes.html">themes</a>).</p>
 <h3 id="editorclipboard-provider-section"><a class="header" href="#editorclipboard-provider-section"><code>[editor.clipboard-provider]</code> Section</a></h3>
-<p>Helix can be configured either to use a builtin clipboard configuration or to use
+<p>Pure can be configured either to use a builtin clipboard configuration or to use
 a provided command.</p>
 <p>For instance, setting it to use OSC 52 termcodes, the configuration would be:</p>
 <pre><code class="language-toml">[editor]
 clipboard-provider = "termcode"
 </code></pre>
-<p>Alternatively, Helix can be configured to use arbitrary commands for clipboard integration:</p>
+<p>Alternatively, Pure can be configured to use arbitrary commands for clipboard integration:</p>
 <pre><code class="language-toml">[editor.clipboard-provider.custom]
 yank = { command = "cat",  args = ["test.txt"] }
 paste = { command = "tee",  args = ["test.txt"] }
@@ -344,6 +391,7 @@ workspace-diagnostics = ["warning", "error"]
 <tr><td><code>version-control</code></td><td>The current branch name or detached commit hash of the opened workspace</td></tr>
 <tr><td><code>register</code></td><td>The current selected register</td></tr>
 <tr><td><code>code-action-hint</code></td><td>Indicator for when code actions are available</td></tr>
+<tr><td><code>plugins</code></td><td>Text plugins put in the statusline</td></tr>
 </tbody>
 </table>
 </div>
@@ -389,7 +437,7 @@ change shape.</p>
 </div>
 <h3 id="editorfile-picker-section"><a class="header" href="#editorfile-picker-section"><code>[editor.file-picker]</code> Section</a></h3>
 <p>Set options for file picker and global search. Ignoring a file means it is
-not visible in the Helix file picker and global search.</p>
+not visible in the Pure file picker and global search.</p>
 <p>All git related options are only enabled in a git repository.</p>
 <div class="table-wrapper">
 <table>
@@ -410,10 +458,10 @@ not visible in the Helix file picker and global search.</p>
 </table>
 </div>
 <p>Ignore files can be placed locally as <code>.ignore</code> or put in your home directory as <code>~/.ignore</code>. They support the usual ignore and negative ignore (unignore) rules used in <code>.gitignore</code> files.</p>
-<p>Additionally, you can use Helix-specific ignore files by creating a local <code>.helix/ignore</code> file in the current workspace or a global <code>ignore</code> file located in your Helix config directory:</p>
+<p>Additionally, you can use Pure-specific ignore files by creating a local <code>.helix/ignore</code> file in the current workspace or a global <code>ignore</code> file located in your Pure config directory:</p>
 <ul>
-<li>Linux and Mac: <code>~/.config/helix/ignore</code></li>
-<li>Windows: <code>%AppData%\helix\ignore</code></li>
+<li>Linux and Mac: <code>~/.config/pure/ignore</code></li>
+<li>Windows: <code>%AppData%\pure\ignore</code></li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-ini"># unignore in file picker and global search
@@ -423,7 +471,7 @@ not visible in the Helix file picker and global search.</p>
 </code></pre>
 <h3 id="editorfile-explorer-section"><a class="header" href="#editorfile-explorer-section"><code>[editor.file-explorer]</code> Section</a></h3>
 <p>In addition to the options for the file picker and global search, a similar set of options is presented to configure the file explorer separately. However, unlike the file picker, the defaults are set to avoid ignoring most files.</p>
-<p>Note that the ignore files consulted by the file explorer when <code>ignore</code> is set to true are the same ones used by the file picker, including the aforementioned Helix-specific ignore files.</p>
+<p>Note that the ignore files consulted by the file explorer when <code>ignore</code> is set to true are the same ones used by the file picker, including the aforementioned Pure-specific ignore files.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -497,7 +545,7 @@ name = "rust"
 <tr><th>Key</th><th>Description</th><th>Default</th></tr>
 </thead>
 <tbody>
-<tr><td><code>focus-lost</code></td><td>Enable automatic saving on the focus moving away from Helix. Requires <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">focus event support</a> from your terminal</td><td><code>false</code></td></tr>
+<tr><td><code>focus-lost</code></td><td>Enable automatic saving on the focus moving away from Pure. Requires <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">focus event support</a> from your terminal</td><td><code>false</code></td></tr>
 <tr><td><code>after-delay.enable</code></td><td>Enable automatic saving after <code>auto-save.after-delay.timeout</code> milliseconds have passed since last edit.</td><td><code>false</code></td></tr>
 <tr><td><code>after-delay.timeout</code></td><td>Time in milliseconds since last edit before auto save timer triggers.</td><td><code>3000</code></td></tr>
 </tbody>
@@ -667,6 +715,24 @@ S-tab = "move_parent_node_start"
 tab = "extend_parent_node_end"
 S-tab = "extend_parent_node_start"
 </code></pre>
+<h3 id="editorchords-section"><a class="header" href="#editorchords-section"><code>[editor.chords]</code> Section</a></h3>
+<p>Chords are keys pressed while another is held: <code>"p+s"</code> means hold <code>p</code>,
+then press <code>s</code>. They are bound per mode to a command or a list of
+commands, like keys:</p>
+<pre><code class="language-toml">[editor.chords.normal]
+"p+s" = "paste_after"                                   # hold p, press s
+"p+w" = "paste_before"
+"p+j" = ["open_below", "normal_mode", "paste_before"]   # on a new line below
+"space+f" = "file_picker"
+</code></pre>
+<p>They need a terminal that tells when keys are let go: one with the kitty
+keyboard protocol (kitty, WezTerm, foot, Ghostty, recent Alacritty…), with
+<code>kitty-keyboard-protocol</code> not <code>"disabled"</code>. Elsewhere chords never happen
+and keys work as usual.</p>
+<p>A key that starts a chord waits: pressed and let go on its own, it does what
+it always does when it is let go; held while a chord’s second key is
+pressed, the chord runs instead. Such a key doesn’t repeat while held.
+Chords apply to the editor’s own keys, not in prompts and pickers.</p>
 <h3 id="editorinline-diagnostics-section"><a class="header" href="#editorinline-diagnostics-section"><code>[editor.inline-diagnostics]</code> Section</a></h3>
 <p>Options for rendering diagnostics inside the text like shown below</p>
 <pre><code class="language-text">fn main() {
@@ -754,7 +820,7 @@ trusted = ["~/src/github.com/me/*"]
 <p>By default, a progress spinner is shown in the statusline beside the file path. <a href="#fr-1-1">↩</a> <a href="#fr-1-2">↩2</a></p>
 </li>
 <li id="footnote-2">
-<p>You may also have to activate them in the language server config for them to appear, not just in Helix. Inlay hints in Helix are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them! <a href="#fr-2-1">↩</a></p>
+<p>You may also have to activate them in the language server config for them to appear, not just in Pure. Inlay hints in Pure are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them! <a href="#fr-2-1">↩</a></p>
 </li>
 </ol>
 

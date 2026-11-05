@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding languages</title>
+        <title>Adding languages - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -182,8 +182,8 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h2 id="adding-new-languages-to-helix"><a class="header" href="#adding-new-languages-to-helix">Adding new languages to Helix</a></h2>
-<p>In order to add a new language to Helix, you will need to follow the steps
+                        <h2 id="adding-new-languages-to-pure"><a class="header" href="#adding-new-languages-to-pure">Adding new languages to Pure</a></h2>
+<p>In order to add a new language to Pure, you will need to follow the steps
 below.</p>
 <h2 id="language-configuration"><a class="header" href="#language-configuration">Language configuration</a></h2>
 <ol>
@@ -232,7 +232,7 @@ match the most specific scope that fits, capture the leaf node you mean, and
 remember that the last matching pattern (and the innermost node) wins.</p>
 </li>
 <li>
-<p>Helix loads several query files from that directory; only <code>highlights.scm</code> is
+<p>Pure loads several query files from that directory; only <code>highlights.scm</code> is
 required:</p>
 <div class="table-wrapper">
 <table>
@@ -257,13 +257,13 @@ are valid against the grammar.</p>
 </ol>
 <h2 id="common-issues"><a class="header" href="#common-issues">Common issues</a></h2>
 <ul>
-<li>If you encounter errors when running Helix after switching branches, you may
-need to update the tree-sitter grammars. Run the command <code>hx --grammar fetch</code>
-to fetch the grammars and <code>hx --grammar build</code> to build any out-of-date
+<li>If you encounter errors when running Pure after switching branches, you may
+need to update the tree-sitter grammars. Run the command <code>pure --grammar fetch</code>
+to fetch the grammars and <code>pure --grammar build</code> to build any out-of-date
 grammars.</li>
 <li>If a parser is causing a segfault, or you want to remove it, make sure to
 remove the compiled parser located at <code>runtime/grammars/&lt;name&gt;.so</code>.</li>
-<li>If you are attempting to add queries and Helix is unable to locate them, ensure that the environment variable <code>HELIX_RUNTIME</code> is set to the location of the <code>runtime</code> folder you’re developing in.</li>
+<li>If you are attempting to add queries and Pure is unable to locate them, ensure that the environment variable <code>HELIX_RUNTIME</code> is set to the location of the <code>runtime</code> folder you’re developing in.</li>
 <li>Validate queries with <code>cargo xtask query-check [language]</code> (every query file
 must compile against the grammar). <code>highlight-check</code> and <code>indent-check</code>
 additionally run the real highlighter and indenter over the test fixtures catch mistakes.</li>

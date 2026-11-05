@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Command line</title>
+        <title>Command line - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -199,14 +199,14 @@
 <p>Command flags are optional switches that can be used to alter the behavior of a command. For example the <code>:sort</code> command accepts an optional <code>--reverse</code> (or <code>-r</code> for short) flag which causes the sort command to reverse the sorting direction. Typing the <code>-</code> character shows completions for the current command’s flags, if any.</p>
 <p>The <code>--</code> flag specifies the end of flags. All arguments after <code>--</code> are treated as positional arguments: <code>:open -- -a.txt</code> opens a file called <code>-a.txt</code>.</p>
 <h2 id="expansions"><a class="header" href="#expansions">Expansions</a></h2>
-<p>Expansions are patterns that Helix recognizes and replaces within the command line. Helix recognizes anything starting with a percent token (<code>%</code>) as an expansion, for example <code>%sh{echo hi!}</code>. Expansions are particularly useful when used in commands like <code>:echo</code> or <code>:noop</code> for executing simple scripts. For example:</p>
+<p>Expansions are patterns that Pure recognizes and replaces within the command line. Pure recognizes anything starting with a percent token (<code>%</code>) as an expansion, for example <code>%sh{echo hi!}</code>. Expansions are particularly useful when used in commands like <code>:echo</code> or <code>:noop</code> for executing simple scripts. For example:</p>
 <pre><code class="language-toml">[keys.normal]
 # Print the current line's git blame information to the statusline.
 space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 </code></pre>
 <p>Expansions take the form <code>%[&lt;kind&gt;]&lt;open&gt;&lt;contents&gt;&lt;close&gt;</code>. In <code>%sh{echo hi!}</code>, for example, the kind is <code>sh</code> - the shell expansion - and the contents are “echo hi!”, with <code>{</code> and <code>}</code> acting as opening and closing delimiters. The following open/close characters are recognized as expansion delimiter pairs: <code>(</code>/<code>)</code>, <code>[</code>/<code>]</code>, <code>{</code>/<code>}</code> and <code>&lt;</code>/<code>&gt;</code>. Plus the single characters <code>'</code>, <code>"</code> or <code>|</code> may be used instead: <code>%{cursor_line}</code> is equivalent to <code>%&lt;cursor_line&gt;</code>, <code>%[cursor_line]</code> or <code>%|cursor_line|</code>.</p>
 <p>To escape a percent character instead of treating it as an expansion, use two percent characters consecutively. To execute a shell command like <code>date -u +'%Y-%m-%d'</code>, double the percent characters: <code>:echo %sh{date -u +'%%Y-%%m-%%d'}</code>.</p>
-<p>When no <code>&lt;kind&gt;</code> is provided, Helix will expand a <strong>variable</strong>. For example <code>%{cursor_line}</code> can be used as in argument to insert the line number. <code>:echo %{cursor_line}</code> for instance may print <code>1</code> to the statusline.</p>
+<p>When no <code>&lt;kind&gt;</code> is provided, Pure will expand a <strong>variable</strong>. For example <code>%{cursor_line}</code> can be used as in argument to insert the line number. <code>:echo %{cursor_line}</code> for instance may print <code>1</code> to the statusline.</p>
 <p>The following variables are supported:</p>
 <div class="table-wrapper">
 <table>

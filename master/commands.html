@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Commands</title>
+        <title>Commands - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -257,6 +257,7 @@
 <tr><td><code>:tree-sitter-scopes</code></td><td>Display tree sitter scopes, primarily for theming and development.</td></tr>
 <tr><td><code>:tree-sitter-highlight-name</code></td><td>Display name of tree-sitter highlight scope under the cursor.</td></tr>
 <tr><td><code>:tree-sitter-layers</code></td><td>Display language names of tree-sitter injection layers under the cursor.</td></tr>
+<tr><td><code>:terminal</code>, <code>:term</code></td><td>Open a terminal in a split below, running a program (your shell by default). Keys go to it in insert mode; C-\ C-n goes back to normal mode.</td></tr>
 <tr><td><code>:debug-start</code>, <code>:dbg</code></td><td>Start a debug session from a given template with given parameters.</td></tr>
 <tr><td><code>:debug-remote</code>, <code>:dbg-tcp</code></td><td>Connect to a debug adapter by TCP address and start a debugging session from a given template with given parameters.</td></tr>
 <tr><td><code>:debug-eval</code></td><td>Evaluate expression in current debug context.</td></tr>
@@ -282,6 +283,34 @@
 <tr><td><code>:pipe</code>, <code>:|</code></td><td>Pipe each selection to the shell command.</td></tr>
 <tr><td><code>:pipe-to</code></td><td>Pipe each selection to the shell command, ignoring output.</td></tr>
 <tr><td><code>:run-shell-command</code>, <code>:sh</code>, <code>:!</code></td><td>Run a shell command</td></tr>
+<tr><td><code>:run-interactive</code>, <code>:term</code></td><td>Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor.</td></tr>
+<tr><td><code>:normal</code>, <code>:norm</code></td><td>Play keys as if typed, like Vim’s <code>:normal</code>: <code>:normal dd</code>, <code>:normal ihello&lt;esc&gt;</code>. An unfinished command is abandoned.</td></tr>
+<tr><td><code>:substitute</code></td><td>Replace text with a regex like Vim: <code>:s/pattern/replacement/flags</code>, <code>:%s/..</code> for the whole file, <code>:N,Ms/..</code> for lines. Without a range: the selections, or the current line. Patterns: Rust regex syntax or Vim’s (<code>\(.*\)</code>, <code>\v</code>, <code>\{-}</code>, <code>\zs</code>/<code>\ze</code>, <code>\&lt;\&gt;</code>). Replacement: <code>\1</code>/<code>$1</code>/<code>${name}</code> groups, <code>&amp;</code> the match, <code>\r</code> line break, <code>\u</code> <code>\U..\E</code> <code>\l</code> <code>\L</code> case. Flags: g (all per line), i, I, n (count), e (no error).</td></tr>
+<tr><td><code>:copen</code>, <code>:cope</code>, <code>:cw</code>, <code>:cwindow</code></td><td>Show the quickfix list in a picker.</td></tr>
+<tr><td><code>:cnext</code>, <code>:cn</code></td><td>Go to the next (or Nth next) quickfix entry.</td></tr>
+<tr><td><code>:cprevious</code>, <code>:cprev</code>, <code>:cp</code>, <code>:cN</code></td><td>Go to the previous (or Nth previous) quickfix entry.</td></tr>
+<tr><td><code>:cfirst</code>, <code>:cfir</code>, <code>:cr</code></td><td>Go to the first quickfix entry.</td></tr>
+<tr><td><code>:clast</code>, <code>:cla</code></td><td>Go to the last quickfix entry.</td></tr>
+<tr><td><code>:cc</code></td><td>Go to quickfix entry N (or the current one again).</td></tr>
+<tr><td><code>:cbuffer</code>, <code>:cb</code></td><td>Fill the quickfix list with the <code>file:line:col</code> locations in the current buffer.</td></tr>
+<tr><td><code>:cdiagnostics</code>, <code>:cdiag</code></td><td>Fill the quickfix list with the workspace diagnostics.</td></tr>
+<tr><td><code>:grep</code></td><td>Search with ripgrep (or grep) and put the matches in the quickfix list: <code>:grep &lt;pattern&gt; [paths...]</code>.</td></tr>
+<tr><td><code>:cclear</code></td><td>Empty the quickfix list.</td></tr>
+<tr><td><code>:plugin-run</code></td><td>Run a plugin command: <code>:plugin-run &lt;plugin&gt;/&lt;command&gt; [args...]</code>.</td></tr>
+<tr><td><code>:plugin-list</code></td><td>Show the loaded plugins and their commands.</td></tr>
+<tr><td><code>:plugin-doctor</code></td><td>Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times.</td></tr>
+<tr><td><code>:plugin-trace</code></td><td>Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on</td></tr>
+<tr><td><code>:plugin-keys</code></td><td>Show the plugins’ key bindings, their layers and conflicts.</td></tr>
+<tr><td><code>:plugin-key</code></td><td>Run a plugin’s key binding: <plugin> <binding>.</binding></plugin></td></tr>
+<tr><td><code>:plugin-install</code></td><td>Install a plugin from a git URL or a directory (it must have a committed component); asks first.</td></tr>
+<tr><td><code>:plugin-update</code></td><td>Update plugins installed with :plugin-install (all, or the ones named); asks before new permissions.</td></tr>
+<tr><td><code>:plugin-remove</code></td><td>Remove a plugin (asks first).</td></tr>
+<tr><td><code>:plugin-log</code></td><td>Show the latest lines a plugin logged in a new buffer: <code>:plugin-log &lt;plugin&gt;</code>.</td></tr>
+<tr><td><code>:panel-focus</code></td><td>Give a plugin’s panel the keys: left, right or bottom (esc gives them back).</td></tr>
+<tr><td><code>:panel-close</code></td><td>Close a plugin’s panel: left, right or bottom (default: the focused one).</td></tr>
+<tr><td><code>:plugin-reload</code></td><td>Reload all plugins and plugins.toml.</td></tr>
+<tr><td><code>:run-and-wait</code>, <code>:bang</code></td><td>Run a shell command like Vim’s :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.</td></tr>
+<tr><td><code>:compile</code></td><td>Run a shell command like Emacs’ M-x compile: its output streams into the <em>compilation</em> buffer. Without arguments, run the previous command again.</td></tr>
 <tr><td><code>:reset-diff-change</code>, <code>:diffget</code>, <code>:diffg</code></td><td>Reset the diff change at the cursor position.</td></tr>
 <tr><td><code>:clear-register</code></td><td>Clear given register. If no argument is provided, clear all registers.</td></tr>
 <tr><td><code>:set-register</code></td><td>Set contents of the given register.</td></tr>
@@ -388,10 +417,10 @@
 <tr><td><code>global_search</code></td><td>Global search in workspace folder</td><td>normal: <code>&lt;space&gt;/</code>, select: <code>&lt;space&gt;/</code></td></tr>
 <tr><td><code>extend_line</code></td><td>Select current line, if already selected, extend to another line based on the anchor</td><td></td></tr>
 <tr><td><code>extend_line_below</code></td><td>Select current line, if already selected, extend to next line</td><td>normal: <code>x</code>, select: <code>x</code></td></tr>
-<tr><td><code>extend_line_above</code></td><td>Select current line, if already selected, extend to previous line</td><td></td></tr>
+<tr><td><code>extend_line_above</code></td><td>Select current line, if already selected, extend to previous line</td><td>normal: <code>X</code>, select: <code>X</code></td></tr>
 <tr><td><code>select_line_above</code></td><td>Select current line, if already selected, extend or shrink line above based on the anchor</td><td></td></tr>
 <tr><td><code>select_line_below</code></td><td>Select current line, if already selected, extend or shrink line below based on the anchor</td><td></td></tr>
-<tr><td><code>extend_to_line_bounds</code></td><td>Extend selection to line bounds</td><td>normal: <code>X</code>, select: <code>X</code></td></tr>
+<tr><td><code>extend_to_line_bounds</code></td><td>Extend selection to line bounds</td><td></td></tr>
 <tr><td><code>shrink_to_line_bounds</code></td><td>Shrink selection to line bounds</td><td>normal: <code>&lt;A-x&gt;</code>, select: <code>&lt;A-x&gt;</code></td></tr>
 <tr><td><code>delete_selection</code></td><td>Delete selection</td><td>normal: <code>d</code>, select: <code>d</code></td></tr>
 <tr><td><code>delete_selection_noyank</code></td><td>Delete selection without yanking</td><td>normal: <code>&lt;A-d&gt;</code>, select: <code>&lt;A-d&gt;</code></td></tr>
@@ -403,6 +432,7 @@
 <tr><td><code>insert_mode</code></td><td>Insert before selection</td><td>normal: <code>i</code>, select: <code>i</code></td></tr>
 <tr><td><code>append_mode</code></td><td>Append after selection</td><td>normal: <code>a</code>, select: <code>a</code></td></tr>
 <tr><td><code>command_mode</code></td><td>Enter command mode</td><td>normal: <code>:</code>, select: <code>:</code></td></tr>
+<tr><td><code>substitute_very_magic</code></td><td>Substitute in the selections with a very magic regex (<code>:s/\v</code>)</td><td>normal: <code>&lt;space&gt;v</code>, select: <code>&lt;space&gt;v</code></td></tr>
 <tr><td><code>file_picker</code></td><td>Open file picker</td><td>normal: <code>&lt;space&gt;f</code>, select: <code>&lt;space&gt;f</code></td></tr>
 <tr><td><code>file_picker_in_current_buffer_directory</code></td><td>Open file picker at current buffer’s directory</td><td></td></tr>
 <tr><td><code>file_picker_in_current_directory</code></td><td>Open file picker at current working directory</td><td>normal: <code>&lt;space&gt;F</code>, select: <code>&lt;space&gt;F</code></td></tr>
@@ -423,11 +453,21 @@
 <tr><td><code>diagnostics_picker</code></td><td>Open diagnostic picker</td><td>normal: <code>&lt;space&gt;d</code>, select: <code>&lt;space&gt;d</code></td></tr>
 <tr><td><code>workspace_diagnostics_picker</code></td><td>Open workspace diagnostic picker</td><td>normal: <code>&lt;space&gt;D</code>, select: <code>&lt;space&gt;D</code></td></tr>
 <tr><td><code>last_picker</code></td><td>Open last picker</td><td>normal: <code>&lt;space&gt;'</code>, select: <code>&lt;space&gt;'</code></td></tr>
+<tr><td><code>compile</code></td><td>Prompt for a shell command and run it like Emacs’ M-x compile</td><td>normal: <code>&lt;space&gt;x</code>, select: <code>&lt;space&gt;x</code></td></tr>
+<tr><td><code>normal_mode_or_close_compilation</code></td><td>Close the <em>compilation</em> buffer if it is open, otherwise enter normal mode</td><td>normal: <code>&lt;esc&gt;</code></td></tr>
+<tr><td><code>run_and_wait</code></td><td>Prompt for a shell command and run it like Vim’s :!, then press any key to return</td><td>normal: <code>!</code>, select: <code>!</code></td></tr>
+<tr><td><code>quickfix_next</code></td><td>Go to the next quickfix entry</td><td>normal: <code>]q</code>, select: <code>]q</code></td></tr>
+<tr><td><code>quickfix_prev</code></td><td>Go to the previous quickfix entry</td><td>normal: <code>[q</code>, select: <code>[q</code></td></tr>
+<tr><td><code>quickfix_first</code></td><td>Go to the first quickfix entry</td><td>normal: <code>[Q</code>, select: <code>[Q</code></td></tr>
+<tr><td><code>quickfix_last</code></td><td>Go to the last quickfix entry</td><td>normal: <code>]Q</code>, select: <code>]Q</code></td></tr>
+<tr><td><code>quickfix_picker</code></td><td>Open the quickfix list</td><td>normal: <code>&lt;space&gt;q</code>, select: <code>&lt;space&gt;q</code></td></tr>
+<tr><td><code>hide_compilation</code></td><td>Hide the <em>compilation</em> window, keeping the buffer</td><td>normal: <code>&lt;C-j&gt;</code>, select: <code>&lt;C-j&gt;</code></td></tr>
+<tr><td><code>toggle_compilation</code></td><td>Show or hide the <em>compilation</em> buffer (output of :compile)</td><td>normal: <code>&lt;space&gt;X</code>, select: <code>&lt;space&gt;X</code></td></tr>
 <tr><td><code>insert_at_line_start</code></td><td>Insert at start of line</td><td>normal: <code>I</code>, select: <code>I</code></td></tr>
 <tr><td><code>insert_at_line_end</code></td><td>Insert at end of line</td><td>normal: <code>A</code>, select: <code>A</code></td></tr>
 <tr><td><code>open_below</code></td><td>Open new line below selection</td><td>normal: <code>o</code>, select: <code>o</code></td></tr>
 <tr><td><code>open_above</code></td><td>Open new line above selection</td><td>normal: <code>O</code>, select: <code>O</code></td></tr>
-<tr><td><code>normal_mode</code></td><td>Enter normal mode</td><td>normal: <code>&lt;esc&gt;</code>, select: <code>v</code>, insert: <code>&lt;esc&gt;</code></td></tr>
+<tr><td><code>normal_mode</code></td><td>Enter normal mode</td><td>select: <code>v</code>, insert: <code>&lt;C-c&gt;</code>, <code>&lt;esc&gt;</code></td></tr>
 <tr><td><code>select_mode</code></td><td>Enter selection extend mode</td><td>normal: <code>v</code></td></tr>
 <tr><td><code>exit_select_mode</code></td><td>Exit selection mode</td><td>select: <code>&lt;esc&gt;</code></td></tr>
 <tr><td><code>goto_definition</code></td><td>Goto definition</td><td>normal: <code>gd</code>, select: <code>gd</code></td></tr>
@@ -532,6 +572,7 @@
 <tr><td><code>shrink_selection</code></td><td>Shrink selection to previously expanded syntax node</td><td>normal: <code>&lt;A-i&gt;</code>, <code>&lt;A-down&gt;</code>, select: <code>&lt;A-i&gt;</code>, <code>&lt;A-down&gt;</code></td></tr>
 <tr><td><code>select_next_sibling</code></td><td>Select next sibling in the syntax tree</td><td>normal: <code>&lt;A-n&gt;</code>, <code>&lt;A-right&gt;</code>, select: <code>&lt;A-n&gt;</code>, <code>&lt;A-right&gt;</code></td></tr>
 <tr><td><code>select_prev_sibling</code></td><td>Select previous sibling the in syntax tree</td><td>normal: <code>&lt;A-p&gt;</code>, <code>&lt;A-left&gt;</code>, select: <code>&lt;A-p&gt;</code>, <code>&lt;A-left&gt;</code></td></tr>
+<tr><td><code>select_inside_next_pair</code></td><td>Select inside the next bracket or quote pair on the line</td><td>normal: <code>&lt;A-m&gt;</code>, select: <code>&lt;A-m&gt;</code></td></tr>
 <tr><td><code>select_all_siblings</code></td><td>Select all siblings of the current node</td><td>normal: <code>&lt;A-a&gt;</code>, select: <code>&lt;A-a&gt;</code></td></tr>
 <tr><td><code>select_all_children</code></td><td>Select all children of the current node</td><td>normal: <code>&lt;A-I&gt;</code>, <code>&lt;S-A-down&gt;</code>, select: <code>&lt;A-I&gt;</code>, <code>&lt;S-A-down&gt;</code></td></tr>
 <tr><td><code>jump_forward</code></td><td>Jump forward on jumplist</td><td>normal: <code>&lt;C-i&gt;</code>, <code>&lt;tab&gt;</code>, select: <code>&lt;C-i&gt;</code>, <code>&lt;tab&gt;</code></td></tr>
@@ -554,12 +595,22 @@
 <tr><td><code>vsplit_new</code></td><td>Vertical right split scratch buffer</td><td>normal: <code>&lt;C-w&gt;nv</code>, <code>&lt;space&gt;wnv</code>, <code>&lt;C-w&gt;n&lt;C-v&gt;</code>, <code>&lt;space&gt;wn&lt;C-v&gt;</code>, select: <code>&lt;C-w&gt;nv</code>, <code>&lt;space&gt;wnv</code>, <code>&lt;C-w&gt;n&lt;C-v&gt;</code>, <code>&lt;space&gt;wn&lt;C-v&gt;</code></td></tr>
 <tr><td><code>wclose</code></td><td>Close window</td><td>normal: <code>&lt;C-w&gt;q</code>, <code>&lt;space&gt;wq</code>, <code>&lt;C-w&gt;&lt;C-q&gt;</code>, <code>&lt;space&gt;w&lt;C-q&gt;</code>, select: <code>&lt;C-w&gt;q</code>, <code>&lt;space&gt;wq</code>, <code>&lt;C-w&gt;&lt;C-q&gt;</code>, <code>&lt;space&gt;w&lt;C-q&gt;</code></td></tr>
 <tr><td><code>wonly</code></td><td>Close windows except current</td><td>normal: <code>&lt;C-w&gt;o</code>, <code>&lt;space&gt;wo</code>, <code>&lt;C-w&gt;&lt;C-o&gt;</code>, <code>&lt;space&gt;w&lt;C-o&gt;</code>, select: <code>&lt;C-w&gt;o</code>, <code>&lt;space&gt;wo</code>, <code>&lt;C-w&gt;&lt;C-o&gt;</code>, <code>&lt;space&gt;w&lt;C-o&gt;</code></td></tr>
+<tr><td><code>grow_view_width</code></td><td>Widen the split</td><td>normal: <code>&lt;C-w&gt;&lt;gt&gt;</code>, <code>&lt;space&gt;w&lt;gt&gt;</code>, select: <code>&lt;C-w&gt;&lt;gt&gt;</code>, <code>&lt;space&gt;w&lt;gt&gt;</code></td></tr>
+<tr><td><code>shrink_view_width</code></td><td>Narrow the split</td><td>normal: <code>&lt;C-w&gt;&lt;lt&gt;</code>, <code>&lt;space&gt;w&lt;lt&gt;</code>, select: <code>&lt;C-w&gt;&lt;lt&gt;</code>, <code>&lt;space&gt;w&lt;lt&gt;</code></td></tr>
+<tr><td><code>grow_view_height</code></td><td>Make the split taller</td><td>normal: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code>, select: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code></td></tr>
+<tr><td><code>shrink_view_height</code></td><td>Make the split shorter</td><td>normal: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code>, select: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code></td></tr>
+<tr><td><code>equalize_views</code></td><td>Make all splits the same size</td><td>normal: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code>, select: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code></td></tr>
+<tr><td><code>fold</code></td><td>Fold the selected lines, or the syntax node (or indented block) around the cursor</td><td>normal: <code>zc</code>, <code>zf</code>, select: <code>zc</code>, <code>zf</code></td></tr>
+<tr><td><code>unfold</code></td><td>Unfold the folds on the selected lines</td><td>normal: <code>zo</code>, select: <code>zo</code></td></tr>
+<tr><td><code>toggle_fold</code></td><td>Fold or unfold at the cursor</td><td>normal: <code>za</code>, select: <code>za</code></td></tr>
+<tr><td><code>fold_all</code></td><td>Fold every top-level block</td><td>normal: <code>zM</code>, select: <code>zM</code></td></tr>
+<tr><td><code>unfold_all</code></td><td>Unfold everything</td><td>normal: <code>zR</code>, select: <code>zR</code></td></tr>
 <tr><td><code>select_register</code></td><td>Select register</td><td>normal: <code>"</code>, select: <code>"</code></td></tr>
 <tr><td><code>insert_register</code></td><td>Insert register</td><td>insert: <code>&lt;C-r&gt;</code></td></tr>
 <tr><td><code>copy_between_registers</code></td><td>Copy between two registers</td><td></td></tr>
 <tr><td><code>align_view_middle</code></td><td>Align view middle</td><td>normal: <code>Zm</code>, <code>zm</code>, select: <code>Zm</code>, <code>zm</code></td></tr>
 <tr><td><code>align_view_top</code></td><td>Align view top</td><td>normal: <code>Zt</code>, <code>zt</code>, select: <code>Zt</code>, <code>zt</code></td></tr>
-<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zc</code>, <code>Zz</code>, <code>zc</code>, <code>zz</code>, select: <code>Zc</code>, <code>Zz</code>, <code>zc</code>, <code>zz</code></td></tr>
+<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zc</code>, <code>Zz</code>, <code>zz</code>, select: <code>Zc</code>, <code>Zz</code>, <code>zz</code></td></tr>
 <tr><td><code>align_view_bottom</code></td><td>Align view bottom</td><td>normal: <code>Zb</code>, <code>zb</code>, select: <code>Zb</code>, <code>zb</code></td></tr>
 <tr><td><code>scroll_up</code></td><td>Scroll view up</td><td>normal: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code>, select: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code></td></tr>
 <tr><td><code>scroll_down</code></td><td>Scroll view down</td><td>normal: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code>, select: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code></td></tr>
@@ -603,7 +654,7 @@
 <tr><td><code>dap_disable_exceptions</code></td><td>Disable exception breakpoints</td><td>normal: <code>&lt;space&gt;GE</code>, select: <code>&lt;space&gt;GE</code></td></tr>
 <tr><td><code>shell_pipe</code></td><td>Pipe selections through shell command</td><td>normal: <code>|</code>, select: <code>|</code></td></tr>
 <tr><td><code>shell_pipe_to</code></td><td>Pipe selections into shell command ignoring output</td><td>normal: <code>&lt;A-|&gt;</code>, select: <code>&lt;A-|&gt;</code></td></tr>
-<tr><td><code>shell_insert_output</code></td><td>Insert shell command output before selections</td><td>normal: <code>!</code>, select: <code>!</code></td></tr>
+<tr><td><code>shell_insert_output</code></td><td>Insert shell command output before selections</td><td>normal: <code>&lt;space&gt;z</code>, select: <code>&lt;space&gt;z</code></td></tr>
 <tr><td><code>shell_append_output</code></td><td>Append shell command output after selections</td><td>normal: <code>&lt;A-!&gt;</code>, select: <code>&lt;A-!&gt;</code></td></tr>
 <tr><td><code>shell_keep_pipe</code></td><td>Filter selections with shell predicate</td><td>normal: <code>$</code>, select: <code>$</code></td></tr>
 <tr><td><code>suspend</code></td><td>Suspend and return to shell</td><td>normal: <code>&lt;C-z&gt;</code>, select: <code>&lt;C-z&gt;</code></td></tr>

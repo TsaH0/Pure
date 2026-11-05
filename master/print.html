@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title></title>
+        <title>Pure</title>
         <meta name="robots" content="noindex">
 
 
@@ -37,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c2fa7ea4.js"></script>
+        <script src="toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -140,7 +140,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="print.html" title="Print this book" aria-label="Print this book">
@@ -180,7 +180,14 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="helix"><a class="header" href="#helix">Helix</a></h1>
+                        <h1 id="pure"><a class="header" href="#pure">Pure</a></h1>
+<blockquote>
+<p><em>“Immortal enlightenment is repentant enlightenment; perhaps only by making a
+mountain out of salt can one reach the heavens fastest.”</em></p>
+</blockquote>
+<p>Pure is a modal editor forked from <a href="https://helix-editor.com">Helix</a>. This book
+is Helix’s documentation with Pure’s additions (plugins, <code>:s</code>, the quickfix
+list, running commands, more text objects).</p>
 <div class="version-tiles">
   <a class="version-tile" href="/">
     <strong>Stable</strong>
@@ -192,39 +199,46 @@
   </a>
 </div>
 
-<p>See the <a href="#using-helix">usage</a> section for a quick overview of the editor, <a href="#keymap-1">keymap</a>
+<p>See the <a href="#using-pure">usage</a> section for a quick overview of the editor, <a href="#keymap-1">keymap</a>
 section for all available keybindings and the <a href="#configuration-2">configuration</a> section
 for defining custom keybindings, setting themes, etc.
 For everything else (e.g., how to install supported language servers), see the <a href="https://github.com/helix-editor/helix/wiki">Helix Wiki</a>.</p>
 <p>Refer the <a href="https://github.com/helix-editor/helix/wiki/FAQ">FAQ</a> for common questions.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="installing-helix"><a class="header" href="#installing-helix">Installing Helix</a></h1>
-<p>The typical way to install Helix is via <a href="#package-managers-1">your operating system’s package manager</a>.</p>
+<h1 id="installing-pure"><a class="header" href="#installing-pure">Installing Pure</a></h1>
+<p>Pure is installed by <a href="#building-from-source-1">building it from source</a>:</p>
+<pre><code class="language-sh">cargo install --path helix-term --locked
+</code></pre>
+<p>installs the <code>pure</code> binary.</p>
 <p>Note that:</p>
 <ul>
 <li>
-<p>To get the latest nightly version of Helix, you need to
-<a href="#building-from-source-1">build from source</a>.</p>
+<p>The <a href="#package-managers-1">package managers</a> and pre-built binaries below
+install upstream Helix, without Pure’s additions.</p>
 </li>
 <li>
-<p>To take full advantage of Helix, install the language servers for your
+<p>To take full advantage of Pure, install the language servers for your
 preferred programming languages. See the
 <a href="https://github.com/helix-editor/helix/wiki/Language-Server-Configurations">wiki</a>
 for instructions.</p>
 </li>
 </ul>
 <h2 id="pre-built-binaries"><a class="header" href="#pre-built-binaries">Pre-built binaries</a></h2>
-<p>Download pre-built binaries from the <a href="https://github.com/helix-editor/helix/releases">GitHub Releases page</a>.
+<p>Upstream Helix (without Pure’s additions) publishes pre-built binaries on its <a href="https://github.com/helix-editor/helix/releases">GitHub Releases page</a>.
 The tarball contents include an <code>hx</code> binary and a <code>runtime</code> directory.
-To set up Helix:</p>
+To set them up:</p>
 <ol>
 <li>Add the <code>hx</code> binary to your system’s <code>$PATH</code> to allow it to be used from the command line.</li>
-<li>Copy the <code>runtime</code> directory to a location that <code>hx</code> searches for runtime files. A typical location on Linux/macOS is <code>~/.config/helix/runtime</code>.</li>
+<li>Copy the <code>runtime</code> directory to a location that <code>hx</code> searches for runtime files. A typical location on Linux/macOS is <code>~/.config/pure/runtime</code>.</li>
 </ol>
-<p>To see the runtime directories that <code>hx</code> searches, run <code>hx --health</code>. If necessary, you can override the default runtime location by setting the <code>HELIX_RUNTIME</code> environment variable.</p>
+<p>To see the runtime directories that <code>pure</code> searches, run <code>pure --health</code>. If necessary, you can override the default runtime location by setting the <code>HELIX_RUNTIME</code> environment variable.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="package-managers-1"><a href="#package-managers-1" class="header">Package Managers</a></h1>
 <h2 id="package-managers"><a class="header" href="#package-managers">Package managers</a></h2>
+<blockquote>
+<p>Note: these packages install upstream Helix (the <code>hx</code> command), not Pure.
+To get Pure, <a href="#building-from-source-1">build it from source</a>.</p>
+</blockquote>
 <ul>
 <li><a href="#linux">Linux</a>
 <ul>
@@ -353,7 +367,7 @@ You can get <a href="https://www.microsoft.com/p/app-installer/9nblggh4nns1#acti
 <h1 id="building-from-source-1"><a href="#building-from-source-1" class="header">Building from source</a></h1>
 <h2 id="building-from-source"><a class="header" href="#building-from-source">Building from source</a></h2>
 <ul>
-<li><a href="#configuring-helixs-runtime-files">Configuring Helix’s runtime files</a>
+<li><a href="#configuring-pures-runtime-files">Configuring Pure’s runtime files</a>
 <ul>
 <li><a href="#linux-and-macos">Linux and macOS</a></li>
 <li><a href="#windows-1">Windows</a></li>
@@ -366,7 +380,7 @@ You can get <a href="https://www.microsoft.com/p/app-installer/9nblggh4nns1#acti
 <li><a href="#building-the-debian-package">Building the Debian package</a></li>
 </ul>
 <p>Requirements:</p>
-<p>Clone the Helix GitHub repository into a directory of your choice. The
+<p>Clone the Pure GitHub repository (<code>https://github.com/TsaH0/helix-editor-custom</code>) into a directory of your choice. The
 examples in this documentation assume installation into either <code>~/src/</code> on
 Linux and macOS, or <code>%userprofile%\src\</code> on Windows.</p>
 <ul>
@@ -396,7 +410,7 @@ cargo install \
    --path helix-term \
    --locked
 </code></pre>
-<p>Either command will create the <code>hx</code> executable and construct the tree-sitter
+<p>Either command will create the <code>pure</code> executable and construct the tree-sitter
 grammars in the local <code>runtime</code> folder.</p>
 </li>
 </ol>
@@ -405,23 +419,23 @@ grammars in the local <code>runtime</code> folder.</p>
 </blockquote>
 <blockquote>
 <p>💡 Tree-sitter grammars can be fetched and compiled if not pre-packaged. Fetch
-grammars with <code>hx --grammar fetch</code> and compile them with
-<code>hx --grammar build</code>. This will install them in
+grammars with <code>pure --grammar fetch</code> and compile them with
+<code>pure --grammar build</code>. This will install them in
 the <code>runtime</code> directory within the user’s helix config directory (more
 <a href="#multiple-runtime-directories">details below</a>).</p>
 </blockquote>
 <blockquote>
 <p>💡 If you only want to build <em>some</em> grammars, see <a href="#choosing-grammars"><code>use-grammars</code></a></p>
 </blockquote>
-<h3 id="configuring-helixs-runtime-files"><a class="header" href="#configuring-helixs-runtime-files">Configuring Helix’s runtime files</a></h3>
+<h3 id="configuring-pures-runtime-files"><a class="header" href="#configuring-pures-runtime-files">Configuring Pure’s runtime files</a></h3>
 <h4 id="linux-and-macos"><a class="header" href="#linux-and-macos">Linux and macOS</a></h4>
-<p>The <strong>runtime</strong> directory is one below the Helix source, so either export a
+<p>The <strong>runtime</strong> directory is one below the Pure source, so either export a
 <code>HELIX_RUNTIME</code> environment variable to point to that directory and add it to
 your <code>~/.bashrc</code> or equivalent:</p>
 <pre><code class="language-sh">export HELIX_RUNTIME=~/src/helix/runtime
 </code></pre>
 <p>Or, create a symbolic link:</p>
-<pre><code class="language-sh">ln -Tsf $PWD/runtime ~/.config/helix/runtime
+<pre><code class="language-sh">ln -Tsf $PWD/runtime ~/.config/pure/runtime
 </code></pre>
 <h4 id="windows-1"><a class="header" href="#windows-1">Windows</a></h4>
 <p>Either set the <code>HELIX_RUNTIME</code> environment variable to point to the runtime files using the Windows setting (search for
@@ -440,7 +454,7 @@ Cmd:</p>
 <tr><th>Method</th><th>Command</th></tr>
 </thead>
 <tbody>
-<tr><td>PowerShell</td><td><code>New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\helix\runtime"</code></td></tr>
+<tr><td>PowerShell</td><td><code>New-Item -ItemType Junction -Target "runtime" -Path "$Env:AppData\pure\runtime"</code></td></tr>
 <tr><td>Cmd</td><td><code>cd %appdata%\helix</code> <br /> <code>mklink /D runtime "%userprofile%\src\helix\runtime"</code></td></tr>
 </tbody>
 </table>
@@ -450,7 +464,7 @@ Cmd:</p>
 Cmd as an administrator.</p>
 </blockquote>
 <h4 id="multiple-runtime-directories"><a class="header" href="#multiple-runtime-directories">Multiple runtime directories</a></h4>
-<p>When Helix finds multiple runtime directories it will search through them for files in the
+<p>When Pure finds multiple runtime directories it will search through them for files in the
 following order:</p>
 <ol>
 <li><code>runtime/</code> sibling directory to <code>$CARGO_MANIFEST_DIR</code> directory (this is intended for
@@ -459,12 +473,12 @@ developing and testing helix only).</li>
 <li><code>$HELIX_RUNTIME</code></li>
 <li>Distribution-specific fallback directory (set at compile time—not run time—
 with the <code>HELIX_DEFAULT_RUNTIME</code> environment variable)</li>
-<li><code>runtime/</code> subdirectory of path to Helix executable.</li>
+<li><code>runtime/</code> subdirectory of path to Pure executable.</li>
 </ol>
 <p>This order also sets the priority for selecting which file will be used if multiple runtime
 directories have files with the same name.</p>
 <h4 id="note-to-packagers"><a class="header" href="#note-to-packagers">Note to packagers</a></h4>
-<p>If you are making a package of Helix for end users, to provide a good out of
+<p>If you are making a package of Pure for end users, to provide a good out of
 the box experience, you should set the <code>HELIX_DEFAULT_RUNTIME</code> environment
 variable at build time (before invoking <code>cargo build</code>) to a directory which
 will store the final runtime files after installation. For example, say you want
@@ -474,33 +488,33 @@ script could follow are:</p>
 <li><code>export HELIX_DEFAULT_RUNTIME=/usr/lib/helix/runtime</code></li>
 <li><code>cargo build --profile opt --locked</code></li>
 <li><code>cp -r runtime $BUILD_DIR/usr/lib/helix/</code></li>
-<li><code>cp target/opt/hx $BUILD_DIR/usr/bin/hx</code></li>
+<li><code>cp target/opt/pure $BUILD_DIR/usr/bin/pure</code></li>
 </ol>
-<p>This way the resulting <code>hx</code> binary will always look for its runtime directory in
-<code>/usr/lib/helix/runtime</code> if the user has no custom runtime in <code>~/.config/helix</code>
+<p>This way the resulting <code>pure</code> binary will always look for its runtime directory in
+<code>/usr/lib/helix/runtime</code> if the user has no custom runtime in <code>~/.config/pure</code>
 or <code>HELIX_RUNTIME</code>.</p>
 <h3 id="validating-the-installation"><a class="header" href="#validating-the-installation">Validating the installation</a></h3>
-<p>To make sure everything is set up as expected you should run the Helix health
+<p>To make sure everything is set up as expected you should run the Pure health
 check:</p>
-<pre><code class="language-sh">hx --health
+<pre><code class="language-sh">pure --health
 </code></pre>
 <p>For more information on the health check results refer to
 <a href="https://github.com/helix-editor/helix/wiki/Healthcheck">Health check</a>.</p>
 <h3 id="configure-the-desktop-shortcut"><a class="header" href="#configure-the-desktop-shortcut">Configure the desktop shortcut</a></h3>
 <p>If your desktop environment supports the
 <a href="https://specifications.freedesktop.org/menu-spec/menu-spec-latest.html">XDG desktop menu</a>
-you can configure Helix to show up in the application menu by copying the
+you can configure Pure to show up in the application menu by copying the
 provided <code>.desktop</code> and icon files to their correct folders:</p>
 <pre><code class="language-sh">cp contrib/Helix.desktop ~/.local/share/applications
 cp contrib/helix.png ~/.icons # or ~/.local/share/icons
 </code></pre>
 <p>It is recommended to convert the links in the <code>.desktop</code> file to absolute paths to avoid potential problems:</p>
-<pre><code class="language-sh">sed -i -e "s|Exec=hx %F|Exec=$(readlink -f ~/.cargo/bin/hx) %F|g" \
+<pre><code class="language-sh">sed -i -e "s|Exec=pure %F|Exec=$(readlink -f ~/.cargo/bin/pure) %F|g" \
   -e "s|Icon=helix|Icon=$(readlink -f ~/.icons/helix.png)|g" ~/.local/share/applications/Helix.desktop
 </code></pre>
 <p>To use another terminal than the system default, you can modify the <code>.desktop</code>
 file. For example, to use <code>kitty</code>:</p>
-<pre><code class="language-sh">sed -i "s|Exec=hx %F|Exec=kitty hx %F|g" ~/.local/share/applications/Helix.desktop
+<pre><code class="language-sh">sed -i "s|Exec=pure %F|Exec=kitty pure %F|g" ~/.local/share/applications/Helix.desktop
 sed -i "s|Terminal=true|Terminal=false|g" ~/.local/share/applications/Helix.desktop
 </code></pre>
 <h3 id="building-the-debian-package"><a class="header" href="#building-the-debian-package">Building the Debian package</a></h3>
@@ -510,13 +524,17 @@ from source to match your system’s dependencies.</p>
 <p>Install <code>cargo-deb</code>, the tool used for building the <code>.deb</code> file:</p>
 <pre><code class="language-sh">cargo install cargo-deb
 </code></pre>
-<p>After cloning and entering the Helix repository as previously described,
+<p>To build without plugin support (no Wasmtime: a smaller binary and a faster
+build), disable the default <code>plugins</code> feature:</p>
+<pre><code class="language-sh">cargo install --path helix-term --locked --no-default-features --features git
+</code></pre>
+<p>After cloning and entering the Pure repository as previously described,
 use the following command to build the release binary and package it into a <code>.deb</code> file in a single step.</p>
 <pre><code class="language-sh">cargo deb -- --locked
 </code></pre>
 <blockquote>
 <p>💡 This locks you into the <code>--release</code> profile. But you can also build helix in any way you like.
-As long as you leave a <code>target/release/hx</code> file, it will get packaged with <code>cargo deb --no-build</code></p>
+As long as you leave a <code>target/release/pure</code> file, it will get packaged with <code>cargo deb --no-build</code></p>
 </blockquote>
 <blockquote>
 <p>💡 Don’t worry about the following:</p>
@@ -533,16 +551,16 @@ so far the dependency deriving seams very good, even if some of the grammar file
 <li>launcher to the binary with the runtime</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="using-helix"><a class="header" href="#using-helix">Using Helix</a></h1>
-<p>For a full interactive introduction to Helix, refer to the
+<h1 id="using-pure"><a class="header" href="#using-pure">Using Pure</a></h1>
+<p>For a full interactive introduction to Pure, refer to the
 <a href="https://github.com/helix-editor/helix/blob/master/runtime/tutor">tutor</a> which
-can be accessed via the command <code>hx --tutor</code> or <code>:tutor</code>.</p>
+can be accessed via the command <code>pure --tutor</code> or <code>:tutor</code>.</p>
 <blockquote>
 <p>💡 Currently, not all functionality is fully documented, please refer to the
 <a href="#keymap-1">key mappings</a> list.</p>
 </blockquote>
 <h2 id="modes"><a class="header" href="#modes">Modes</a></h2>
-<p>Helix is a modal editor, meaning it has different modes for different tasks. The main modes are:</p>
+<p>Pure is a modal editor, meaning it has different modes for different tasks. The main modes are:</p>
 <ul>
 <li><a href="#normal-mode">Normal mode</a>: For navigation and editing commands. This is the default mode.</li>
 <li><a href="#insert-mode">Insert mode</a>: For typing text directly into the document. Access by typing <code>i</code> in normal mode.</li>
@@ -551,9 +569,9 @@ can be accessed via the command <code>hx --tutor</code> or <code>:tutor</code>.<
 <h2 id="buffers"><a class="header" href="#buffers">Buffers</a></h2>
 <p>Buffers are in-memory representations of files. You can have multiple buffers open at once. Use <a href="#pickers">pickers</a> or commands like <code>:buffer-next</code> and <code>:buffer-previous</code> to open buffers or switch between them.</p>
 <h2 id="selection-first-editing"><a class="header" href="#selection-first-editing">Selection-first editing</a></h2>
-<p>Inspired by <a href="http://kakoune.org/">Kakoune</a>, Helix follows the <code>selection → action</code> model. This means that whatever you are going to act on (a word, a paragraph, a line, etc.) is selected first and the action itself (delete, change, yank, etc.) comes second. A cursor is simply a single width selection.</p>
+<p>Inspired by <a href="http://kakoune.org/">Kakoune</a>, Pure follows the <code>selection → action</code> model. This means that whatever you are going to act on (a word, a paragraph, a line, etc.) is selected first and the action itself (delete, change, yank, etc.) comes second. A cursor is simply a single width selection.</p>
 <h2 id="multiple-selections"><a class="header" href="#multiple-selections">Multiple selections</a></h2>
-<p>Also inspired by Kakoune, multiple selections are a core mode of interaction in Helix. For example, the standard way of replacing multiple instances of a word is to first select all instances (so there is one selection per instance) and then use the change action (<code>c</code>) to edit them all at the same time.</p>
+<p>Also inspired by Kakoune, multiple selections are a core mode of interaction in Pure. For example, the standard way of replacing multiple instances of a word is to first select all instances (so there is one selection per instance) and then use the change action (<code>c</code>) to edit them all at the same time.</p>
 <h2 id="motions"><a class="header" href="#motions">Motions</a></h2>
 <p>Motions are commands that move the cursor or modify selections. They’re used for navigation and text manipulation. Examples include <code>w</code> to move to the next word, or <code>f</code> to find a character. See the <a href="#movement">Movement</a> section of the keymap for more motions.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -564,12 +582,12 @@ can be accessed via the command <code>hx --tutor</code> or <code>:tutor</code>.<
 <li><a href="#default-registers">Default registers</a></li>
 <li><a href="#special-registers">Special registers</a></li>
 </ul>
-<p>In Helix, registers are storage locations for text and other data, such as the
+<p>In Pure, registers are storage locations for text and other data, such as the
 result of a search. Registers can be used to cut, copy, and paste text, similar
 to the clipboard in other text editors. Usage is similar to Vim, with <code>"</code> being
 used to select a register.</p>
 <h3 id="user-defined-registers"><a class="header" href="#user-defined-registers">User-defined registers</a></h3>
-<p>Helix allows you to create your own named registers for storing text, for
+<p>Pure allows you to create your own named registers for storing text, for
 example:</p>
 <ul>
 <li><code>"ay</code> - Yank the current selection to register <code>a</code>.</li>
@@ -615,12 +633,12 @@ These registers are used as defaults:</p>
 </div>
 <p>When yanking multiple selections to the clipboard registers, the selections
 are joined with newlines. Pasting from these registers will paste multiple
-selections if the clipboard was last yanked to by the Helix session. Otherwise
+selections if the clipboard was last yanked to by the Pure session. Otherwise
 the clipboard contents are pasted as one selection.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="surround-1"><a href="#surround-1" class="header">Surround</a></h1>
 <h2 id="surround"><a class="header" href="#surround">Surround</a></h2>
-<p>Helix includes built-in functionality similar to <a href="https://github.com/tpope/vim-surround">vim-surround</a>.
+<p>Pure includes built-in functionality similar to <a href="https://github.com/tpope/vim-surround">vim-surround</a>.
 The keymappings have been inspired from <a href="https://github.com/machakann/vim-sandwich">vim-sandwich</a>:</p>
 <p><img src="https://user-images.githubusercontent.com/23398472/122865801-97073180-d344-11eb-8142-8f43809982c6.gif" alt="Surround demo"></p>
 <div class="table-wrapper">
@@ -647,7 +665,7 @@ The keymappings have been inspired from <a href="https://github.com/machakann/vi
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="textobjects"><a href="#textobjects" class="header">Textobjects</a></h1>
 <h2 id="selecting-and-manipulating-text-with-textobjects"><a class="header" href="#selecting-and-manipulating-text-with-textobjects">Selecting and manipulating text with textobjects</a></h2>
-<p>In Helix, textobjects are a way to select, manipulate and operate on a piece of
+<p>In Pure, textobjects are a way to select, manipulate and operate on a piece of
 text in a structured way. They allow you to refer to blocks of text based on
 their structure or purpose, such as a word, sentence, paragraph, or even a
 function or block of code.</p>
@@ -668,6 +686,9 @@ function or block of code.</p>
 <tr><td><code>p</code></td><td>Paragraph</td></tr>
 <tr><td><code>(</code>, <code>[</code>, <code>'</code>, etc.</td><td>Specified surround pairs</td></tr>
 <tr><td><code>m</code></td><td>The closest surround pair</td></tr>
+<tr><td><code>b</code> / <code>B</code> / <code>r</code> / <code>A</code></td><td><code>( )</code> / <code>{ }</code> / <code>[ ]</code> / <code>&lt; &gt;</code></td></tr>
+<tr><td><code>d</code> / <code>s</code></td><td><code>" "</code> / <code>' '</code></td></tr>
+<tr><td><code>q</code></td><td>The closest quotes (<code>"</code>, <code>'</code> or <code>`</code>)</td></tr>
 <tr><td><code>f</code></td><td>Function</td></tr>
 <tr><td><code>t</code></td><td>Type (or Class)</td></tr>
 <tr><td><code>a</code></td><td>Argument/parameter</td></tr>
@@ -678,6 +699,10 @@ function or block of code.</p>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p>💡 The pair letters <code>b</code>, <code>B</code>, <code>r</code>, <code>A</code>, <code>d</code> and <code>s</code> also work with the surround
+commands <code>ms</code>, <code>md</code> and <code>mr</code> (e.g. <code>msb</code> adds parentheses).</p>
+</blockquote>
 <blockquote>
 <p>💡 <code>f</code>, <code>t</code>, etc. need a tree-sitter grammar active for the current
 document and a special tree-sitter query file to work properly. <a href="#language-support-1">Only
@@ -749,7 +774,7 @@ selection to the “func” <code>identifier</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="pickers"><a href="#pickers" class="header">Pickers</a></h1>
 <h2 id="using-pickers"><a class="header" href="#using-pickers">Using pickers</a></h2>
-<p>Helix has a variety of pickers, which are interactive windows used to select various kinds of items. These include a file picker, global search picker, and more. Most pickers are accessed via keybindings in <a href="#space-mode">space mode</a>. Pickers have their own <a href="#picker">keymap</a> for navigation.</p>
+<p>Pure has a variety of pickers, which are interactive windows used to select various kinds of items. These include a file picker, global search picker, and more. Most pickers are accessed via keybindings in <a href="#space-mode">space mode</a>. Pickers have their own <a href="#picker">keymap</a> for navigation.</p>
 <h3 id="filtering-picker-results"><a class="header" href="#filtering-picker-results">Filtering Picker Results</a></h3>
 <p>Most pickers perform fuzzy matching using <a href="https://github.com/junegunn/fzf?tab=readme-ov-file#search-syntax">fzf syntax</a>. Two exceptions are the global search picker, which uses regex, and the workspace symbol picker, which passes search terms to the language server. Note that OR operations (<code>|</code>) are not currently supported.</p>
 <p>If a picker shows multiple columns, you may apply the filter to a specific column by prefixing the column name with <code>%</code>. Column names can be shortened to any prefix, so <code>%p</code>, <code>%pa</code> or <code>%pat</code> all mean the same as <code>%path</code>. For example, a query of <code>helix %p .toml !lang</code> in the global search picker searches for the term “helix” within files with paths ending in “.toml” but not including “lang”.</p>
@@ -759,8 +784,8 @@ selection to the “func” <code>identifier</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="jumplist"><a href="#jumplist" class="header">Jumplist</a></h1>
 <h2 id="using-the-jumplist"><a class="header" href="#using-the-jumplist">Using the jumplist</a></h2>
-<p>To help with quick navigation, Helix maintains a list of “jumps” called the jumplist.
-Whenever you make a significant movement (see next section), Helix stores your selections from before the move as a jump.
+<p>To help with quick navigation, Pure maintains a list of “jumps” called the jumplist.
+Whenever you make a significant movement (see next section), Pure stores your selections from before the move as a jump.
 A jump serves as a kind of checkpoint, allowing you to jump to a separate location, make edits, and return to where you were with your previous selections.
 This way, the jumplist tracks both your previous location and your selections.
 You can manually save a jump by using <code>Ctrl-s</code>.
@@ -850,7 +875,7 @@ To jump backward in the jumplist, use <code>Ctrl-o</code>; to go forward, use <c
 <p>💡 Mappings marked (<strong>TS</strong>) require a tree-sitter grammar for the file type.</p>
 </blockquote>
 <blockquote>
-<p>⚠️ Some terminals’ default key mappings conflict with Helix’s. If any of the mappings described on this page do not work as expected, check your terminal’s mappings to ensure they do not conflict. See the <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">wiki</a> for known conflicts.</p>
+<p>⚠️ Some terminals’ default key mappings conflict with Pure’s. If any of the mappings described on this page do not work as expected, check your terminal’s mappings to ensure they do not conflict. See the <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">wiki</a> for known conflicts.</p>
 </blockquote>
 <h2 id="normal-mode"><a class="header" href="#normal-mode">Normal mode</a></h2>
 <p>Normal mode is the default mode when you launch helix. You can return to it from other modes by pressing the <code>Escape</code> key.</p>
@@ -933,7 +958,7 @@ To jump backward in the jumplist, use <code>Ctrl-o</code>; to go forward, use <c
 <tr><td><code>Ctrl-x</code></td><td>Decrement object (number) under cursor</td><td><code>decrement</code></td></tr>
 <tr><td><code>Q</code></td><td>Start/stop macro recording to the selected register (experimental)</td><td><code>record_macro</code></td></tr>
 <tr><td><code>q</code></td><td>Play back a recorded macro from the selected register (experimental)</td><td><code>replay_macro</code></td></tr>
-<tr><td><code>Ctrl-z</code></td><td>Suspend Helix and return to the shell (resume with <code>fg</code>)</td><td><code>suspend</code></td></tr>
+<tr><td><code>Ctrl-z</code></td><td>Suspend Pure and return to the shell (resume with <code>fg</code>)</td><td><code>suspend</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -946,7 +971,7 @@ To jump backward in the jumplist, use <code>Ctrl-o</code>; to go forward, use <c
 <tbody>
 <tr><td><code>|</code></td><td>Pipe each selection through shell command, replacing with output</td><td><code>shell_pipe</code></td></tr>
 <tr><td><code>Alt-|</code></td><td>Pipe each selection into shell command, ignoring output</td><td><code>shell_pipe_to</code></td></tr>
-<tr><td><code>!</code></td><td>Run shell command, inserting output before each selection</td><td><code>shell_insert_output</code></td></tr>
+<tr><td><code>!</code></td><td>Run a shell command like Vim’s <code>:!</code> (on a cleared screen), press any key to return</td><td><code>run_and_wait</code></td></tr>
 <tr><td><code>Alt-!</code></td><td>Run shell command, appending output after each selection</td><td><code>shell_append_output</code></td></tr>
 <tr><td><code>$</code></td><td>Pipe each selection into shell command, keep selections where command returned 0</td><td><code>shell_keep_pipe</code></td></tr>
 </tbody>
@@ -963,6 +988,7 @@ To jump backward in the jumplist, use <code>Ctrl-o</code>; to go forward, use <c
 <tr><td><code>S</code></td><td>Split selection into sub selections on regex matches</td><td><code>split_selection</code></td></tr>
 <tr><td><code>Alt-s</code></td><td>Split selection on newlines</td><td><code>split_selection_on_newline</code></td></tr>
 <tr><td><code>Alt-minus</code></td><td>Merge selections</td><td><code>merge_selections</code></td></tr>
+<tr><td><code>Alt-m</code></td><td>Select inside the next bracket or quote pair on the line (again: the next pair inside)</td><td><code>select_inside_next_pair</code></td></tr>
 <tr><td><code>Alt-_</code></td><td>Merge consecutive selections</td><td><code>merge_consecutive_selections</code></td></tr>
 <tr><td><code>&amp;</code></td><td>Align selection in columns</td><td><code>align_selections</code></td></tr>
 <tr><td><code>_</code></td><td>Trim whitespace from the selection</td><td><code>trim_selections</code></td></tr>
@@ -979,7 +1005,7 @@ To jump backward in the jumplist, use <code>Ctrl-o</code>; to go forward, use <c
 <tr><td><code>Alt-)</code></td><td>Rotate selection contents forward</td><td><code>rotate_selection_contents_forward</code></td></tr>
 <tr><td><code>%</code></td><td>Select entire file</td><td><code>select_all</code></td></tr>
 <tr><td><code>x</code></td><td>Select current line, if already selected, extend to next line</td><td><code>extend_line_below</code></td></tr>
-<tr><td><code>X</code></td><td>Extend selection to line bounds (line-wise selection)</td><td><code>extend_to_line_bounds</code></td></tr>
+<tr><td><code>X</code></td><td>Select current line, if already selected, extend to previous line</td><td><code>extend_line_above</code></td></tr>
 <tr><td><code>Alt-x</code></td><td>Shrink selection to line bounds (line-wise selection)</td><td><code>shrink_to_line_bounds</code></td></tr>
 <tr><td><code>J</code></td><td>Join lines inside selection</td><td><code>join_selections</code></td></tr>
 <tr><td><code>Alt-J</code></td><td>Join lines inside selection and select the inserted space</td><td><code>join_selections_space</code></td></tr>
@@ -1172,6 +1198,11 @@ useful when you’re simply looking over text and not actively editing it.</p>
 <tr><td><code>a</code></td><td>Apply code action (<strong>LSP</strong>)</td><td><code>code_action</code></td></tr>
 <tr><td><code>h</code></td><td>Select symbol references (<strong>LSP</strong>)</td><td><code>select_references_to_symbol_under_cursor</code></td></tr>
 <tr><td><code>'</code></td><td>Open last fuzzy picker</td><td><code>last_picker</code></td></tr>
+<tr><td><code>x</code></td><td>Run a shell command, output in <code>*compilation*</code> (Emacs <code>M-x compile</code>)</td><td><code>compile</code></td></tr>
+<tr><td><code>X</code></td><td>Show or hide <code>*compilation*</code> (<code>C-j</code> hides it, <code>Esc</code> closes it)</td><td><code>toggle_compilation</code></td></tr>
+<tr><td><code>z</code></td><td>Run shell command, inserting output before each selection</td><td><code>shell_insert_output</code></td></tr>
+<tr><td><code>q</code></td><td>Open the quickfix list (<code>]q</code>/<code>[q</code> to step through it)</td><td><code>quickfix_picker</code></td></tr>
+<tr><td><code>v</code></td><td><code>:s/\v</code> on the selections (or the line): a very magic substitute</td><td><code>substitute_very_magic</code></td></tr>
 <tr><td><code>w</code></td><td>Enter <a href="#window-mode">window mode</a></td><td>N/A</td></tr>
 <tr><td><code>c</code></td><td>Comment/uncomment selections</td><td><code>toggle_comments</code></td></tr>
 <tr><td><code>C</code></td><td>Block comment/uncomment selections</td><td><code>toggle_block_comments</code></td></tr>
@@ -1263,6 +1294,10 @@ useful when you’re simply looking over text and not actively editing it.</p>
 <tr><td><code>[G</code></td><td>Go to first change</td><td><code>goto_first_change</code></td></tr>
 <tr><td><code>[x</code></td><td>Go to next (X)HTML element</td><td><code>goto_next_xml_element</code></td></tr>
 <tr><td><code>]x</code></td><td>Go to previous (X)HTML element</td><td><code>goto_prev_xml_element</code></td></tr>
+<tr><td><code>]q</code></td><td>Go to next quickfix entry</td><td><code>quickfix_next</code></td></tr>
+<tr><td><code>[q</code></td><td>Go to previous quickfix entry</td><td><code>quickfix_prev</code></td></tr>
+<tr><td><code>]Q</code></td><td>Go to last quickfix entry</td><td><code>quickfix_last</code></td></tr>
+<tr><td><code>[Q</code></td><td>Go to first quickfix entry</td><td><code>quickfix_first</code></td></tr>
 <tr><td><code>]Space</code></td><td>Add newline below</td><td><code>add_newline_below</code></td></tr>
 <tr><td><code>[Space</code></td><td>Add newline above</td><td><code>add_newline_above</code></td></tr>
 </tbody>
@@ -1270,7 +1305,7 @@ useful when you’re simply looking over text and not actively editing it.</p>
 </div>
 <h2 id="insert-mode"><a class="header" href="#insert-mode">Insert mode</a></h2>
 <p>Accessed by typing <code>i</code> in <a href="#normal-mode">normal mode</a>.</p>
-<p>Insert mode bindings are minimal by default. Helix is designed to
+<p>Insert mode bindings are minimal by default. Pure is designed to
 be a modal editor, and this is reflected in the user experience and internal
 mechanics. Changes to the text are only saved for undos when
 escaping from insert mode to normal mode.</p>
@@ -1284,7 +1319,7 @@ to get the smoothest experience.</p>
 <tr><th>Key</th><th>Description</th><th>Command</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Escape</code></td><td>Switch to normal mode</td><td><code>normal_mode</code></td></tr>
+<tr><td><code>Escape</code>, <code>Ctrl-c</code></td><td>Switch to normal mode (<code>Ctrl-c</code> also when the completion menu is open)</td><td><code>normal_mode</code></td></tr>
 <tr><td><code>Ctrl-s</code></td><td>Commit undo checkpoint</td><td><code>commit_undo_checkpoint</code></td></tr>
 <tr><td><code>Ctrl-x</code></td><td>Autocomplete</td><td><code>completion</code></td></tr>
 <tr><td><code>Ctrl-r</code></td><td>Insert a register content</td><td><code>insert_register</code></td></tr>
@@ -1416,14 +1451,14 @@ See the documentation page on <a href="#pickers">pickers</a> for more info.
 <p>Command flags are optional switches that can be used to alter the behavior of a command. For example the <code>:sort</code> command accepts an optional <code>--reverse</code> (or <code>-r</code> for short) flag which causes the sort command to reverse the sorting direction. Typing the <code>-</code> character shows completions for the current command’s flags, if any.</p>
 <p>The <code>--</code> flag specifies the end of flags. All arguments after <code>--</code> are treated as positional arguments: <code>:open -- -a.txt</code> opens a file called <code>-a.txt</code>.</p>
 <h2 id="expansions"><a class="header" href="#expansions">Expansions</a></h2>
-<p>Expansions are patterns that Helix recognizes and replaces within the command line. Helix recognizes anything starting with a percent token (<code>%</code>) as an expansion, for example <code>%sh{echo hi!}</code>. Expansions are particularly useful when used in commands like <code>:echo</code> or <code>:noop</code> for executing simple scripts. For example:</p>
+<p>Expansions are patterns that Pure recognizes and replaces within the command line. Pure recognizes anything starting with a percent token (<code>%</code>) as an expansion, for example <code>%sh{echo hi!}</code>. Expansions are particularly useful when used in commands like <code>:echo</code> or <code>:noop</code> for executing simple scripts. For example:</p>
 <pre><code class="language-toml">[keys.normal]
 # Print the current line's git blame information to the statusline.
 space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 </code></pre>
 <p>Expansions take the form <code>%[&lt;kind&gt;]&lt;open&gt;&lt;contents&gt;&lt;close&gt;</code>. In <code>%sh{echo hi!}</code>, for example, the kind is <code>sh</code> - the shell expansion - and the contents are “echo hi!”, with <code>{</code> and <code>}</code> acting as opening and closing delimiters. The following open/close characters are recognized as expansion delimiter pairs: <code>(</code>/<code>)</code>, <code>[</code>/<code>]</code>, <code>{</code>/<code>}</code> and <code>&lt;</code>/<code>&gt;</code>. Plus the single characters <code>'</code>, <code>"</code> or <code>|</code> may be used instead: <code>%{cursor_line}</code> is equivalent to <code>%&lt;cursor_line&gt;</code>, <code>%[cursor_line]</code> or <code>%|cursor_line|</code>.</p>
 <p>To escape a percent character instead of treating it as an expansion, use two percent characters consecutively. To execute a shell command like <code>date -u +'%Y-%m-%d'</code>, double the percent characters: <code>:echo %sh{date -u +'%%Y-%%m-%%d'}</code>.</p>
-<p>When no <code>&lt;kind&gt;</code> is provided, Helix will expand a <strong>variable</strong>. For example <code>%{cursor_line}</code> can be used as in argument to insert the line number. <code>:echo %{cursor_line}</code> for instance may print <code>1</code> to the statusline.</p>
+<p>When no <code>&lt;kind&gt;</code> is provided, Pure will expand a <strong>variable</strong>. For example <code>%{cursor_line}</code> can be used as in argument to insert the line number. <code>:echo %{cursor_line}</code> for instance may print <code>1</code> to the statusline.</p>
 <p>The following variables are supported:</p>
 <div class="table-wrapper">
 <table>
@@ -1548,6 +1583,7 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>:tree-sitter-scopes</code></td><td>Display tree sitter scopes, primarily for theming and development.</td></tr>
 <tr><td><code>:tree-sitter-highlight-name</code></td><td>Display name of tree-sitter highlight scope under the cursor.</td></tr>
 <tr><td><code>:tree-sitter-layers</code></td><td>Display language names of tree-sitter injection layers under the cursor.</td></tr>
+<tr><td><code>:terminal</code>, <code>:term</code></td><td>Open a terminal in a split below, running a program (your shell by default). Keys go to it in insert mode; C-\ C-n goes back to normal mode.</td></tr>
 <tr><td><code>:debug-start</code>, <code>:dbg</code></td><td>Start a debug session from a given template with given parameters.</td></tr>
 <tr><td><code>:debug-remote</code>, <code>:dbg-tcp</code></td><td>Connect to a debug adapter by TCP address and start a debugging session from a given template with given parameters.</td></tr>
 <tr><td><code>:debug-eval</code></td><td>Evaluate expression in current debug context.</td></tr>
@@ -1573,6 +1609,34 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>:pipe</code>, <code>:|</code></td><td>Pipe each selection to the shell command.</td></tr>
 <tr><td><code>:pipe-to</code></td><td>Pipe each selection to the shell command, ignoring output.</td></tr>
 <tr><td><code>:run-shell-command</code>, <code>:sh</code>, <code>:!</code></td><td>Run a shell command</td></tr>
+<tr><td><code>:run-interactive</code>, <code>:term</code></td><td>Run an interactive terminal program (e.g. lazygit) full screen, then return to the editor.</td></tr>
+<tr><td><code>:normal</code>, <code>:norm</code></td><td>Play keys as if typed, like Vim’s <code>:normal</code>: <code>:normal dd</code>, <code>:normal ihello&lt;esc&gt;</code>. An unfinished command is abandoned.</td></tr>
+<tr><td><code>:substitute</code></td><td>Replace text with a regex like Vim: <code>:s/pattern/replacement/flags</code>, <code>:%s/..</code> for the whole file, <code>:N,Ms/..</code> for lines. Without a range: the selections, or the current line. Patterns: Rust regex syntax or Vim’s (<code>\(.*\)</code>, <code>\v</code>, <code>\{-}</code>, <code>\zs</code>/<code>\ze</code>, <code>\&lt;\&gt;</code>). Replacement: <code>\1</code>/<code>$1</code>/<code>${name}</code> groups, <code>&amp;</code> the match, <code>\r</code> line break, <code>\u</code> <code>\U..\E</code> <code>\l</code> <code>\L</code> case. Flags: g (all per line), i, I, n (count), e (no error).</td></tr>
+<tr><td><code>:copen</code>, <code>:cope</code>, <code>:cw</code>, <code>:cwindow</code></td><td>Show the quickfix list in a picker.</td></tr>
+<tr><td><code>:cnext</code>, <code>:cn</code></td><td>Go to the next (or Nth next) quickfix entry.</td></tr>
+<tr><td><code>:cprevious</code>, <code>:cprev</code>, <code>:cp</code>, <code>:cN</code></td><td>Go to the previous (or Nth previous) quickfix entry.</td></tr>
+<tr><td><code>:cfirst</code>, <code>:cfir</code>, <code>:cr</code></td><td>Go to the first quickfix entry.</td></tr>
+<tr><td><code>:clast</code>, <code>:cla</code></td><td>Go to the last quickfix entry.</td></tr>
+<tr><td><code>:cc</code></td><td>Go to quickfix entry N (or the current one again).</td></tr>
+<tr><td><code>:cbuffer</code>, <code>:cb</code></td><td>Fill the quickfix list with the <code>file:line:col</code> locations in the current buffer.</td></tr>
+<tr><td><code>:cdiagnostics</code>, <code>:cdiag</code></td><td>Fill the quickfix list with the workspace diagnostics.</td></tr>
+<tr><td><code>:grep</code></td><td>Search with ripgrep (or grep) and put the matches in the quickfix list: <code>:grep &lt;pattern&gt; [paths...]</code>.</td></tr>
+<tr><td><code>:cclear</code></td><td>Empty the quickfix list.</td></tr>
+<tr><td><code>:plugin-run</code></td><td>Run a plugin command: <code>:plugin-run &lt;plugin&gt;/&lt;command&gt; [args...]</code>.</td></tr>
+<tr><td><code>:plugin-list</code></td><td>Show the loaded plugins and their commands.</td></tr>
+<tr><td><code>:plugin-doctor</code></td><td>Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times.</td></tr>
+<tr><td><code>:plugin-trace</code></td><td>Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on</td></tr>
+<tr><td><code>:plugin-keys</code></td><td>Show the plugins’ key bindings, their layers and conflicts.</td></tr>
+<tr><td><code>:plugin-key</code></td><td>Run a plugin’s key binding: <plugin> <binding>.</binding></plugin></td></tr>
+<tr><td><code>:plugin-install</code></td><td>Install a plugin from a git URL or a directory (it must have a committed component); asks first.</td></tr>
+<tr><td><code>:plugin-update</code></td><td>Update plugins installed with :plugin-install (all, or the ones named); asks before new permissions.</td></tr>
+<tr><td><code>:plugin-remove</code></td><td>Remove a plugin (asks first).</td></tr>
+<tr><td><code>:plugin-log</code></td><td>Show the latest lines a plugin logged in a new buffer: <code>:plugin-log &lt;plugin&gt;</code>.</td></tr>
+<tr><td><code>:panel-focus</code></td><td>Give a plugin’s panel the keys: left, right or bottom (esc gives them back).</td></tr>
+<tr><td><code>:panel-close</code></td><td>Close a plugin’s panel: left, right or bottom (default: the focused one).</td></tr>
+<tr><td><code>:plugin-reload</code></td><td>Reload all plugins and plugins.toml.</td></tr>
+<tr><td><code>:run-and-wait</code>, <code>:bang</code></td><td>Run a shell command like Vim’s :! (output on the terminal screen, press any key to return). Without arguments, run the previous command again.</td></tr>
+<tr><td><code>:compile</code></td><td>Run a shell command like Emacs’ M-x compile: its output streams into the <em>compilation</em> buffer. Without arguments, run the previous command again.</td></tr>
 <tr><td><code>:reset-diff-change</code>, <code>:diffget</code>, <code>:diffg</code></td><td>Reset the diff change at the cursor position.</td></tr>
 <tr><td><code>:clear-register</code></td><td>Clear given register. If no argument is provided, clear all registers.</td></tr>
 <tr><td><code>:set-register</code></td><td>Set contents of the given register.</td></tr>
@@ -1679,10 +1743,10 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>global_search</code></td><td>Global search in workspace folder</td><td>normal: <code>&lt;space&gt;/</code>, select: <code>&lt;space&gt;/</code></td></tr>
 <tr><td><code>extend_line</code></td><td>Select current line, if already selected, extend to another line based on the anchor</td><td></td></tr>
 <tr><td><code>extend_line_below</code></td><td>Select current line, if already selected, extend to next line</td><td>normal: <code>x</code>, select: <code>x</code></td></tr>
-<tr><td><code>extend_line_above</code></td><td>Select current line, if already selected, extend to previous line</td><td></td></tr>
+<tr><td><code>extend_line_above</code></td><td>Select current line, if already selected, extend to previous line</td><td>normal: <code>X</code>, select: <code>X</code></td></tr>
 <tr><td><code>select_line_above</code></td><td>Select current line, if already selected, extend or shrink line above based on the anchor</td><td></td></tr>
 <tr><td><code>select_line_below</code></td><td>Select current line, if already selected, extend or shrink line below based on the anchor</td><td></td></tr>
-<tr><td><code>extend_to_line_bounds</code></td><td>Extend selection to line bounds</td><td>normal: <code>X</code>, select: <code>X</code></td></tr>
+<tr><td><code>extend_to_line_bounds</code></td><td>Extend selection to line bounds</td><td></td></tr>
 <tr><td><code>shrink_to_line_bounds</code></td><td>Shrink selection to line bounds</td><td>normal: <code>&lt;A-x&gt;</code>, select: <code>&lt;A-x&gt;</code></td></tr>
 <tr><td><code>delete_selection</code></td><td>Delete selection</td><td>normal: <code>d</code>, select: <code>d</code></td></tr>
 <tr><td><code>delete_selection_noyank</code></td><td>Delete selection without yanking</td><td>normal: <code>&lt;A-d&gt;</code>, select: <code>&lt;A-d&gt;</code></td></tr>
@@ -1694,6 +1758,7 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>insert_mode</code></td><td>Insert before selection</td><td>normal: <code>i</code>, select: <code>i</code></td></tr>
 <tr><td><code>append_mode</code></td><td>Append after selection</td><td>normal: <code>a</code>, select: <code>a</code></td></tr>
 <tr><td><code>command_mode</code></td><td>Enter command mode</td><td>normal: <code>:</code>, select: <code>:</code></td></tr>
+<tr><td><code>substitute_very_magic</code></td><td>Substitute in the selections with a very magic regex (<code>:s/\v</code>)</td><td>normal: <code>&lt;space&gt;v</code>, select: <code>&lt;space&gt;v</code></td></tr>
 <tr><td><code>file_picker</code></td><td>Open file picker</td><td>normal: <code>&lt;space&gt;f</code>, select: <code>&lt;space&gt;f</code></td></tr>
 <tr><td><code>file_picker_in_current_buffer_directory</code></td><td>Open file picker at current buffer’s directory</td><td></td></tr>
 <tr><td><code>file_picker_in_current_directory</code></td><td>Open file picker at current working directory</td><td>normal: <code>&lt;space&gt;F</code>, select: <code>&lt;space&gt;F</code></td></tr>
@@ -1714,11 +1779,21 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>diagnostics_picker</code></td><td>Open diagnostic picker</td><td>normal: <code>&lt;space&gt;d</code>, select: <code>&lt;space&gt;d</code></td></tr>
 <tr><td><code>workspace_diagnostics_picker</code></td><td>Open workspace diagnostic picker</td><td>normal: <code>&lt;space&gt;D</code>, select: <code>&lt;space&gt;D</code></td></tr>
 <tr><td><code>last_picker</code></td><td>Open last picker</td><td>normal: <code>&lt;space&gt;'</code>, select: <code>&lt;space&gt;'</code></td></tr>
+<tr><td><code>compile</code></td><td>Prompt for a shell command and run it like Emacs’ M-x compile</td><td>normal: <code>&lt;space&gt;x</code>, select: <code>&lt;space&gt;x</code></td></tr>
+<tr><td><code>normal_mode_or_close_compilation</code></td><td>Close the <em>compilation</em> buffer if it is open, otherwise enter normal mode</td><td>normal: <code>&lt;esc&gt;</code></td></tr>
+<tr><td><code>run_and_wait</code></td><td>Prompt for a shell command and run it like Vim’s :!, then press any key to return</td><td>normal: <code>!</code>, select: <code>!</code></td></tr>
+<tr><td><code>quickfix_next</code></td><td>Go to the next quickfix entry</td><td>normal: <code>]q</code>, select: <code>]q</code></td></tr>
+<tr><td><code>quickfix_prev</code></td><td>Go to the previous quickfix entry</td><td>normal: <code>[q</code>, select: <code>[q</code></td></tr>
+<tr><td><code>quickfix_first</code></td><td>Go to the first quickfix entry</td><td>normal: <code>[Q</code>, select: <code>[Q</code></td></tr>
+<tr><td><code>quickfix_last</code></td><td>Go to the last quickfix entry</td><td>normal: <code>]Q</code>, select: <code>]Q</code></td></tr>
+<tr><td><code>quickfix_picker</code></td><td>Open the quickfix list</td><td>normal: <code>&lt;space&gt;q</code>, select: <code>&lt;space&gt;q</code></td></tr>
+<tr><td><code>hide_compilation</code></td><td>Hide the <em>compilation</em> window, keeping the buffer</td><td>normal: <code>&lt;C-j&gt;</code>, select: <code>&lt;C-j&gt;</code></td></tr>
+<tr><td><code>toggle_compilation</code></td><td>Show or hide the <em>compilation</em> buffer (output of :compile)</td><td>normal: <code>&lt;space&gt;X</code>, select: <code>&lt;space&gt;X</code></td></tr>
 <tr><td><code>insert_at_line_start</code></td><td>Insert at start of line</td><td>normal: <code>I</code>, select: <code>I</code></td></tr>
 <tr><td><code>insert_at_line_end</code></td><td>Insert at end of line</td><td>normal: <code>A</code>, select: <code>A</code></td></tr>
 <tr><td><code>open_below</code></td><td>Open new line below selection</td><td>normal: <code>o</code>, select: <code>o</code></td></tr>
 <tr><td><code>open_above</code></td><td>Open new line above selection</td><td>normal: <code>O</code>, select: <code>O</code></td></tr>
-<tr><td><code>normal_mode</code></td><td>Enter normal mode</td><td>normal: <code>&lt;esc&gt;</code>, select: <code>v</code>, insert: <code>&lt;esc&gt;</code></td></tr>
+<tr><td><code>normal_mode</code></td><td>Enter normal mode</td><td>select: <code>v</code>, insert: <code>&lt;C-c&gt;</code>, <code>&lt;esc&gt;</code></td></tr>
 <tr><td><code>select_mode</code></td><td>Enter selection extend mode</td><td>normal: <code>v</code></td></tr>
 <tr><td><code>exit_select_mode</code></td><td>Exit selection mode</td><td>select: <code>&lt;esc&gt;</code></td></tr>
 <tr><td><code>goto_definition</code></td><td>Goto definition</td><td>normal: <code>gd</code>, select: <code>gd</code></td></tr>
@@ -1823,6 +1898,7 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>shrink_selection</code></td><td>Shrink selection to previously expanded syntax node</td><td>normal: <code>&lt;A-i&gt;</code>, <code>&lt;A-down&gt;</code>, select: <code>&lt;A-i&gt;</code>, <code>&lt;A-down&gt;</code></td></tr>
 <tr><td><code>select_next_sibling</code></td><td>Select next sibling in the syntax tree</td><td>normal: <code>&lt;A-n&gt;</code>, <code>&lt;A-right&gt;</code>, select: <code>&lt;A-n&gt;</code>, <code>&lt;A-right&gt;</code></td></tr>
 <tr><td><code>select_prev_sibling</code></td><td>Select previous sibling the in syntax tree</td><td>normal: <code>&lt;A-p&gt;</code>, <code>&lt;A-left&gt;</code>, select: <code>&lt;A-p&gt;</code>, <code>&lt;A-left&gt;</code></td></tr>
+<tr><td><code>select_inside_next_pair</code></td><td>Select inside the next bracket or quote pair on the line</td><td>normal: <code>&lt;A-m&gt;</code>, select: <code>&lt;A-m&gt;</code></td></tr>
 <tr><td><code>select_all_siblings</code></td><td>Select all siblings of the current node</td><td>normal: <code>&lt;A-a&gt;</code>, select: <code>&lt;A-a&gt;</code></td></tr>
 <tr><td><code>select_all_children</code></td><td>Select all children of the current node</td><td>normal: <code>&lt;A-I&gt;</code>, <code>&lt;S-A-down&gt;</code>, select: <code>&lt;A-I&gt;</code>, <code>&lt;S-A-down&gt;</code></td></tr>
 <tr><td><code>jump_forward</code></td><td>Jump forward on jumplist</td><td>normal: <code>&lt;C-i&gt;</code>, <code>&lt;tab&gt;</code>, select: <code>&lt;C-i&gt;</code>, <code>&lt;tab&gt;</code></td></tr>
@@ -1845,12 +1921,22 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>vsplit_new</code></td><td>Vertical right split scratch buffer</td><td>normal: <code>&lt;C-w&gt;nv</code>, <code>&lt;space&gt;wnv</code>, <code>&lt;C-w&gt;n&lt;C-v&gt;</code>, <code>&lt;space&gt;wn&lt;C-v&gt;</code>, select: <code>&lt;C-w&gt;nv</code>, <code>&lt;space&gt;wnv</code>, <code>&lt;C-w&gt;n&lt;C-v&gt;</code>, <code>&lt;space&gt;wn&lt;C-v&gt;</code></td></tr>
 <tr><td><code>wclose</code></td><td>Close window</td><td>normal: <code>&lt;C-w&gt;q</code>, <code>&lt;space&gt;wq</code>, <code>&lt;C-w&gt;&lt;C-q&gt;</code>, <code>&lt;space&gt;w&lt;C-q&gt;</code>, select: <code>&lt;C-w&gt;q</code>, <code>&lt;space&gt;wq</code>, <code>&lt;C-w&gt;&lt;C-q&gt;</code>, <code>&lt;space&gt;w&lt;C-q&gt;</code></td></tr>
 <tr><td><code>wonly</code></td><td>Close windows except current</td><td>normal: <code>&lt;C-w&gt;o</code>, <code>&lt;space&gt;wo</code>, <code>&lt;C-w&gt;&lt;C-o&gt;</code>, <code>&lt;space&gt;w&lt;C-o&gt;</code>, select: <code>&lt;C-w&gt;o</code>, <code>&lt;space&gt;wo</code>, <code>&lt;C-w&gt;&lt;C-o&gt;</code>, <code>&lt;space&gt;w&lt;C-o&gt;</code></td></tr>
+<tr><td><code>grow_view_width</code></td><td>Widen the split</td><td>normal: <code>&lt;C-w&gt;&lt;gt&gt;</code>, <code>&lt;space&gt;w&lt;gt&gt;</code>, select: <code>&lt;C-w&gt;&lt;gt&gt;</code>, <code>&lt;space&gt;w&lt;gt&gt;</code></td></tr>
+<tr><td><code>shrink_view_width</code></td><td>Narrow the split</td><td>normal: <code>&lt;C-w&gt;&lt;lt&gt;</code>, <code>&lt;space&gt;w&lt;lt&gt;</code>, select: <code>&lt;C-w&gt;&lt;lt&gt;</code>, <code>&lt;space&gt;w&lt;lt&gt;</code></td></tr>
+<tr><td><code>grow_view_height</code></td><td>Make the split taller</td><td>normal: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code>, select: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code></td></tr>
+<tr><td><code>shrink_view_height</code></td><td>Make the split shorter</td><td>normal: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code>, select: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code></td></tr>
+<tr><td><code>equalize_views</code></td><td>Make all splits the same size</td><td>normal: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code>, select: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code></td></tr>
+<tr><td><code>fold</code></td><td>Fold the selected lines, or the syntax node (or indented block) around the cursor</td><td>normal: <code>zc</code>, <code>zf</code>, select: <code>zc</code>, <code>zf</code></td></tr>
+<tr><td><code>unfold</code></td><td>Unfold the folds on the selected lines</td><td>normal: <code>zo</code>, select: <code>zo</code></td></tr>
+<tr><td><code>toggle_fold</code></td><td>Fold or unfold at the cursor</td><td>normal: <code>za</code>, select: <code>za</code></td></tr>
+<tr><td><code>fold_all</code></td><td>Fold every top-level block</td><td>normal: <code>zM</code>, select: <code>zM</code></td></tr>
+<tr><td><code>unfold_all</code></td><td>Unfold everything</td><td>normal: <code>zR</code>, select: <code>zR</code></td></tr>
 <tr><td><code>select_register</code></td><td>Select register</td><td>normal: <code>"</code>, select: <code>"</code></td></tr>
 <tr><td><code>insert_register</code></td><td>Insert register</td><td>insert: <code>&lt;C-r&gt;</code></td></tr>
 <tr><td><code>copy_between_registers</code></td><td>Copy between two registers</td><td></td></tr>
 <tr><td><code>align_view_middle</code></td><td>Align view middle</td><td>normal: <code>Zm</code>, <code>zm</code>, select: <code>Zm</code>, <code>zm</code></td></tr>
 <tr><td><code>align_view_top</code></td><td>Align view top</td><td>normal: <code>Zt</code>, <code>zt</code>, select: <code>Zt</code>, <code>zt</code></td></tr>
-<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zc</code>, <code>Zz</code>, <code>zc</code>, <code>zz</code>, select: <code>Zc</code>, <code>Zz</code>, <code>zc</code>, <code>zz</code></td></tr>
+<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zc</code>, <code>Zz</code>, <code>zz</code>, select: <code>Zc</code>, <code>Zz</code>, <code>zz</code></td></tr>
 <tr><td><code>align_view_bottom</code></td><td>Align view bottom</td><td>normal: <code>Zb</code>, <code>zb</code>, select: <code>Zb</code>, <code>zb</code></td></tr>
 <tr><td><code>scroll_up</code></td><td>Scroll view up</td><td>normal: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code>, select: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code></td></tr>
 <tr><td><code>scroll_down</code></td><td>Scroll view down</td><td>normal: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code>, select: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code></td></tr>
@@ -1894,7 +1980,7 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 <tr><td><code>dap_disable_exceptions</code></td><td>Disable exception breakpoints</td><td>normal: <code>&lt;space&gt;GE</code>, select: <code>&lt;space&gt;GE</code></td></tr>
 <tr><td><code>shell_pipe</code></td><td>Pipe selections through shell command</td><td>normal: <code>|</code>, select: <code>|</code></td></tr>
 <tr><td><code>shell_pipe_to</code></td><td>Pipe selections into shell command ignoring output</td><td>normal: <code>&lt;A-|&gt;</code>, select: <code>&lt;A-|&gt;</code></td></tr>
-<tr><td><code>shell_insert_output</code></td><td>Insert shell command output before selections</td><td>normal: <code>!</code>, select: <code>!</code></td></tr>
+<tr><td><code>shell_insert_output</code></td><td>Insert shell command output before selections</td><td>normal: <code>&lt;space&gt;z</code>, select: <code>&lt;space&gt;z</code></td></tr>
 <tr><td><code>shell_append_output</code></td><td>Append shell command output after selections</td><td>normal: <code>&lt;A-!&gt;</code>, select: <code>&lt;A-!&gt;</code></td></tr>
 <tr><td><code>shell_keep_pipe</code></td><td>Filter selections with shell predicate</td><td>normal: <code>$</code>, select: <code>$</code></td></tr>
 <tr><td><code>suspend</code></td><td>Suspend and return to shell</td><td>normal: <code>&lt;C-z&gt;</code>, select: <code>&lt;C-z&gt;</code></td></tr>
@@ -1915,13 +2001,13 @@ space.B = ":echo %sh{git blame -L %{cursor_line},+1 %{buffer_name}}"
 </div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="language-servers"><a class="header" href="#language-servers">Language servers</a></h1>
-<p>Helix has built-in support for the <a href="https://microsoft.github.io/language-server-protocol/">Language Server Protocol</a>, providing
+<p>Pure has built-in support for the <a href="https://microsoft.github.io/language-server-protocol/">Language Server Protocol</a>, providing
 IDE-like features — diagnostics, completion, goto-definition, rename and more,
 for any language that has a server configured. Language servers are separate
 programs you install yourself: the <a href="#language-support-1">language support</a> page
 lists which languages ship with a server configured, and the
 <a href="https://github.com/helix-editor/helix/wiki/Language-Server-Configurations">language server configuration wiki</a> has per-server installation notes.</p>
-<p>Run <code>hx --health &lt;language&gt;</code> to check whether Helix found the configured server
+<p>Run <code>pure --health &lt;language&gt;</code> to check whether Pure found the configured server
 for a language. After changing a server’s configuration, <code>:lsp-restart</code> reloads
 it and <code>:lsp-stop</code> stops it; <code>:lsp-workspace-command</code> runs a command the server
 exposes for the workspace.</p>
@@ -1965,7 +2051,7 @@ server’s features can be limited with <code>only-features</code> / <code>excep
 <p>The following languages and Language Servers are supported. To use
 Language Server features, you must first <a href="https://github.com/helix-editor/helix/wiki/Language-Server-Configurations">configure</a> the
 appropriate Language Server.</p>
-<p>You can check the language support in your installed helix version with <code>hx --health</code>.</p>
+<p>You can check the language support in your installed Pure version with <code>pure --health</code>.</p>
 <p>Also see the <a href="#languages-1">Language Configuration</a> docs and the <a href="#adding-languages">Adding
 Languages</a> guide for more language configuration information.</p>
 <div class="table-wrapper">
@@ -2321,7 +2407,7 @@ Languages</a> guide for more language configuration information.</p>
 </div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="workspace-trust"><a class="header" href="#workspace-trust">Workspace trust</a></h1>
-<p>Helix has several features that can execute arbitrary code:</p>
+<p>Pure has several features that can execute arbitrary code:</p>
 <ul>
 <li>Language servers (LSP)</li>
 <li>Debug adapters (DAP)</li>
@@ -2329,7 +2415,7 @@ Languages</a> guide for more language configuration information.</p>
 <li>Git integration (filters and other commands in a repository’s <code>.git/config</code>)</li>
 </ul>
 <p>To protect against malicious projects (a checked-out PR, a freshly cloned
-repository, etc.) Helix gates these behind explicit per-workspace trust.
+repository, etc.) Pure gates these behind explicit per-workspace trust.
 By default language servers start automatically (their binaries come from
 <code>$PATH</code>, not from the workspace) and debug adapters may be launched, but
 loading <code>.helix/config.toml</code> or <code>.helix/languages.toml</code> and trusting a
@@ -2337,9 +2423,9 @@ repository’s <code>.git/config</code> requires opting in. Note that debug adap
 are never started automatically — you launch them yourself — but the same
 trust level still gates whether they may run. The model is intentionally
 similar to <a href="https://direnv.net/">direnv</a>: you run <code>:workspace-trust</code> once
-per workspace and Helix remembers across sessions.</p>
+per workspace and Pure remembers across sessions.</p>
 <h2 id="granting-trust"><a class="header" href="#granting-trust">Granting trust</a></h2>
-<p>When Helix opens a file inside a workspace it has never seen before, a
+<p>When Pure opens a file inside a workspace it has never seen before, a
 modal trust prompt asks:</p>
 <ul>
 <li><strong>Trust</strong> — allow the workspace permanently.</li>
@@ -2347,7 +2433,7 @@ modal trust prompt asks:</p>
 </ul>
 <p><code>&lt;Esc&gt;</code> (or any other dismissal) caches “untrusted for this session” so
 the prompt doesn’t re-fire for every file you open in the workspace. The
-next time you start Helix in that workspace, it’ll prompt again.</p>
+next time you start Pure in that workspace, it’ll prompt again.</p>
 <p>A small <code>[⚠]</code> indicator appears in the bottom-right of the editor (next
 to the macro-recording <code>[@]</code>) whenever the workspace is in restricted mode
 <em>and</em> running <code>:workspace-trust</code> would change observable behavior — i.e.
@@ -2358,9 +2444,9 @@ when there’s a local config to load or an LSP that would start.</p>
 <p>Run <code>:workspace-untrust</code> to revoke a workspace’s trust grant. The next time
 you open a file in that workspace, you’re back to the untrusted hint.</p>
 <h2 id="detecting-changes-after-trust-was-granted"><a class="header" href="#detecting-changes-after-trust-was-granted">Detecting changes after trust was granted</a></h2>
-<p>When you trust a workspace, Helix records a hash of every file under
+<p>When you trust a workspace, Pure records a hash of every file under
 <code>.helix/</code>. If those files change afterwards (a malicious checkout, an
-inadvertent rebase, etc.) Helix detects the mismatch on the next open and
+inadvertent rebase, etc.) Pure detects the mismatch on the next open and
 reports the workspace as <em>stale</em>:</p>
 <pre><code>Workspace `.helix/` config changed since `:workspace-trust`. Local config
 not loaded. Run `:workspace-trust` to re-allow.
@@ -2378,10 +2464,10 @@ hash = sha256:abc123...
 excluded = false
 </code></pre>
 <ul>
-<li>Linux, macOS: <code>~/.local/share/helix/workspace_trust/</code></li>
-<li>Windows: <code>%AppData%\Roaming\helix\workspace_trust\</code></li>
+<li>Linux, macOS: <code>~/.local/share/pure/workspace_trust/</code></li>
+<li>Windows: <code>%AppData%\Roaming\pure\workspace_trust\</code></li>
 </ul>
-<p>The one-file-per-workspace shape is safe under multiple concurrent Helix
+<p>The one-file-per-workspace shape is safe under multiple concurrent Pure
 instances — different workspaces never write the same file.</p>
 <h2 id="configuration-1"><a class="header" href="#configuration-1">Configuration</a></h2>
 <p>Settings live under <code>[editor.workspace-trust]</code>:</p>
@@ -2454,7 +2540,7 @@ genuinely disruptive to your workflow. An explicit <code>:workspace-exclude</cod
 still overrides a matching pattern.</p>
 </blockquote>
 <h2 id="git-trust"><a class="header" href="#git-trust">Git trust</a></h2>
-<p>Workspace trust also gates how Helix opens git repositories. Untrusted
+<p>Workspace trust also gates how Pure opens git repositories. Untrusted
 workspaces are opened in <a href="https://github.com/Byron/gitoxide">gix</a>’s
 <code>Trust::Reduced</code> mode; trusted workspaces use <code>Trust::Full</code>.</p>
 <p>Under <code>Trust::Reduced</code>, gix still runs the full filter pipeline (so
@@ -2463,13 +2549,13 @@ configuration coming from the untrusted, repository-local <code>.git/config</cod
 That means <code>filter.*.clean</code> / <code>filter.*.smudge</code> drivers and similar
 keys that would otherwise execute external programs are dropped until you
 trust the workspace.</p>
-<p>Helix forces this trust level explicitly rather than letting gix infer it
+<p>Pure forces this trust level explicitly rather than letting gix infer it
 from <code>.git</code> directory ownership — a malicious <code>.git/config</code> in a directory
 you happen to own is still treated as untrusted until you run
 <code>:workspace-trust</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="ecosystem"><a class="header" href="#ecosystem">Ecosystem</a></h1>
-<p>This section has information related to the wider Helix ecosystem.</p>
+<p>This section has information related to the wider Pure ecosystem.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="migrating-from-vim"><a class="header" href="#migrating-from-vim">Migrating from Vim</a></h1>
 <ul>
@@ -2479,13 +2565,13 @@ you happen to own is still treated as untrusted until you run
 <li><a href="#comment-lines-completion-search">Comment lines, Completion, Search</a></li>
 <li><a href="#file-actions">File actions</a></li>
 </ul>
-<p>Helix’s editing model is strongly inspired from Vim and Kakoune, and a notable
-difference from Vim (and the most striking similarity to Kakoune) is that Helix
+<p>Pure’s editing model is strongly inspired from Vim and Kakoune, and a notable
+difference from Vim (and the most striking similarity to Kakoune) is that Pure
 follows the <code>selection → action</code> model. This means that whatever you are
 going to act on (a word, a paragraph, a line, etc.) is selected first and the
 action itself (delete, change, yank, etc.) comes second. A cursor is simply a
 single width selection.</p>
-<p><em>Note:</em> As Helix is inspired by Vim and <a href="https://github.com/mawww/kakoune">Kakoune</a>, the keybindings are similar but also have some differences. The content of this page is inspired by <a href="https://github.com/mawww/kakoune/wiki/Migrating-from-Vim">Kakoune Wiki</a>.</p>
+<p><em>Note:</em> As Pure is inspired by Vim and <a href="https://github.com/mawww/kakoune">Kakoune</a>, the keybindings are similar but also have some differences. The content of this page is inspired by <a href="https://github.com/mawww/kakoune/wiki/Migrating-from-Vim">Kakoune Wiki</a>.</p>
 <p>NOTE: Unlike vim, <code>f</code>, <code>F</code>, <code>t</code> and <code>T</code> are not confined to the current line.</p>
 <h2 id="deletechange-commands"><a class="header" href="#deletechange-commands">Delete/Change Commands</a></h2>
 <p>delete a word:</p>
@@ -2506,7 +2592,7 @@ single width selection.</p>
 <p>copy a line:</p>
 <ul>
 <li>vim: <code>yy</code></li>
-<li>helix: <code>Xy</code> (<code>X</code> extends all selections to whole lines)</li>
+<li>helix: <code>xy</code> (<code>x</code> selects whole lines; <code>X</code> does the same upwards)</li>
 </ul>
 <p>global replace:</p>
 <ul>
@@ -2608,8 +2694,8 @@ single width selection.</p>
 <li>vim: <code>ma</code> to set bookmark with name a. Use <code>`a</code> to go back to this bookmarked location.</li>
 <li>helix: there are no named bookmarks, but you can save a location in the jumplist with <code>C-s</code>, then jump back to that location by opening the jumplist picker with <code>&lt;space&gt;-j</code>, or back in the jumplist with <code>C-o</code> and forward with <code>C-i</code></li>
 </ul>
-<p>Helix allows <a href="https://docs.helix-editor.com/keymap.html#insert-mode">some limited movement in <code>insert</code> mode</a> without switching to <code>normal</code> mode.</p>
-<p>Unlike Vim, under Helix, the cursor shape is the same (block) in insert mode and normal mode by default.
+<p>Pure allows <a href="https://docs.helix-editor.com/keymap.html#insert-mode">some limited movement in <code>insert</code> mode</a> without switching to <code>normal</code> mode.</p>
+<p>Unlike Vim, under Pure, the cursor shape is the same (block) in insert mode and normal mode by default.
 This can be adjusted in configuration:</p>
 <pre><code class="language-toml">[editor.cursor-shape]
 insert = "bar"
@@ -2619,7 +2705,7 @@ insert = "bar"
 </blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="helix-mode-in-other-software"><a class="header" href="#helix-mode-in-other-software">Helix mode in other software</a></h1>
-<p>Helix’ keymap and interaction model (<a href="#using-helix">Using Helix</a>) is easier to adopt if it can be used consistently in many editing contexts. Yet, certain use cases cannot easily be addressed directly in Helix. Similar to vim, this leads to the creation of “Helix mode” in various other software products, allowing Helix-style editing for a greater variety of use cases.</p>
+<p>Helix’ keymap and interaction model (<a href="#using-pure">Using Helix</a>) is easier to adopt if it can be used consistently in many editing contexts. Yet, certain use cases cannot easily be addressed directly in Helix. Similar to vim, this leads to the creation of “Helix mode” in various other software products, allowing Helix-style editing for a greater variety of use cases.</p>
 <p>“Helix mode” is frequently still in early stages or missing entirely. For such cases, we also link to relevant bugs or discussions.</p>
 <h2 id="other-editors"><a class="header" href="#other-editors">Other editors</a></h2>
 <div class="table-wrapper">
@@ -2669,12 +2755,22 @@ insert = "bar"
 <h1 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h1>
 <p>To override global configuration parameters, create a <code>config.toml</code> file located in your config directory:</p>
 <ul>
-<li>Linux and Mac: <code>~/.config/helix/config.toml</code></li>
-<li>Windows: <code>%AppData%\helix\config.toml</code></li>
+<li>Linux and Mac: <code>~/.config/pure/config.toml</code></li>
+<li>Windows: <code>%AppData%\pure\config.toml</code></li>
 </ul>
 <blockquote>
-<p>💡 You can easily open the config file by typing <code>:config-open</code> within Helix normal mode.</p>
+<p>💡 You can easily open the config file by typing <code>:config-open</code> within Pure normal mode.</p>
 </blockquote>
+<p>Pure keeps its files apart from Helix’s: configuration in <code>~/.config/pure</code>,
+plugin data in <code>~/.local/share/pure</code> and the log in <code>~/.cache/pure</code>. A setup
+from before that, in <code>~/.config/helix</code> (and the others), keeps working while
+there is no <code>pure</code> directory. To move it, rename the directories (or copy
+them, to keep using Helix too):</p>
+<pre><code class="language-sh">mv ~/.config/helix ~/.config/pure
+mv ~/.local/share/helix ~/.local/share/pure   # plugin data, workspace trust
+mv ~/.cache/helix ~/.cache/pure
+</code></pre>
+<p><code>pure --health</code> shows the config file and runtime directories in use.</p>
 <p>Example config:</p>
 <pre><code class="language-toml">theme = "onedark"
 
@@ -2691,9 +2787,9 @@ select = "underline"
 hidden = false
 </code></pre>
 <p>You can use a custom configuration file by specifying it with the <code>-c</code> or
-<code>--config</code> command line argument, for example <code>hx -c path/to/custom-config.toml</code>.
+<code>--config</code> command line argument, for example <code>pure -c path/to/custom-config.toml</code>.
 You can reload the config file by issuing the <code>:config-reload</code> command. Alternatively, on Unix operating systems, you can reload it by sending the USR1
-signal to the Helix process, such as by using the command <code>pkill -USR1 hx</code>.</p>
+signal to the Pure process, such as by using the command <code>pkill -USR1 pure</code>.</p>
 <p>Finally, you can have a <code>config.toml</code> and a <code>languages.toml</code> local to a project by putting it under a <code>.helix</code> directory in your repository.
 Its settings will be merged with the configuration directory and the built-in configuration.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -2724,6 +2820,7 @@ Its settings will be merged with the configuration directory and the built-in co
 </li>
 <li><a href="#editorsoft-wrap-section"><code>[editor.soft-wrap]</code> Section</a></li>
 <li><a href="#editorsmart-tab-section"><code>[editor.smart-tab]</code> Section</a></li>
+<li><a href="#editorchords-section"><code>[editor.chords]</code> Section</a></li>
 <li><a href="#editorinline-diagnostics-section"><code>[editor.inline-diagnostics]</code> Section</a></li>
 <li><a href="#editorword-completion-section"><code>[editor.word-completion]</code> Section</a></li>
 <li><a href="#editorworkspace-trust-section"><code>[editor.workspace-trust]</code> Section</a></li>
@@ -2740,13 +2837,14 @@ Its settings will be merged with the configuration directory and the built-in co
 <tr><td><code>mouse-yank-register</code></td><td>Which register to use for mouse yanks.</td><td> <code>*</code></td></tr>
 <tr><td><code>middle-click-paste</code></td><td>Middle click paste support</td><td><code>true</code></td></tr>
 <tr><td><code>default-yank-register</code></td><td>Default register used for yank/paste</td><td><code>'"'</code></td></tr>
+<tr><td><code>registers</code></td><td><code>"helix"</code>: a yank or delete only fills the register it uses. <code>"vim"</code>: also like Vim/Neovim when no register is named: a yank goes to <code>"0</code> too; a delete or change spanning lines goes to <code>"1</code> and the older ones move to <code>"2</code>–<code>"9</code>; a smaller one goes to <code>"-</code>. <code>""</code> still has the last yank or delete, <code>"_</code> discards, <code>"a</code>–<code>"z</code> and <code>"+</code> are as before</td><td><code>"helix"</code></td></tr>
 <tr><td><code>scroll-lines</code></td><td>Number of lines to scroll per scroll wheel step</td><td><code>3</code></td></tr>
 <tr><td><code>shell</code></td><td>Shell to use when running external commands</td><td>Unix: <code>["sh", "-c"]</code><br />Windows: <code>["cmd", "/C"]</code></td></tr>
 <tr><td><code>line-number</code></td><td>Line number display: <code>absolute</code> simply shows each line’s number, while <code>relative</code> shows the distance from the current line. When unfocused or in insert mode, <code>relative</code> will still show absolute line numbers</td><td><code>"absolute"</code></td></tr>
 <tr><td><code>cursorline</code></td><td>Highlight all lines with a cursor</td><td><code>false</code></td></tr>
 <tr><td><code>cursorcolumn</code></td><td>Highlight all columns with a cursor</td><td><code>false</code></td></tr>
 <tr><td><code>continue-comments</code></td><td>if helix should automatically add a line comment token if you create a new line inside a comment.</td><td><code>true</code></td></tr>
-<tr><td><code>gutters</code></td><td>Gutters to display: Available are <code>diagnostics</code> and <code>diff</code> and <code>line-numbers</code> and <code>spacer</code> and <code>code-action-hint</code>, note that <code>diagnostics</code> also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty</td><td><code>["diagnostics", "spacer", "line-numbers", "spacer", "diff"]</code></td></tr>
+<tr><td><code>gutters</code></td><td>Gutters to display: Available are <code>diagnostics</code> and <code>diff</code> and <code>line-numbers</code> and <code>spacer</code> and <code>code-action-hint</code> and <code>plugins</code> (signs plugins set), note that <code>diagnostics</code> also includes other features like breakpoints, 1-width padding will be inserted if gutters is non-empty</td><td><code>["diagnostics", "spacer", "line-numbers", "spacer", "diff"]</code></td></tr>
 <tr><td><code>auto-completion</code></td><td>Enable automatic pop up of auto-completion</td><td><code>true</code></td></tr>
 <tr><td><code>path-completion</code></td><td>Enable filepath completion. Show files and directories if an existing path at the cursor was recognized, either absolute or relative to the current opened document or current working directory (if the buffer is not yet saved). Defaults to true.</td><td><code>true</code></td></tr>
 <tr><td><code>auto-format</code></td><td>Enable automatic formatting on save<sup class="footnote-reference" id="fr-3-1"><a href="#footnote-3">1</a></sup></td><td><code>true</code></td></tr>
@@ -2755,7 +2853,10 @@ Its settings will be merged with the configuration directory and the built-in co
 <tr><td><code>preview-completion-insert</code></td><td>Whether to apply completion item instantly when selected</td><td><code>true</code></td></tr>
 <tr><td><code>completion-trigger-len</code></td><td>The min-length of word under cursor to trigger autocompletion</td><td><code>2</code></td></tr>
 <tr><td><code>completion-replace</code></td><td>Whether to make completions always replace the entire word and not just the part before the cursor</td><td><code>false</code></td></tr>
+<tr><td><code>directory-handler</code></td><td>A plugin command that opens directories passed on the command line or to <code>:open</code> (it gets the directory as its argument), e.g. <code>"oil/open"</code>. Without it, or if it fails, the file picker opens</td><td>unset</td></tr>
+<tr><td><code>auto-reload</code></td><td>Reload files other programs change on disk, like Vim’s <code>autoread</code>: buffers without unsaved changes follow the file; for the others you get a warning (<code>:reload</code> takes the disk’s version, <code>:w!</code> keeps yours). The directories of open files are watched, so a change is seen at once and an idle editor never wakes; where watching isn’t possible (out of inotify watches, say) it checks every second instead. Also checked when the terminal regains focus. FIFOs and devices are never read</td><td><code>true</code></td></tr>
 <tr><td><code>auto-info</code></td><td>Whether to display info boxes</td><td><code>true</code></td></tr>
+<tr><td><code>icons</code></td><td>File type icons in the file explorer (<code>space e</code>) and file picker (<code>space f</code>). They are <a href="https://www.nerdfonts.com">Nerd Font</a> glyphs: your terminal’s font must be a Nerd Font</td><td><code>false</code></td></tr>
 <tr><td><code>true-color</code></td><td>Whether to override automatic detection of terminal truecolor support in the event of a false negative</td><td><code>false</code></td></tr>
 <tr><td><code>undercurl</code></td><td>Whether to override automatic detection of terminal undercurl support in the event of a false negative</td><td><code>false</code></td></tr>
 <tr><td><code>rulers</code></td><td>List of column positions at which to display the rulers. Can be overridden by language specific <code>rulers</code> in <code>languages.toml</code> file</td><td><code>[]</code></td></tr>
@@ -2779,14 +2880,56 @@ Its settings will be merged with the configuration directory and the built-in co
 </tbody>
 </table>
 </div>
+<h3 id="editorcmdline-section"><a class="header" href="#editorcmdline-section"><code>[editor.cmdline]</code> Section</a></h3>
+<p>How the command line (<code>:</code>) and other prompts (search, prompts of commands
+and plugins) look.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Description</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>style</code></td><td><code>"bottom"</code>: the last line, completions above it. <code>"popup"</code>: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. <code>"panel"</code>: the input on the last line, the completions in a box above the statusline, one per row, like Runyte</td><td><code>"bottom"</code></td></tr>
+<tr><td><code>popup-width</code></td><td>Width of the popup or panel in percent of the screen (the panel is left-aligned)</td><td><code>70</code></td></tr>
+<tr><td><code>popup-rows</code></td><td>Most completions the popup or panel lists</td><td><code>15</code></td></tr>
+<tr><td><code>descriptions</code></td><td>In the popup and panel, show each command’s category, what it does and its aliases (plugin commands too)</td><td><code>true</code></td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-toml">[editor.cmdline]
+style = "popup"
+</code></pre>
+<p>A Runyte-like editor: the panel across the whole width, and a statusline
+with the mode as a coloured block, then the file and the workspace:</p>
+<pre><code class="language-toml">[editor.cmdline]
+style = "panel"
+popup-width = 100
+popup-rows = 22
+
+[editor]
+color-modes = true
+
+[editor.statusline]
+left = ["mode", "separator", "file-name", "separator", "workspace-diagnostics"]
+right = ["diagnostics", "selections", "position"]
+separator = "│"
+mode.normal = "NOR"
+mode.insert = "INS"
+mode.select = "SEL"
+</code></pre>
+<p>Its colors come from <code>ui.cmdline.popup</code>, <code>ui.cmdline.border</code> and
+<code>ui.cmdline.title</code> (falling back to <code>ui.popup</code>, <code>ui.window</code> and
+<code>ui.text.focus</code>), and the selected row from <code>ui.menu.selected</code>; the mode
+blocks from <code>ui.statusline.normal</code>, <code>ui.statusline.insert</code> and
+<code>ui.statusline.select</code> (see <a href="#themes-1">themes</a>).</p>
 <h3 id="editorclipboard-provider-section"><a class="header" href="#editorclipboard-provider-section"><code>[editor.clipboard-provider]</code> Section</a></h3>
-<p>Helix can be configured either to use a builtin clipboard configuration or to use
+<p>Pure can be configured either to use a builtin clipboard configuration or to use
 a provided command.</p>
 <p>For instance, setting it to use OSC 52 termcodes, the configuration would be:</p>
 <pre><code class="language-toml">[editor]
 clipboard-provider = "termcode"
 </code></pre>
-<p>Alternatively, Helix can be configured to use arbitrary commands for clipboard integration:</p>
+<p>Alternatively, Pure can be configured to use arbitrary commands for clipboard integration:</p>
 <pre><code class="language-toml">[editor.clipboard-provider.custom]
 yank = { command = "cat",  args = ["test.txt"] }
 paste = { command = "tee",  args = ["test.txt"] }
@@ -2860,6 +3003,7 @@ workspace-diagnostics = ["warning", "error"]
 <tr><td><code>version-control</code></td><td>The current branch name or detached commit hash of the opened workspace</td></tr>
 <tr><td><code>register</code></td><td>The current selected register</td></tr>
 <tr><td><code>code-action-hint</code></td><td>Indicator for when code actions are available</td></tr>
+<tr><td><code>plugins</code></td><td>Text plugins put in the statusline</td></tr>
 </tbody>
 </table>
 </div>
@@ -2905,7 +3049,7 @@ change shape.</p>
 </div>
 <h3 id="editorfile-picker-section"><a class="header" href="#editorfile-picker-section"><code>[editor.file-picker]</code> Section</a></h3>
 <p>Set options for file picker and global search. Ignoring a file means it is
-not visible in the Helix file picker and global search.</p>
+not visible in the Pure file picker and global search.</p>
 <p>All git related options are only enabled in a git repository.</p>
 <div class="table-wrapper">
 <table>
@@ -2926,10 +3070,10 @@ not visible in the Helix file picker and global search.</p>
 </table>
 </div>
 <p>Ignore files can be placed locally as <code>.ignore</code> or put in your home directory as <code>~/.ignore</code>. They support the usual ignore and negative ignore (unignore) rules used in <code>.gitignore</code> files.</p>
-<p>Additionally, you can use Helix-specific ignore files by creating a local <code>.helix/ignore</code> file in the current workspace or a global <code>ignore</code> file located in your Helix config directory:</p>
+<p>Additionally, you can use Pure-specific ignore files by creating a local <code>.helix/ignore</code> file in the current workspace or a global <code>ignore</code> file located in your Pure config directory:</p>
 <ul>
-<li>Linux and Mac: <code>~/.config/helix/ignore</code></li>
-<li>Windows: <code>%AppData%\helix\ignore</code></li>
+<li>Linux and Mac: <code>~/.config/pure/ignore</code></li>
+<li>Windows: <code>%AppData%\pure\ignore</code></li>
 </ul>
 <p>Example:</p>
 <pre><code class="language-ini"># unignore in file picker and global search
@@ -2939,7 +3083,7 @@ not visible in the Helix file picker and global search.</p>
 </code></pre>
 <h3 id="editorfile-explorer-section"><a class="header" href="#editorfile-explorer-section"><code>[editor.file-explorer]</code> Section</a></h3>
 <p>In addition to the options for the file picker and global search, a similar set of options is presented to configure the file explorer separately. However, unlike the file picker, the defaults are set to avoid ignoring most files.</p>
-<p>Note that the ignore files consulted by the file explorer when <code>ignore</code> is set to true are the same ones used by the file picker, including the aforementioned Helix-specific ignore files.</p>
+<p>Note that the ignore files consulted by the file explorer when <code>ignore</code> is set to true are the same ones used by the file picker, including the aforementioned Pure-specific ignore files.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -3013,7 +3157,7 @@ name = "rust"
 <tr><th>Key</th><th>Description</th><th>Default</th></tr>
 </thead>
 <tbody>
-<tr><td><code>focus-lost</code></td><td>Enable automatic saving on the focus moving away from Helix. Requires <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">focus event support</a> from your terminal</td><td><code>false</code></td></tr>
+<tr><td><code>focus-lost</code></td><td>Enable automatic saving on the focus moving away from Pure. Requires <a href="https://github.com/helix-editor/helix/wiki/Terminal-Support">focus event support</a> from your terminal</td><td><code>false</code></td></tr>
 <tr><td><code>after-delay.enable</code></td><td>Enable automatic saving after <code>auto-save.after-delay.timeout</code> milliseconds have passed since last edit.</td><td><code>false</code></td></tr>
 <tr><td><code>after-delay.timeout</code></td><td>Time in milliseconds since last edit before auto save timer triggers.</td><td><code>3000</code></td></tr>
 </tbody>
@@ -3183,6 +3327,24 @@ S-tab = "move_parent_node_start"
 tab = "extend_parent_node_end"
 S-tab = "extend_parent_node_start"
 </code></pre>
+<h3 id="editorchords-section"><a class="header" href="#editorchords-section"><code>[editor.chords]</code> Section</a></h3>
+<p>Chords are keys pressed while another is held: <code>"p+s"</code> means hold <code>p</code>,
+then press <code>s</code>. They are bound per mode to a command or a list of
+commands, like keys:</p>
+<pre><code class="language-toml">[editor.chords.normal]
+"p+s" = "paste_after"                                   # hold p, press s
+"p+w" = "paste_before"
+"p+j" = ["open_below", "normal_mode", "paste_before"]   # on a new line below
+"space+f" = "file_picker"
+</code></pre>
+<p>They need a terminal that tells when keys are let go: one with the kitty
+keyboard protocol (kitty, WezTerm, foot, Ghostty, recent Alacritty…), with
+<code>kitty-keyboard-protocol</code> not <code>"disabled"</code>. Elsewhere chords never happen
+and keys work as usual.</p>
+<p>A key that starts a chord waits: pressed and let go on its own, it does what
+it always does when it is let go; held while a chord’s second key is
+pressed, the chord runs instead. Such a key doesn’t repeat while held.
+Chords apply to the editor’s own keys, not in prompts and pickers.</p>
 <h3 id="editorinline-diagnostics-section"><a class="header" href="#editorinline-diagnostics-section"><code>[editor.inline-diagnostics]</code> Section</a></h3>
 <p>Options for rendering diagnostics inside the text like shown below</p>
 <pre><code class="language-text">fn main() {
@@ -3270,7 +3432,7 @@ trusted = ["~/src/github.com/me/*"]
 <p>By default, a progress spinner is shown in the statusline beside the file path. <a href="#fr-1-1">↩</a> <a href="#fr-1-2">↩2</a></p>
 </li>
 <li id="footnote-2">
-<p>You may also have to activate them in the language server config for them to appear, not just in Helix. Inlay hints in Helix are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them! <a href="#fr-2-1">↩</a></p>
+<p>You may also have to activate them in the language server config for them to appear, not just in Pure. Inlay hints in Pure are still being improved on and may be a little bit laggy/janky under some circumstances. Please report any bugs you see so we can fix them! <a href="#fr-2-1">↩</a></p>
 </li>
 </ol>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -3286,7 +3448,7 @@ light = "catppuccin_latte"
 # fallback = "catppuccin_frappe"
 </code></pre>
 <h2 id="creating-a-theme"><a class="header" href="#creating-a-theme">Creating a theme</a></h2>
-<p>Create a file with the name of your theme as the file name (i.e <code>mytheme.toml</code>) and place it in your <code>themes</code> directory (i.e <code>~/.config/helix/themes</code> or <code>%AppData%\helix\themes</code> on Windows). The directory might have to be created beforehand.</p>
+<p>Create a file with the name of your theme as the file name (i.e <code>mytheme.toml</code>) and place it in your <code>themes</code> directory (i.e <code>~/.config/pure/themes</code> or <code>%AppData%\pure\themes</code> on Windows). The directory might have to be created beforehand.</p>
 <blockquote>
 <p>💡 The names “default” and “base16_default” are reserved for built-in themes
 and cannot be overridden by user-defined themes.</p>
@@ -3306,7 +3468,7 @@ key = "#ffffff"
 </code></pre>
 <p>Color values must be either a <a href="https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/hex-color">CSS hex RGB string</a> or a name declared in the <a href="#color-palettes"><code>palette</code></a>.</p>
 <blockquote>
-<p>💡 Note that Helix doesn’t support transparency (alpha channel).</p>
+<p>💡 Note that Pure doesn’t support transparency (alpha channel).</p>
 </blockquote>
 <p>For inspiration, you can find the default <code>theme.toml</code>
 <a href="https://github.com/helix-editor/helix/blob/master/theme.toml">here</a> and
@@ -3708,6 +3870,9 @@ See also <a href="https://github.com/helix-editor/helix/issues/2380">#2380</a></
 <tr><td><code>ui.bufferline.background</code></td><td>Style for bufferline background</td></tr>
 <tr><td><code>ui.popup</code></td><td>Documentation popups (e.g. Space + k)</td></tr>
 <tr><td><code>ui.popup.info</code></td><td>Prompt for multiple key options</td></tr>
+<tr><td><code>ui.cmdline.popup</code></td><td>The popup and panel command lines (<code>editor.cmdline.style</code>), falls back to <code>ui.popup</code></td></tr>
+<tr><td><code>ui.cmdline.border</code></td><td>Its border, falls back to <code>ui.window</code></td></tr>
+<tr><td><code>ui.cmdline.title</code></td><td>Its title, falls back to <code>ui.text.focus</code></td></tr>
 <tr><td><code>ui.picker.header</code></td><td>Header row area in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column</code></td><td>Column names in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column.active</code></td><td>The column name in pickers with multiple columns where the cursor is entering into.</td></tr>
@@ -3760,7 +3925,7 @@ See also <a href="https://github.com/helix-editor/helix/issues/2380">#2380</a></
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="key-remapping-1"><a href="#key-remapping-1" class="header">Key remapping</a></h1>
 <h2 id="key-remapping"><a class="header" href="#key-remapping">Key remapping</a></h2>
-<p>Helix currently supports one-way key remapping through a simple TOML configuration
+<p>Pure currently supports one-way key remapping through a simple TOML configuration
 file. (More powerful solutions such as rebinding via commands will be
 available in the future).</p>
 <p>There are three kinds of commands that can be used in keymaps:</p>
@@ -3782,7 +3947,7 @@ command sequences are executed. Modifier keys (e.g. Alt+o) can be used
 like <code>"&lt;A-o&gt;"</code>, e.g. <code>"@miw&lt;A-o&gt;"</code></li>
 </ul>
 <p>To remap keys, create a <code>config.toml</code> file in your <code>helix</code> configuration
-directory (default <code>~/.config/helix</code> on Linux systems) with a structure like
+directory (default <code>~/.config/pure</code> on Linux systems) with a structure like
 this:</p>
 <blockquote>
 <p>💡 To set a modifier + key as a keymap, type <code>A-X = ...</code> or  <code>C-X = ...</code> for Alt + X or Ctrl + X. Combine with Shift using a dash, e.g. <code>C-S-esc</code>.
@@ -3791,7 +3956,7 @@ Within macros, wrap them in <code>&lt;&gt;</code>, e.g. <code>&lt;A-X&gt;</code>
 <pre><code class="language-toml"># At most one section each of 'keys.normal', 'keys.insert' and 'keys.select'
 [keys.normal]
 C-s = ":w" # Maps Ctrl-s to the typable command :w which is an alias for :write (save file)
-C-o = ":open ~/.config/helix/config.toml" # Maps Ctrl-o to opening of the helix config file
+C-o = ":open ~/.config/pure/config.toml" # Maps Ctrl-o to opening of the helix config file
 a = "move_char_left" # Maps the 'a' key to the move_char_left command
 w = "move_line_up" # Maps the 'w' key move_line_up
 "C-S-esc" = "extend_line" # Maps Ctrl-Shift-Escape to extend_line
@@ -3880,7 +4045,7 @@ in <code>languages.toml</code> files.</p>
 <p>There are three possible locations for a <code>languages.toml</code> file:</p>
 <ol>
 <li>
-<p>In the Helix source code, which lives in the
+<p>In the Pure source code, which lives in the
 <a href="https://github.com/helix-editor/helix/blob/master/languages.toml">Helix repository</a>.
 It provides the default configurations for languages and language servers.</p>
 </li>
@@ -3931,7 +4096,7 @@ language-servers = [ "mylang-lsp" ]
 <tr><td><code>injection-regex</code></td><td>regex pattern that will be tested against a language name in order to determine whether this language should be used for a potential <a href="https://tree-sitter.github.io/tree-sitter/3-syntax-highlighting.html#language-injection">language injection</a> site.</td></tr>
 <tr><td><code>file-types</code></td><td>The filetypes of the language, for example <code>["yml", "yaml"]</code>. See the file-type detection section below.</td></tr>
 <tr><td><code>shebangs</code></td><td>The interpreters from the shebang line, for example <code>["sh", "bash"]</code></td></tr>
-<tr><td><code>roots</code></td><td>A set of marker files used for LSP working directory selection. Helix starts at the file, walks upward, and remembers the <em>topmost</em> i.e. <em>last</em> directory that contains a marker file. For example Cargo.lock, yarn.lock</td></tr>
+<tr><td><code>roots</code></td><td>A set of marker files used for LSP working directory selection. Pure starts at the file, walks upward, and remembers the <em>topmost</em> i.e. <em>last</em> directory that contains a marker file. For example Cargo.lock, yarn.lock</td></tr>
 <tr><td><code>auto-format</code></td><td>Whether to autoformat this language when saving</td></tr>
 <tr><td><code>diagnostic-severity</code></td><td>Minimal severity of diagnostic for it to be displayed. (Allowed values: <code>error</code>, <code>warning</code>, <code>info</code>, <code>hint</code>)</td></tr>
 <tr><td><code>comment-tokens</code></td><td>The tokens to use as a comment token, either a single token <code>"//"</code> or an array <code>["//", "///", "//!"]</code> (the first token will be used for commenting). Also configurable as <code>comment-token</code> for backwards compatibility</td></tr>
@@ -3946,21 +4111,21 @@ language-servers = [ "mylang-lsp" ]
 <tr><td><code>path-completion</code></td><td>Overrides the <code>editor.path-completion</code> config key for the language.</td></tr>
 <tr><td><code>word-completion</code></td><td>Overrides the <a href="#editorword-completion-section"><code>editor.word-completion</code></a> configuration for the language.</td></tr>
 <tr><td><code>workspace-lsp-roots</code></td><td>Directories (relative to the workspace root) that stop the upward root search early. Meant for project-specific hard overrides in a local <code>.helix/config.toml</code>;</td></tr>
-<tr><td><code>persistent-diagnostic-sources</code></td><td>An array of LSP diagnostic sources assumed unchanged when the language server resends the same set of diagnostics. Helix can track the position for these diagnostics internally instead. Useful for diagnostics that are recomputed on save.</td></tr>
+<tr><td><code>persistent-diagnostic-sources</code></td><td>An array of LSP diagnostic sources assumed unchanged when the language server resends the same set of diagnostics. Pure can track the position for these diagnostics internally instead. Useful for diagnostics that are recomputed on save.</td></tr>
 <tr><td><code>rainbow-brackets</code></td><td>Overrides the <code>editor.rainbow-brackets</code> config key for the language</td></tr>
 <tr><td><code>code-actions-on-save</code></td><td>List of LSP code actions to be run in order on save, for example <code>["source.organizeImports"]</code></td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="project-and-lsp-root-selection"><a class="header" href="#project-and-lsp-root-selection">Project and LSP root selection</a></h2>
-<p>This is the model Helix uses:</p>
+<p>This is the model Pure uses:</p>
 <ul>
 <li>The <strong>workspace root</strong> is found once by walking upward from the current
 working directory and picking the first directory that contains <code>.git</code>, <code>.svn</code>,
 <code>.jj</code>, or <code>.helix</code>. If none are found, the current working directory is the
 workspace root.</li>
 <li>Root markers (<code>roots</code>) are used only for LSP root selection and are found by
-starting at the <strong>file</strong>, not the folder Helix was opened in.</li>
+starting at the <strong>file</strong>, not the folder Pure was opened in.</li>
 <li>We use the <strong>topmost</strong> directory that has a root marker (we stop the search at
 the workspace root).</li>
 <li>In most cases, root markers are enough. In some repos there are multiple
@@ -3972,17 +4137,17 @@ early in a particular directory.</li>
 </ul>
 <p>Interaction with <code>required-root-patterns</code> (a language_server configuration key):</p>
 <ul>
-<li>After the LSP root is selected, Helix checks for <code>required-root-patterns</code> in
+<li>After the LSP root is selected, Pure checks for <code>required-root-patterns</code> in
 that directory. If none match, the server is not started.</li>
 <li>This is validation, not root detection.</li>
 </ul>
 <h3 id="file-type-detection-and-the-file-types-key"><a class="header" href="#file-type-detection-and-the-file-types-key">File-type detection and the <code>file-types</code> key</a></h3>
-<p>Helix determines which language configuration to use based on the <code>file-types</code> key
+<p>Pure determines which language configuration to use based on the <code>file-types</code> key
 from the above section. <code>file-types</code> is a list of strings or tables, for
 example:</p>
 <pre><code class="language-toml">file-types = ["toml", { glob = "Makefile" }, { glob = ".git/config" }, { glob = ".github/workflows/*.yaml" } ]
 </code></pre>
-<p>When determining a language configuration to use, Helix searches the file-types
+<p>When determining a language configuration to use, Pure searches the file-types
 with the following priorities:</p>
 <ol>
 <li>Glob: values in <code>glob</code> tables are checked against the full path of the given
@@ -4141,13 +4306,13 @@ git repository:</p>
 <tbody>
 <tr><td><code>git</code></td><td>A git remote URL from which the grammar should be cloned</td></tr>
 <tr><td><code>rev</code></td><td>The revision (commit hash or tag) which should be fetched</td></tr>
-<tr><td><code>subpath</code></td><td>A path within the grammar directory which should be built. Some grammar repositories host multiple grammars (for example <code>tree-sitter-typescript</code> and <code>tree-sitter-ocaml</code>) in subdirectories. This key is used to point <code>hx --grammar build</code> to the correct path for compilation. When omitted, the root of repository is used</td></tr>
+<tr><td><code>subpath</code></td><td>A path within the grammar directory which should be built. Some grammar repositories host multiple grammars (for example <code>tree-sitter-typescript</code> and <code>tree-sitter-ocaml</code>) in subdirectories. This key is used to point <code>pure --grammar build</code> to the correct path for compilation. When omitted, the root of repository is used</td></tr>
 </tbody>
 </table>
 </div>
 <h3 id="choosing-grammars"><a class="header" href="#choosing-grammars">Choosing grammars</a></h3>
 <p>You may use a top-level <code>use-grammars</code> key to control which grammars are
-fetched and built when using <code>hx --grammar fetch</code> and <code>hx --grammar build</code>.</p>
+fetched and built when using <code>pure --grammar fetch</code> and <code>pure --grammar build</code>.</p>
 <pre><code class="language-toml"># Note: this key must come **before** the [[language]] and [[grammar]] sections
 use-grammars = { only = [ "rust", "c", "cpp" ] }
 # or
@@ -4155,14 +4320,293 @@ use-grammars = { except = [ "yaml", "json" ] }
 </code></pre>
 <p>When omitted, all grammars are fetched and built.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="plugins"><a class="header" href="#plugins">Plugins</a></h1>
+<p>Pure runs plugins compiled to WebAssembly, in a sandbox. Nothing about
+plugins is built into the editor: it only runs the plugins you install, and
+with none installed it does no plugin work at all. Plugins load in the
+background, so they never delay startup.</p>
+<p>The full guide, including how to write plugins, is
+<a href="https://github.com/TsaH0/helix-editor-custom/blob/master/helix-plugin/README.md"><code>helix-plugin/README.md</code></a>. For coding agents, copy
+<a href="https://github.com/TsaH0/Pure/blob/master/helix-plugin/AGENTS.md"><code>helix-plugin/AGENTS.md</code></a>
+into your plugin project or <code>~/.config/pure/</code>: it has everything an agent
+needs to build, test and benchmark a plugin.</p>
+<h2 id="installing-a-plugin"><a class="header" href="#installing-a-plugin">Installing a plugin</a></h2>
+<pre><code>:plugin-install https://github.com/someone/pure-plugin   (or a local directory)
+</code></pre>
+<p>Pure fetches it, shows its name, version and permissions, and asks before
+installing. It uses the plugin’s committed <code>plugin.wasm</code> (nothing is built).
+<code>:plugin-update</code> (all, or named plugins) fetches new versions and asks again
+if a plugin wants new permissions; <code>:plugin-remove &lt;name&gt;</code> removes one.
+Installed plugins are recorded in <code>~/.config/pure/plugins.lock</code> with their
+commit and a SHA-256 of the component: if the component changes behind
+Pure’s back, it isn’t loaded until you update or reinstall it.</p>
+<p>You can also install by hand. Each plugin is a directory in <code>~/.config/pure/plugins/</code> holding its
+<code>plugin.toml</code> and <code>plugin.wasm</code>:</p>
+<pre><code>~/.config/pure/plugins/
+└── finder/
+    ├── plugin.toml
+    └── plugin.wasm
+</code></pre>
+<p>Ready-made examples are in
+<a href="https://github.com/TsaH0/helix-editor-custom/tree/master/helix-plugin/examples"><code>helix-plugin/examples</code></a>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Plugin</th><th>Commands</th></tr>
+</thead>
+<tbody>
+<tr><td><code>text-tools</code></td><td><code>upper</code>, <code>lower</code>, <code>sort-lines</code>, <code>count</code></td></tr>
+<tr><td><code>oil</code></td><td>Edit directories as buffers, like oil.nvim: <code>-</code> opens the current file’s directory; rename, move, copy, create and delete files by editing lines, then <code>:w</code></td></tr>
+<tr><td><code>lint</code></td><td>Diagnostics for trailing whitespace, long lines, mixed indentation and conflict markers</td></tr>
+<tr><td><code>emoji</code></td><td>Completes <code>:name</code> to emoji in the completion menu</td></tr>
+<tr><td><code>pomodoro</code></td><td>A pomodoro timer in the statusline; <code>start</code>, <code>stop</code></td></tr>
+<tr><td><code>yank-history</code></td><td><code>list</code>: pick an earlier yank to paste</td></tr>
+<tr><td><code>tree</code></td><td>A file tree in a sidebar, like nvim-tree: <code>space B</code> shows it; <code>enter</code> opens files and folders</td></tr>
+<tr><td><code>finder</code></td><td><code>files</code>, <code>grep</code> (live), <code>branches</code> (git)</td></tr>
+<tr><td><code>todos</code></td><td>Highlights TODO / FIXME / NOTE with signs and a count; <code>list</code></td></tr>
+<tr><td><code>competitest</code></td><td>Like competitest.nvim: <code>space u r</code> compiles and runs the current file on its testcases and shows the verdicts in a panel below; <code>space u a</code> adds a testcase; <code>space u t</code> receives testcases from the Competitive Companion browser extension (<code>:competitest/receive problem</code> or <code>contest</code> makes new files)</td></tr>
+<tr><td><code>outline</code></td><td>Like aerial.nvim: <code>space O</code> shows the file’s functions, types and headings in a panel on the right</td></tr>
+<tr><td><code>harpoon</code></td><td>Like harpoon: mark files with <code>space +</code>, jump with <code>space 1</code>–<code>4</code>, edit the list with <code>space =</code></td></tr>
+<tr><td><code>git-blame</code></td><td>Like git-blame.nvim: who changed the cursor’s line, when and why, at its end</td></tr>
+<tr><td><code>illuminate</code></td><td>Like vim-illuminate: highlights the other uses of the word under the cursor</td></tr>
+<tr><td><code>snippets</code></td><td>Snippets with tab stops in the completion menu (<code>fn</code>, <code>test</code>, <code>for</code>…); add your own in <code>plugins.toml</code></td></tr>
+<tr><td><code>find-char</code></td><td><code>f</code>, <code>F</code>, <code>t</code>, <code>T</code> like Vim’s: on the cursor’s line, optional smart case; <code>repeat</code> and <code>repeat-reverse</code> (bind them to <code>;</code> and <code>,</code> if you like)</td></tr>
+<tr><td><code>vim-registers</code></td><td>Vim’s numbered registers (<code>"0</code>, <code>"1</code>–<code>"9</code>, <code>"-</code>), done by a plugin; the same as <code>editor.registers = "vim"</code></td></tr>
+<tr><td><code>toggleterm</code></td><td>Like toggleterm and vim-slime: <code>space t</code> opens a terminal below (your shell, or the <code>command</code> setting, e.g. a REPL) and closes it; <code>space ;</code> sends the selections or the line to it (needs <code>allow-process</code>)</td></tr>
+<tr><td><code>dap-ui</code></td><td>Like nvim-dap-ui: while the program you debug is stopped, a panel below shows its stack and local variables (needs <code>allow-debug = true</code>)</td></tr>
+<tr><td><code>statusbar</code></td><td>Like lualine and bufferline: a statusline in the mode’s colours (mode, branch, file, diagnostics, language, position) and a tab line of the open buffers (<code>tabline = false</code> turns it off)</td></tr>
+<tr><td><code>click</code></td><td>Mouse actions: ctrl+click goes to the definition, alt+click to the references, a click on the gutter folds or unfolds the block there</td></tr>
+<tr><td><code>undotree</code></td><td>Like undotree: <code>space U</code> shows every revision of the undo tree, branches included; pick one to go back (or forward) to it</td></tr>
+<tr><td><code>script</code></td><td>Like <code>init.lua</code>: script the editor in <a href="https://rhai.rs">Rhai</a> from <code>plugins.toml</code> or <code>init.rhai</code> in the config directory: define commands, bind keys, react to events; <code>:script/eval &lt;code&gt;</code> runs a line (see below)</td></tr>
+<tr><td><code>markdown</code></td><td>Renders Markdown in the buffer (headings, lists, checkboxes, quotes, rules, tables, code fences, hidden <code>**</code>/backticks/link URLs); <code>toggle</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="using-plugins"><a class="header" href="#using-plugins">Using plugins</a></h2>
+<p>Run a plugin’s command with <code>:&lt;plugin&gt;/&lt;command&gt; [args]</code> (or
+<code>:plugin-run &lt;plugin&gt;/&lt;command&gt; [args]</code>); plugin commands are also in the
+command palette (<code>space ?</code>) with their docs. Bind them like any command:</p>
+<pre><code class="language-toml"># ~/.config/pure/config.toml
+[keys.normal.space]
+e = ":oil/open"
+"/" = ":finder/grep"
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>:plugin-run</code></td><td>Run a plugin command</td></tr>
+<tr><td><code>:plugin-list</code></td><td>Show the plugins, their permissions, grants and commands</td></tr>
+<tr><td><code>:plugin-log &lt;plugin&gt;</code></td><td>Show what a plugin logged</td></tr>
+<tr><td><code>:plugin-reload</code></td><td>Reload all plugins</td></tr>
+<tr><td><code>:plugin-install &lt;url or dir&gt;</code></td><td>Install a plugin (asks first)</td></tr>
+<tr><td><code>:plugin-update [names]</code></td><td>Update installed plugins</td></tr>
+<tr><td><code>:plugin-remove &lt;name&gt;</code></td><td>Remove a plugin (asks first)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="panels"><a class="header" href="#panels">Panels</a></h2>
+<p>Plugins can show lists in panels docked left, right or below the views (a
+file tree, an outline, test results). <code>:panel-focus left</code>, <code>right</code> or
+<code>bottom</code> gives a panel the keys (<code>j</code>/<code>k</code> move, <code>enter</code> runs the item, <code>esc</code>
+gives the keys back); <code>:panel-close</code> closes one.</p>
+<h2 id="decorations"><a class="header" href="#decorations">Decorations</a></h2>
+<p>Plugins (API 0.3 and later) can highlight text, add virtual text and set gutter signs
+and statusline text; the <code>todos</code> example does all four. They can also draw
+characters over the text and hide markup (<code>**</code>, link URLs), shown as plain
+text on the cursor’s line and while inserting or selecting, like
+render-markdown.nvim; the <code>markdown</code> example renders Markdown that way.
+Hidden text is still in the document: motions, search and edits see it.
+Signs and
+statusline text only show where you ask for them:</p>
+<pre><code class="language-toml"># ~/.config/pure/config.toml
+[editor]
+gutters = ["diagnostics", "plugins", "line-numbers", "spacer", "diff"]
+
+[editor.statusline]
+right = ["plugins", "diagnostics", "selections", "position"]
+</code></pre>
+<p>Plugins can come with default key bindings (<code>[keys]</code> in their
+<code>plugin.toml</code>, e.g. <code>todos</code> binds <code>space T</code>). They only use keys that
+neither your config nor Pure binds, so they never change a binding you
+have; <code>:plugin-list</code> shows them. Turn a plugin’s keys off with
+<code>keys = false</code> in its <code>plugins.toml</code> table.</p>
+<h2 id="what-plugins-can-add"><a class="header" href="#what-plugins-can-add">What plugins can add</a></h2>
+<p>Besides commands, pickers, popups and prompts, plugins can show
+<strong>diagnostics</strong> (like a language server: gutter, <code>]d</code>, <code>space d</code>), be
+<strong>completion sources</strong> (items join the completion menu), run <strong>timers</strong>,
+show a <strong>sidebar</strong> (a file tree, an outline: <code>j</code>/<code>k</code> and <code>enter</code>
+in it, <code>esc</code> back to the editor, <code>q</code> closes it), open <strong>scratch buffers</strong>
+and buffers they own (<code>:w</code> goes to the plugin, as
+in <code>oil</code>), use <strong>registers</strong>, and rename, create or delete files through
+the editor so open buffers follow. They can read a document’s <strong>syntax
+tree</strong> (tree-sitter queries, the node under the cursor), which is how the
+<code>outline</code> example finds symbols. Inside a plugin’s own buffer its
+<code>[keys.buffer]</code> bindings apply; nowhere else.</p>
+<h3 id="changing-built-in-behaviour"><a class="header" href="#changing-built-in-behaviour">Changing built-in behaviour</a></h3>
+<p>Plugins can replace what Pure’s own keys and commands do, without changing
+Pure: they can bind any key above the defaults (<code>find-char</code> replaces
+<code>f</code>/<code>F</code>/<code>t</code>/<code>T</code>), take the key typed after theirs, run commands or play
+keys as if typed (like <code>:normal</code>), and see each command before it runs,
+with its register and count, to add to it or cancel it (<code>vim-registers</code>).
+A plugin can take over a whole menu key (<code>g</code>, <code>z</code>, <code>Z</code>, <code>space</code>…) too,
+unless you have bound something in that menu yourself: then your menu
+stays.</p>
+<p><code>:terminal</code> (or <code>:term</code>) opens a terminal in a split below, running your
+shell or the program given (<code>:terminal python3</code>), like Neovim’s. In insert
+mode every key goes to the program, Esc included, so vim, htop or a REPL
+work inside it; <code>C-\ C-n</code> goes back to normal mode, where the editor’s
+keys work again (<code>C-w k</code> to the window above, <code>i</code> to type again). It
+follows the split’s size, the mouse wheel scrolls back through what went
+off its top, and closing its buffer (<code>:buffer-close</code>) ends the program.
+Plugins can open terminals and write to them (<code>toggleterm</code>).</p>
+<p>Other programs can drive a running editor, as with Neovim’s <code>--listen</code>.
+Start it with <code>pure --listen</code> (or <code>--listen=/path/to/socket</code>): it then
+takes requests on a Unix socket only you can use, and programs in its
+terminals find the socket in <code>$PURE_LISTEN</code>. From a shell:</p>
+<pre><code class="language-sh">pure --remote src/main.rs          # open files in it
+pure --remote-command 'write'      # run a command, as typed after `:`
+pure --remote-send 'ggdd'          # play keys, as if typed
+pure --remote-state                # its mode, file, cursor and documents, as JSON
+</code></pre>
+<p>(<code>--server=&lt;path&gt;</code> names the socket when <code>$PURE_LISTEN</code> isn’t set.) Other
+programs can speak to the socket directly: one JSON request per line, such
+as <code>{"id": 1, "method": "command", "params": {"line": "open a.rs"}}</code>
+(methods <code>command</code>, <code>keys</code>, <code>open</code> and <code>state</code>), answered by one line with
+<code>result</code> or <code>error</code>.</p>
+<p>Code can be folded, like Vim: <code>zc</code> (or <code>zf</code>) folds the selected lines, or
+the syntax node around the cursor (a function, a block; the indented lines
+below it where there is no syntax tree), <code>zo</code> unfolds, <code>za</code> toggles, <code>zM</code>
+folds every top-level block and <code>zR</code> unfolds everything. A fold shows as
+its first line followed by <code>⋯ N lines</code> (the <code>ui.virtual.fold</code> scope, or
+<code>comment</code>); <code>j</code> and <code>k</code> step over it, edits move it, and a jump or search
+into it opens it. Plugins can fold too.</p>
+<p>Splits can be resized: <code>C-w &gt;</code> and <code>C-w &lt;</code> widen and narrow the split,
+<code>C-w +</code> and <code>C-w -</code> make it taller and shorter (with a count, by that many
+columns or rows), <code>C-w =</code> makes them all the same size again. Plugins can
+open, resize, close and focus splits, choose their gutters, and draw their
+own buffers entirely (canvases).</p>
+<p><code>:normal keys</code> (<code>:norm</code>) plays keys as if typed, like Vim’s:
+<code>:normal dd</code>, <code>:normal ihello&lt;esc&gt;</code>.</p>
+<h3 id="scripting-with-script"><a class="header" href="#scripting-with-script">Scripting with <code>script</code></a></h3>
+<p>For small customisations without writing a plugin, the <code>script</code> plugin runs
+a <a href="https://rhai.rs">Rhai</a> script (a small Rust-like language) at startup:</p>
+<pre><code class="language-toml"># plugins.toml
+[script]
+source = '''
+define("upper", "Uppercase the selections", "upper");   // :script/upper
+bind("normal", "space u", "upper");
+on("save", "saved");
+fn upper() { replace_selections(selected().map(|s| s.to_upper())); }
+fn saved() { status(`saved ${path()}`); }
+'''
+</code></pre>
+<p>Or put the script in <code>init.rhai</code> in the config directory and let the
+plugin read it (<code>allow-files = "read"</code>, <code>allow-dirs = ["~/.config/pure"]</code>).
+Scripts can use <code>text()</code>, <code>path()</code>, <code>language()</code>, <code>mode()</code>,
+<code>selections()</code>, <code>set_selections()</code>, <code>selected()</code>, <code>replace_selections()</code>,
+<code>insert()</code>, <code>query()</code> (tree-sitter captures), <code>command(name, [args])</code>,
+<code>status()</code>, <code>error()</code>, <code>define()</code>, <code>bind()</code> and <code>on()</code> (<code>open</code>, <code>change</code>,
+<code>save</code>, <code>close</code>, <code>mode</code>, <code>idle</code>). <code>:script/eval &lt;code&gt;</code> runs a line and
+shows its value, like <code>:lua</code>; an endless loop is stopped, not the editor.</p>
+<h3 id="editing-directories-with-oil"><a class="header" href="#editing-directories-with-oil">Editing directories with <code>oil</code></a></h3>
+<p><code>-</code> (or <code>:oil/open</code>) opens the current file’s directory as a buffer. Edit
+it like text and <code>:w</code>: change a name to rename, delete a line to delete,
+add a line to create (<code>name/</code> for a directory), cut and paste lines between
+directory buffers to move, copy and paste to copy. A list of the changes
+asks for confirmation first. In directory buffers <code>enter</code> opens, <code>-</code> goes
+up, <code>ctrl-p</code> previews, <code>g?</code> lists all keys. With <code>trash = true</code> in its
+<code>plugins.toml</code> table, deleted entries go to the system’s trash. If a change
+fails, the buffer keeps your edits; fix it and <code>:w</code> again. It needs
+<code>allow-files = "write"</code> (and <code>allow-dirs</code> for directories outside the
+project). To have <code>pure some/dir</code> and <code>:open some/dir</code> open oil instead of
+the file picker:</p>
+<pre><code class="language-toml"># ~/.config/pure/config.toml
+[editor]
+directory-handler = "oil/open"
+</code></pre>
+<h2 id="settings-and-permissions"><a class="header" href="#settings-and-permissions">Settings and permissions</a></h2>
+<p><code>~/.config/pure/plugins.toml</code> has one table per plugin. Plugins can only do
+what their <code>plugin.toml</code> asks for; running programs and touching files also
+need your consent here:</p>
+<pre><code class="language-toml">[text-tools]
+enabled = false                  # don't load it
+
+[finder]
+allow-process = ["rg", "git"]    # programs it may run (or true for any)
+
+[my-notes]
+allow-files = "write"            # the workspace: "read" or "write"
+width = 80                       # anything else is passed to the plugin
+
+[oil]
+allow-files = "write"
+allow-dirs = ["~"]               # more directories than the workspace
+
+[competitest]
+allow-listen = [27121]           # local ports it may receive requests on
+
+[my-keys]
+allow-key-override = true        # its keys may take precedence over yours
+
+[my-lsp-tool]
+allow-lsp = true                 # it may send requests to language servers
+
+[dap-ui]
+allow-debug = true               # it may send requests to the debugger
+
+[markdown]
+lazy = false                     # load at startup even if it would wait
+
+[my-ai-tool]
+allow-network = ["api.example.com", "*.example.org"]  # HTTPS hosts it may reach
+</code></pre>
+<p>Some plugins load only when needed: when a file of their language opens or
+one of their commands runs (<code>:plugin-list</code> says which haven’t loaded yet).</p>
+<p>Plugins that declare their settings have them checked when they load: a
+misspelled name or a wrong type is an error that names the setting. After
+you change only a plugin’s settings, <code>:config-reload</code> passes them on
+without reloading it; changing what it is allowed (<code>allow-…</code>), its keys or
+<code>enabled</code> reloads the plugins.</p>
+<p><code>allow-listen</code> lets a plugin receive requests from programs on your
+machine, such as the Competitive Companion browser extension. It listens
+on 127.0.0.1 only and accepts only JSON requests addressed to <code>localhost</code>,
+so web pages can’t reach it.</p>
+<p><code>allow-lsp</code> also lets a plugin be a language server itself (its hover,
+code actions, go-to-definition and the like show as any server’s), hear
+language servers’ notifications and change their replies before Pure uses
+them. Starting a language server program needs <code>allow-process</code> for it too.</p>
+<p><code>allow-debug</code> lets a plugin send requests to a running debugger
+(<code>:debug-start</code>), such as evaluating an expression or listing variables,
+which can run code in the program being debugged. Seeing the stack and
+setting breakpoints need only the plugin’s <code>debug</code> permission.</p>
+<p><code>allow-network</code> lets a plugin send HTTPS requests to the hosts listed
+(<code>*.example.org</code> means its subdomains). The editor sends them with <code>curl</code>,
+which must be installed; it never follows redirects and never connects to
+your machine or local network, even if a name resolves there.</p>
+<p>Plugins with the <code>registers</code> permission can read your registers (never the
+clipboard) and write them.</p>
+<p>A plugin that runs editor commands can only run those that start programs
+(<code>:sh</code>, <code>:pipe</code>, <code>!</code>, …) with <code>allow-process = true</code>.</p>
+<p>A plugin that crashes, takes too long (2 s for a command) or uses too much
+memory (256 MiB) is disabled until <code>:plugin-reload</code>; the editor keeps
+running.</p>
+<p>When a plugin misbehaves, <code>:plugin-doctor</code> shows each plugin’s state, what
+it asked for and what you granted (and what is missing), its keys and
+their conflicts, its settings and how long its calls take.
+<code>:plugin-trace &lt;plugin&gt;</code> logs each of its calls with its time (see
+<code>:plugin-log</code>); <code>:plugin-trace off</code> stops.</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="guides"><a class="header" href="#guides">Guides</a></h1>
-<p>This section contains guides for adding new languages to Helix: language and
+<p>This section contains guides for adding new languages to Pure: language and
 grammar configuration, and the tree-sitter query files that drive highlighting,
 power indentation, textobjects, symbol tags, and other features.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adding-languages"><a href="#adding-languages" class="header">Adding languages</a></h1>
-<h2 id="adding-new-languages-to-helix"><a class="header" href="#adding-new-languages-to-helix">Adding new languages to Helix</a></h2>
-<p>In order to add a new language to Helix, you will need to follow the steps
+<h2 id="adding-new-languages-to-pure"><a class="header" href="#adding-new-languages-to-pure">Adding new languages to Pure</a></h2>
+<p>In order to add a new language to Pure, you will need to follow the steps
 below.</p>
 <h2 id="language-configuration-1"><a class="header" href="#language-configuration-1">Language configuration</a></h2>
 <ol>
@@ -4211,7 +4655,7 @@ match the most specific scope that fits, capture the leaf node you mean, and
 remember that the last matching pattern (and the innermost node) wins.</p>
 </li>
 <li>
-<p>Helix loads several query files from that directory; only <code>highlights.scm</code> is
+<p>Pure loads several query files from that directory; only <code>highlights.scm</code> is
 required:</p>
 <div class="table-wrapper">
 <table>
@@ -4236,13 +4680,13 @@ are valid against the grammar.</p>
 </ol>
 <h2 id="common-issues"><a class="header" href="#common-issues">Common issues</a></h2>
 <ul>
-<li>If you encounter errors when running Helix after switching branches, you may
-need to update the tree-sitter grammars. Run the command <code>hx --grammar fetch</code>
-to fetch the grammars and <code>hx --grammar build</code> to build any out-of-date
+<li>If you encounter errors when running Pure after switching branches, you may
+need to update the tree-sitter grammars. Run the command <code>pure --grammar fetch</code>
+to fetch the grammars and <code>pure --grammar build</code> to build any out-of-date
 grammars.</li>
 <li>If a parser is causing a segfault, or you want to remove it, make sure to
 remove the compiled parser located at <code>runtime/grammars/&lt;name&gt;.so</code>.</li>
-<li>If you are attempting to add queries and Helix is unable to locate them, ensure that the environment variable <code>HELIX_RUNTIME</code> is set to the location of the <code>runtime</code> folder you’re developing in.</li>
+<li>If you are attempting to add queries and Pure is unable to locate them, ensure that the environment variable <code>HELIX_RUNTIME</code> is set to the location of the <code>runtime</code> folder you’re developing in.</li>
 <li>Validate queries with <code>cargo xtask query-check [language]</code> (every query file
 must compile against the grammar). <code>highlight-check</code> and <code>indent-check</code>
 additionally run the real highlighter and indenter over the test fixtures catch mistakes.</li>
@@ -4254,7 +4698,7 @@ additionally run the real highlighter and indenter over the test fixtures catch 
 <code>@keyword</code>, …) to nodes in the syntax tree; the theme then maps each scope to a
 colour. Highlighting is the one query file that every language needs.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/highlights.scm</code> when
-contributing to Helix.</p>
+contributing to Pure.</p>
 <h2 id="scopes-1"><a class="header" href="#scopes-1">Scopes</a></h2>
 <p>The full list of highlight scopes, and what each is for, is documented on the
 <a href="https://docs.helix-editor.com/themes.html#scopes">themes page</a>. Match the most specific scope that fits the node — for example a
@@ -4291,13 +4735,13 @@ per span for an arbitrary file.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adding-locals-queries-1"><a href="#adding-locals-queries-1" class="header">Adding locals queries</a></h1>
 <h2 id="adding-locals-queries"><a class="header" href="#adding-locals-queries">Adding Locals Queries</a></h2>
-<p><code>locals.scm</code> queries teach Helix about variable scopes and definitions so that
+<p><code>locals.scm</code> queries teach Pure about variable scopes and definitions so that
 local variables can be highlighted distinctly from global ones. When a
 <code>@local.reference</code> identifier is resolved to a <code>@local.definition</code>, it inherits
 the highlight class of that definition rather than the class assigned by
 <code>highlights.scm</code>.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/locals.scm</code> when
-contributing to Helix. Like other query files, <code>locals.scm</code> may reuse another
+contributing to Pure. Like other query files, <code>locals.scm</code> may reuse another
 language’s with <code>; inherits: &lt;lang&gt;</code> on the first line. Locals are resolved in
 their own pass with their own precedence, independently of <code>highlights.scm</code>.</p>
 <h2 id="captures"><a class="header" href="#captures">Captures</a></h2>
@@ -4325,7 +4769,7 @@ causes matching references to be highlighted as <code>variable.parameter</code>.
 <code>function</code>, <code>namespace</code>, <code>type</code>, <code>constant</code>, etc.</p>
 <h3 id="localreference"><a class="header" href="#localreference"><code>@local.reference</code></a></h3>
 <p>Marks an identifier node as a potential reference to a local definition.
-Helix searches enclosing scopes for a matching definition and, if found,
+Pure searches enclosing scopes for a matching definition and, if found,
 highlights the reference with that definition’s class instead.</p>
 <pre><code class="language-scm">(identifier) @local.reference
 </code></pre>
@@ -4347,7 +4791,7 @@ reference resolution for nodes it matches.</p>
 <p>The convention is to use a capture name beginning with an underscore (e.g. <code>@_</code>,
 <code>@_keyword</code>) to make the discard intent clear, but any non-<code>@local.*</code> name works.</p>
 <h2 id="how-definitions-and-references-are-matched"><a class="header" href="#how-definitions-and-references-are-matched">How definitions and references are matched</a></h2>
-<p>Helix matches references to definitions by comparing the text of the reference
+<p>Pure matches references to definitions by comparing the text of the reference
 node against the text of definitions visible from the current scope. Definitions
 in inner scopes shadow those in outer scopes. If no definition is found the
 reference is left with its <code>highlights.scm</code> highlight.</p>
@@ -4361,15 +4805,15 @@ effect on <code>highlights.scm</code> results.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adding-textobject-queries-1"><a href="#adding-textobject-queries-1" class="header">Adding textobject queries</a></h1>
 <h2 id="adding-textobject-queries"><a class="header" href="#adding-textobject-queries">Adding textobject queries</a></h2>
-<p>Helix supports textobjects that are language specific, such as functions, classes, etc.
+<p>Pure supports textobjects that are language specific, such as functions, classes, etc.
 These textobjects require an accompanying tree-sitter grammar and a <code>textobjects.scm</code> query file
 to work properly. Tree-sitter allows us to query the source code syntax tree
 and capture specific parts of it. The queries are written in a lisp dialect.
 More information on how to write queries can be found in the <a href="https://tree-sitter.github.io/tree-sitter/using-parsers/queries/1-syntax.html">official tree-sitter
 documentation</a>.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/textobjects.scm</code>
-when contributing to Helix. Note that to test the query files locally you should put
-them under your local runtime directory (<code>~/.config/helix/runtime</code> on Linux
+when contributing to Pure. Note that to test the query files locally you should put
+them under your local runtime directory (<code>~/.config/pure/runtime</code> on Linux
 for example).</p>
 <p>The following <a href="https://tree-sitter.github.io/tree-sitter/using-parsers/queries/2-operators.html#capturing-nodes">captures</a> are recognized:</p>
 <div class="table-wrapper">
@@ -4397,7 +4841,7 @@ for example).</p>
 </div>
 <p><a href="https://github.com/search?q=repo%3Ahelix-editor%2Fhelix+path%3A%2A%2A/textobjects.scm&amp;type=Code&amp;ref=advsearch&amp;l=&amp;l=">Example query files</a> can be found in the helix GitHub repository.</p>
 <h2 id="queries-for-textobject-based-navigation"><a class="header" href="#queries-for-textobject-based-navigation">Queries for textobject based navigation</a></h2>
-<p>Tree-sitter based navigation in Helix is done using captures in the
+<p>Tree-sitter based navigation in Pure is done using captures in the
 following order:</p>
 <ul>
 <li><code>object.movement</code></li>
@@ -4411,7 +4855,7 @@ doesn’t make sense in a navigation context.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adding-indent-queries-1"><a href="#adding-indent-queries-1" class="header">Adding indent queries</a></h1>
 <h2 id="adding-indent-queries"><a class="header" href="#adding-indent-queries">Adding indent queries</a></h2>
-<p>Helix uses tree-sitter to correctly indent new lines. This requires a
+<p>Pure uses tree-sitter to correctly indent new lines. This requires a
 tree-sitter grammar and an <code>indent.scm</code> query file placed in
 <code>runtime/queries/{language}/indents.scm</code>.</p>
 <p>The indent level of a line is <strong>the number of <code>@indent</code> scopes that contain
@@ -4422,7 +4866,7 @@ level, <code>@align</code> aligns to a column, etc. (see <a href="#capture-types
 <p>Note that it matters where these scopes <em>begin</em>: multiple scopes that open on
 the same physical line only increase the indent by 1 (the same-line rule). See
 <a href="#capture-types">Capture types</a>.</p>
-<p>By default, Helix uses the <code>hybrid</code> indentation heuristic. This means that
+<p>By default, Pure uses the <code>hybrid</code> indentation heuristic. This means that
 indent queries are not used to compute the expected absolute indentation of a
 line but rather the expected difference in indentation between the new and an
 already existing line. This difference is then added to the actual indentation
@@ -4431,7 +4875,7 @@ harder to find, it is recommended to disable it when testing via
 <code>:set indent-heuristic tree-sitter</code>. The rest of this guide assumes that
 the <code>tree-sitter</code> heuristic is used.</p>
 <h2 id="indent-queries"><a class="header" href="#indent-queries">Indent queries</a></h2>
-<p>When Helix is inserting a new line through <code>o</code>, <code>O</code>, or <code>&lt;ret&gt;</code>, to determine
+<p>When Pure is inserting a new line through <code>o</code>, <code>O</code>, or <code>&lt;ret&gt;</code>, to determine
 the indent level for the new line, the query in <code>indents.scm</code> is run on the
 document. The starting position of the query is the end of the line above where
 a new line will be inserted.</p>
@@ -4792,8 +5236,8 @@ wrong the other is caught.</p>
 <h2 id="adding-injection-queries"><a class="header" href="#adding-injection-queries">Adding Injection Queries</a></h2>
 <p>Writing language injection queries allows one to highlight a specific node as a different language.
 In addition to the <a href="https://tree-sitter.github.io/tree-sitter/3-syntax-highlighting.html#language-injection">standard</a> language injection options used by tree-sitter, there
-are a few Helix specific extensions that allow for more control.</p>
-<p>Injection drives more than highlighting: within an injected region Helix also
+are a few Pure specific extensions that allow for more control.</p>
+<p>Injection drives more than highlighting: within an injected region Pure also
 uses the injected language’s own indentation, textobjects, and comment tokens —
 so, for example, editing JavaScript inside an HTML <code>&lt;script&gt;</code> indents and
 comments as JavaScript.</p>
@@ -4818,9 +5262,9 @@ Marks the content to be highlighted as the language captured with <code>@injecti
 </li>
 <li>
 <p><code>@injection.filename</code> (extension):
-The captured node may contain a filename with a file-extension known to Helix,
+The captured node may contain a filename with a file-extension known to Pure,
 highlighting <code>@injection.content</code> as that language. This uses the language extensions defined in
-both the default languages.toml distributed with Helix, as well as user defined languages.</p>
+both the default languages.toml distributed with Pure, as well as user defined languages.</p>
 </li>
 <li>
 <p><code>@injection.shebang</code> (extension):
@@ -4871,13 +5315,13 @@ The first argument (a capture) must be one of the other arguments (strings).</p>
 <h2 id="adding-tags-queries"><a class="header" href="#adding-tags-queries">Adding tags queries</a></h2>
 <p>See tree-sitter’s documentation on <a href="https://tree-sitter.github.io/tree-sitter/4-code-navigation.html">Code Navigation Systems</a> for more
 background on tags queries.</p>
-<p>Helix provides LSP-like features such as document and workspace symbol pickers
+<p>Pure provides LSP-like features such as document and workspace symbol pickers
 out-of-the-box for languages with <code>tags.scm</code> queries based on syntax trees. To
 be analyzed a language must have a tree-sitter grammar and a <code>tags.scm</code> query
 file which pattern matches interesting nodes from syntax trees.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/tags.scm</code>
-when contributing to Helix. You may place these under your local runtime
-directory (<code>~/.config/helix/runtime</code> in Linux for example) for the sake of
+when contributing to Pure. You may place these under your local runtime
+directory (<code>~/.config/pure/runtime</code> in Linux for example) for the sake of
 testing.</p>
 <h2 id="captures-1"><a class="header" href="#captures-1">Captures</a></h2>
 <h3 id="definition"><a class="header" href="#definition"><code>@definition.*</code></a></h3>
@@ -4927,7 +5371,7 @@ the common variants. As with definitions, <code>@name</code> captures the identi
 repository.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="adding-rainbow-bracket-queries"><a class="header" href="#adding-rainbow-bracket-queries">Adding Rainbow Bracket Queries</a></h1>
-<p>Helix uses <code>rainbows.scm</code> tree-sitter query files to provide rainbow bracket
+<p>Pure uses <code>rainbows.scm</code> tree-sitter query files to provide rainbow bracket
 functionality.</p>
 <p>Tree-sitter queries are documented in the tree-sitter online documentation.
 If you’re writing queries for the first time, be sure to check out the section

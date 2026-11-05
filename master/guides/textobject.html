@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Adding textobject queries</title>
+        <title>Adding textobject queries - Pure</title>
 
 
         <!-- Custom HTML head -->
@@ -36,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "../searchindex-2fe1c435.js";
+            window.path_to_searchindex_js = "../searchindex-2116a520.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c2fa7ea4.js"></script>
+        <script src="../toc-41a81a43.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -139,7 +139,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title"></h1>
+                    <h1 class="menu-title">Pure</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -183,15 +183,15 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h2 id="adding-textobject-queries"><a class="header" href="#adding-textobject-queries">Adding textobject queries</a></h2>
-<p>Helix supports textobjects that are language specific, such as functions, classes, etc.
+<p>Pure supports textobjects that are language specific, such as functions, classes, etc.
 These textobjects require an accompanying tree-sitter grammar and a <code>textobjects.scm</code> query file
 to work properly. Tree-sitter allows us to query the source code syntax tree
 and capture specific parts of it. The queries are written in a lisp dialect.
 More information on how to write queries can be found in the <a href="https://tree-sitter.github.io/tree-sitter/using-parsers/queries/1-syntax.html">official tree-sitter
 documentation</a>.</p>
 <p>Query files should be placed in <code>runtime/queries/{language}/textobjects.scm</code>
-when contributing to Helix. Note that to test the query files locally you should put
-them under your local runtime directory (<code>~/.config/helix/runtime</code> on Linux
+when contributing to Pure. Note that to test the query files locally you should put
+them under your local runtime directory (<code>~/.config/pure/runtime</code> on Linux
 for example).</p>
 <p>The following <a href="https://tree-sitter.github.io/tree-sitter/using-parsers/queries/2-operators.html#capturing-nodes">captures</a> are recognized:</p>
 <div class="table-wrapper">
@@ -219,7 +219,7 @@ for example).</p>
 </div>
 <p><a href="https://github.com/search?q=repo%3Ahelix-editor%2Fhelix+path%3A%2A%2A/textobjects.scm&amp;type=Code&amp;ref=advsearch&amp;l=&amp;l=">Example query files</a> can be found in the helix GitHub repository.</p>
 <h2 id="queries-for-textobject-based-navigation"><a class="header" href="#queries-for-textobject-based-navigation">Queries for textobject based navigation</a></h2>
-<p>Tree-sitter based navigation in Helix is done using captures in the
+<p>Tree-sitter based navigation in Pure is done using captures in the
 following order:</p>
 <ul>
 <li><code>object.movement</code></li>
