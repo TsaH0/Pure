@@ -289,6 +289,33 @@ mod folds_impl {
     }
 }
 
+mod history_impl {
+    use super::*;
+    use v0_5::helix::plugin::history::{Host, Revision, Tree};
+
+    impl Host for State {
+        fn revisions(&mut self, doc: u32) -> std::result::Result<Tree, String> {
+            let history = State::history(self, doc)?;
+            Ok(Tree {
+                revisions: history
+                    .revisions
+                    .into_iter()
+                    .map(|revision| Revision {
+                        parent: revision.parent,
+                        time: revision.time,
+                        inserted: revision.inserted,
+                        deleted: revision.deleted,
+                    })
+                    .collect(),
+                current: history.current,
+            })
+        }
+        fn jump(&mut self, doc: u32, revision: u32) -> std::result::Result<(), String> {
+            State::history_jump(self, doc, revision)
+        }
+    }
+}
+
 mod windows_impl {
     use super::*;
     use crate::v05::WindowAction as W;

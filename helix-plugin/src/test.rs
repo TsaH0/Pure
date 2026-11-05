@@ -75,6 +75,7 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             language_servers: Vec::new(),
             syntax: None,
             folds: Vec::new(),
+            history: None,
         },
     );
     Snapshot {
@@ -4251,6 +4252,7 @@ fn conceals_are_checked_against_the_text() {
             language_servers: Vec::new(),
             syntax: None,
             folds: Vec::new(),
+            history: None,
         },
     );
     state

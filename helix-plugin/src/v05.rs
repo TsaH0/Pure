@@ -118,6 +118,16 @@ pub enum Step {
     SetMode(Mode),
 }
 
+/// One revision of a document's undo history (API 0.5 `history`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Revision {
+    pub parent: u32,
+    /// Milliseconds since 1970.
+    pub time: u64,
+    pub inserted: u32,
+    pub deleted: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewInfo {
     pub id: u64,
@@ -1179,6 +1189,29 @@ impl State {
             last,
             fold,
         });
+        Ok(())
+    }
+    pub(crate) fn history(&mut self, doc: DocumentId) -> Result<crate::History, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        Ok(self
+            .document(doc)?
+            .history
+            .as_deref()
+            .cloned()
+            .unwrap_or_default())
+    }
+    pub(crate) fn history_jump(&mut self, doc: DocumentId, revision: u32) -> Result<(), String> {
+        self.need(crate::Permission::EditBuffers)?;
+        let document = self.document(doc)?;
+        let count = document
+            .history
+            .as_ref()
+            .map_or(1, |history| history.revisions.len());
+        if revision as usize >= count {
+            return Err(format!("no revision {revision}: the document has {count}"));
+        }
+        self.actions
+            .push(crate::Action::HistoryJump { doc, revision });
         Ok(())
     }
     pub(crate) fn folds(&mut self, doc: DocumentId) -> Result<Vec<(u32, u32)>, String> {

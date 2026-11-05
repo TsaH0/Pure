@@ -1165,6 +1165,36 @@ interface folds {
   %list: func(doc: document-id) -> result<list<tuple<u32, u32>>, string>;
 }
 
+/// API 0.5: undo history, a tree (undotree). Needs `read-buffers`;
+/// `jump` needs `edit-buffers`.
+interface history {
+  use types.{document-id};
+
+  record revision {
+    /// Revision 0 is the text as loaded; it is its own parent.
+    parent: u32,
+    /// When it was made, in milliseconds since 1970.
+    time: u64,
+    /// Chars it inserted and deleted.
+    inserted: u32,
+    deleted: u32,
+  }
+
+  record tree {
+    /// Indexed by revision number.
+    revisions: list<revision>,
+    /// The revision the text is at.
+    current: u32,
+  }
+
+  /// The undo tree of `doc`. Changes still being typed (insert mode)
+  /// aren't a revision yet.
+  revisions: func(doc: document-id) -> result<tree, string>;
+  /// Make the text that of `revision`, as `:earlier`/`:later` along the
+  /// tree would. Happens after the call.
+  jump: func(doc: document-id, revision: u32) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1199,6 +1229,7 @@ world helix-plugin {
   import panels2;
   import windows;
   import folds;
+  import history;
   export plugin;
   export callbacks;
   export events;

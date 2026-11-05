@@ -196,6 +196,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "win",
                 "canvas",
                 "fold",
+                "history",
                 "next-key",
                 "count-commands",
                 "call",
@@ -602,6 +603,28 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
                     _ => Err("which?".into()),
                 }
+            }
+            // `history` (the tree, in the status) or `history N` (jump).
+            "history" => {
+                use helix::plugin::history;
+                let doc = host::current_document().ok_or("no document")?;
+                if let Some(revision) = args.first() {
+                    let revision = revision.parse().map_err(|_| "a revision".to_string())?;
+                    return history::jump(doc, revision);
+                }
+                let tree = history::revisions(doc)?;
+                let parents = tree
+                    .revisions
+                    .iter()
+                    .map(|revision| format!("{}+{}-{}", revision.parent, revision.inserted, revision.deleted))
+                    .collect::<Vec<_>>();
+                let timed = tree.revisions.iter().all(|revision| revision.time > 1_600_000_000_000);
+                host::set_status(&format!(
+                    "history:{} at {} timed:{timed}",
+                    parents.join(","),
+                    tree.current
+                ));
+                Ok(())
             }
             // `fold first last`, `fold off first last`, `fold list`.
             "fold" => {

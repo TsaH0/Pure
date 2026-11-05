@@ -528,6 +528,19 @@ pub struct DocumentSnapshot {
     pub syntax: Option<helix_core::tree_sitter::Tree>,
     /// Its folds, `(first, last)` lines (API 0.5 `folds`).
     pub folds: Vec<(u32, u32)>,
+    /// Its undo history (API 0.5 `history`), filled in only while an API
+    /// 0.5 plugin is loaded. Shared between snapshots until it changes.
+    pub history: Option<std::sync::Arc<History>>,
+}
+
+/// A document's undo history: a tree of revisions.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct History {
+    /// Revision 0 is the text as it was loaded; every other has a parent
+    /// before it.
+    pub revisions: Vec<v05::Revision>,
+    /// The revision the text is at.
+    pub current: u32,
 }
 
 /// The editor state a plugin call can read.
@@ -646,6 +659,12 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Make a document's text that of one of its revisions (API 0.5
+    /// `history.jump`).
+    HistoryJump {
+        doc: DocumentId,
+        revision: u32,
+    },
     /// Fold (or unfold) lines `first..=last` of a document (API 0.5).
     Fold {
         doc: DocumentId,

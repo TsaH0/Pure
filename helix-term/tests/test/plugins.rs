@@ -4888,3 +4888,37 @@ async fn plugins_fold_lines() -> anyhow::Result<()> {
     assert_eq!(status(&app).0, "folds:");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_read_the_undo_tree_and_jump_in_it() -> anyhow::Result<()> {
+    // Revision 1 is the test's text going in with the first insert; then
+    // two branches from it: "y" inserted, undone, and "z" inserted.
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, "ix<esc>").await;
+    let first = text(&app);
+    keys(&mut app, "iy<esc>").await;
+    let second = text(&app);
+    keys(&mut app, "uiz<esc>").await;
+    assert!(text(&app).contains('z') && !text(&app).contains('y'));
+    keys(&mut app, ":plugin-run testplugin3/history<ret>").await;
+    let (tree, _) = status(&app);
+    assert!(tree.starts_with("history:0+0-0,0+"), "{tree}");
+    assert!(tree.ends_with(",1+1-0,1+1-0 at 3 timed:true"), "{tree}");
+    keys(&mut app, ":plugin-run testplugin3/history 2<ret>").await;
+    assert_eq!(text(&app), second);
+    keys(&mut app, ":plugin-run testplugin3/history<ret>").await;
+    assert!(
+        status(&app).0.ends_with("at 2 timed:true"),
+        "{}",
+        status(&app).0
+    );
+    keys(&mut app, ":plugin-run testplugin3/history 1<ret>").await;
+    assert_eq!(text(&app), first);
+    keys(&mut app, ":plugin-run testplugin3/history 9<ret>").await;
+    assert!(
+        status(&app).0.contains("no revision 9"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}

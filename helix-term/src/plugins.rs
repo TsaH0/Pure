@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use helix_event::{register_hook, runtime_local};
@@ -1742,6 +1743,46 @@ fn view_for(editor: &Editor, doc: DocumentId) -> Option<ViewId> {
         .map(|(view, _)| view.id)
 }
 
+runtime_local! {
+    /// The undo history of each document as plugins see it, kept so a
+    /// snapshot only adds the revisions made since the last one.
+    static HISTORIES: Mutex<std::collections::BTreeMap<DocumentId, Arc<helix_plugin::History>>> =
+        Mutex::new(std::collections::BTreeMap::new());
+}
+
+/// `doc`'s undo history for plugins: the last one, unless it changed.
+fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
+    let history = doc.history.take();
+    let count = history.revision_count();
+    let current = history.current_revision() as u32;
+    let mut histories = HISTORIES.lock();
+    let cached = histories.entry(doc.id()).or_default();
+    if cached.revisions.len() != count || cached.current != current {
+        let known = cached.revisions.len().min(count);
+        // Revisions are only ever added: the known ones stay as they were.
+        let mut revisions = cached.revisions[..known].to_vec();
+        let (now, wall) = (std::time::Instant::now(), std::time::SystemTime::now());
+        revisions.extend((known..count).filter_map(|n| {
+            let info = history.revision_info(n)?;
+            let time = wall
+                .checked_sub(now.saturating_duration_since(info.timestamp))
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |time| time.as_millis() as u64);
+            Some(helix_plugin::v05::Revision {
+                parent: info.parent as u32,
+                time,
+                inserted: info.inserted as u32,
+                deleted: info.deleted as u32,
+            })
+        }));
+        *cached = Arc::new(helix_plugin::History { revisions, current });
+    }
+    let snapshot = cached.clone();
+    drop(histories);
+    doc.history.set(history);
+    snapshot
+}
+
 /// What plugins can see of the editor. Cheap: ropes are reference counted.
 pub fn snapshot(editor: &Editor) -> Snapshot {
     let (views, ui) = views_and_ui(editor);
@@ -1776,6 +1817,11 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     },
                     syntax: if HAS_V05.load(Ordering::Relaxed) {
                         doc.syntax().map(|syntax| syntax.tree().clone())
+                    } else {
+                        None
+                    },
+                    history: if HAS_V05.load(Ordering::Relaxed) {
+                        Some(history(doc))
                     } else {
                         None
                     },
@@ -2333,6 +2379,21 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 helix_event::request_redraw();
             }
             Action::Window(action) => window_action(editor, action),
+            Action::HistoryJump { doc, revision } => {
+                let Some(doc) = editor_doc_id(editor, doc) else {
+                    continue;
+                };
+                let Some(view) = view_for(editor, doc) else {
+                    continue;
+                };
+                let (view, doc) = (
+                    editor.tree.get_mut(view),
+                    editor.documents.get_mut(&doc).expect("a view shows it"),
+                );
+                if doc.jump_to_revision(view, revision as usize) {
+                    helix_event::request_redraw();
+                }
+            }
             Action::Fold {
                 doc,
                 first,
@@ -3025,6 +3086,7 @@ pub fn register_hooks() {
         Ok(())
     });
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
+        HISTORIES.lock().remove(&event.doc.id());
         if let Some(marks) = &*MARKS.lock() {
             marks
                 .lock()

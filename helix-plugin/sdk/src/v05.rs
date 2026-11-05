@@ -200,6 +200,11 @@ pub mod http {
     }
 }
 
+/// Undo history, a tree: read it, jump to a revision.
+pub mod history {
+    pub use super::plugin::history::*;
+}
+
 /// Folded lines: fold, unfold, list.
 pub mod folds {
     pub use super::plugin::folds::*;

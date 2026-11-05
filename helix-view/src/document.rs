@@ -1842,6 +1842,24 @@ impl Document {
         success
     }
 
+    /// Make the text revision `revision`'s (as `:earlier`/`:later` would,
+    /// along the undo tree). Returns whether there is such a revision.
+    pub fn jump_to_revision(&mut self, view: &mut View, revision: usize) -> bool {
+        self.append_changes_to_history(view);
+        let Some(txns) = self.history.get_mut().jump(revision) else {
+            return false;
+        };
+        let mut changed = false;
+        for txn in txns {
+            changed |= self.apply_impl(&txn, view.id, true);
+        }
+        if changed {
+            self.changes = ChangeSet::new(self.text().slice(..));
+            view.sync_changes(self);
+        }
+        true
+    }
+
     /// Undo modifications to the [`Document`] according to `uk`.
     pub fn earlier(&mut self, view: &mut View, uk: UndoKind) -> bool {
         self.earlier_later_impl(view, uk, true)
