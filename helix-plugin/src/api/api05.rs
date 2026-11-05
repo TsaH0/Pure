@@ -289,6 +289,46 @@ mod folds_impl {
     }
 }
 
+mod bars_impl {
+    use super::*;
+    use crate::v05::BarKind;
+    use v0_5::helix::plugin::bars::{Bar, Host, Span};
+
+    fn bar(bar: Option<Bar>) -> Option<crate::v05::Bar> {
+        let spans = |spans: Vec<Span>| {
+            spans
+                .into_iter()
+                .map(|span| (span.text, span.scope))
+                .collect()
+        };
+        bar.map(|bar| crate::v05::Bar {
+            left: spans(bar.left),
+            center: spans(bar.center),
+            right: spans(bar.right),
+        })
+    }
+
+    impl Host for State {
+        fn set_statusline(
+            &mut self,
+            view: Option<u64>,
+            b: Option<Bar>,
+        ) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Statusline, view, bar(b))
+        }
+        fn set_tabline(&mut self, b: Option<Bar>) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Tabline, None, bar(b))
+        }
+        fn set_winbar(
+            &mut self,
+            view: Option<u64>,
+            b: Option<Bar>,
+        ) -> std::result::Result<(), String> {
+            self.set_bar(BarKind::Winbar, view, bar(b))
+        }
+    }
+}
+
 mod mouse_impl {
     use super::*;
     use v0_5::helix::plugin::mouse::Host;

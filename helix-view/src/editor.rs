@@ -1430,6 +1430,8 @@ pub struct Editor {
     /// Statusline text from plugins, by `plugin/segment` (the `plugins`
     /// statusline element).
     pub plugin_statusline: BTreeMap<String, String>,
+    /// Statuslines, a tab line and winbars plugins draw.
+    pub plugin_bars: crate::bars::PluginBars,
     /// Plugin panels, at most one per dock (Pure).
     pub panels: Vec<crate::sidebar::Sidebar>,
 
@@ -1582,6 +1584,7 @@ impl Editor {
             cursor_cache: CursorCache::default(),
             dir_stack: VecDeque::with_capacity(DIR_STACK_CAP),
             plugin_statusline: BTreeMap::new(),
+            plugin_bars: crate::bars::PluginBars::default(),
             panels: Vec::new(),
             workspace_trust,
             disk_change_warned: HashMap::new(),
@@ -2583,9 +2586,29 @@ impl Editor {
     }
 
     pub fn resize(&mut self, area: Rect) {
+        // Views gaining or losing a plugin's winbar need their areas redone.
+        if !self.plugin_bars.statuslines.is_empty() || !self.plugin_bars.winbars.is_empty() {
+            let tree = &self.tree;
+            self.plugin_bars
+                .statuslines
+                .retain(|view, _| tree.contains(*view));
+            self.plugin_bars
+                .winbars
+                .retain(|view, _| tree.contains(*view));
+        }
+        let bars = &self.plugin_bars;
+        let mut changed = false;
+        for (view, _) in self.tree.views_mut() {
+            let winbar = bars.winbar(view.id).is_some();
+            changed |= view.winbar != winbar;
+            view.winbar = winbar;
+        }
         if self.tree.resize(area) {
             self._refresh();
-        };
+        } else if changed {
+            self.tree.recalculate();
+            self._refresh();
+        }
     }
 
     pub fn focus(&mut self, view_id: ViewId) {

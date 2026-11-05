@@ -405,7 +405,11 @@ impl Tree {
             match &mut node.content {
                 Content::View(view) => {
                     // debug!!("setting view area {:?}", area);
-                    view.area = area;
+                    view.area = if view.winbar && area.height > 2 {
+                        area.clip_top(1)
+                    } else {
+                        area
+                    };
                 } // TODO: call f()
                 Content::Container(container) => {
                     // debug!!("setting container area {:?}", area);

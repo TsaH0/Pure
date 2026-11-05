@@ -172,6 +172,9 @@ pub struct View {
     // left to future work. For now we treat all views as focused and give them
     // each their own handler.
     pub diagnostics_handler: DiagnosticsHandler,
+    /// A plugin's bar takes the view's top row (`Tree::recalculate` leaves
+    /// it out of `area`).
+    pub winbar: bool,
 }
 
 impl fmt::Debug for View {
@@ -208,6 +211,7 @@ impl View {
             gutters,
             doc_revisions: HashMap::new(),
             diagnostics_handler: DiagnosticsHandler::new(),
+            winbar: false,
         }
     }
 

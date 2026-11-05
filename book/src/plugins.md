@@ -57,6 +57,7 @@ Ready-made examples are in
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `find-char` | `f`, `F`, `t`, `T` like Vim's: on the cursor's line, optional smart case; `repeat` and `repeat-reverse` (bind them to `;` and `,` if you like) |
 | `vim-registers` | Vim's numbered registers (`"0`, `"1`–`"9`, `"-`), done by a plugin; the same as `editor.registers = "vim"` |
+| `statusbar` | Like lualine and bufferline: a statusline in the mode's colours (mode, branch, file, diagnostics, language, position) and a tab line of the open buffers (`tabline = false` turns it off) |
 | `click` | Mouse actions: ctrl+click goes to the definition, alt+click to the references, a click on the gutter folds or unfolds the block there |
 | `undotree` | Like undotree: `space U` shows every revision of the undo tree, branches included; pick one to go back (or forward) to it |
 | `script` | Like `init.lua`: script the editor in [Rhai](https://rhai.rs) from `plugins.toml` or `init.rhai` in the config directory: define commands, bind keys, react to events; `:script/eval <code>` runs a line (see below) |

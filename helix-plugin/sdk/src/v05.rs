@@ -200,6 +200,19 @@ pub mod http {
     }
 }
 
+/// Bars: the statusline, a tab line and winbars, drawn by the plugin.
+pub mod bars {
+    pub use super::plugin::bars::*;
+
+    /// A span in `scope` ("" for the bar's own style).
+    pub fn span(text: &str, scope: &str) -> Span {
+        Span {
+            text: text.into(),
+            scope: scope.into(),
+        }
+    }
+}
+
 /// Mouse events on documents.
 pub mod mouse {
     pub use super::plugin::mouse::*;

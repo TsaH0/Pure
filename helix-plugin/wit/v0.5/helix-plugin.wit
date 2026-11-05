@@ -1218,6 +1218,35 @@ interface mouse {
   listen: func(kinds: list<string>) -> result<_, string>;
 }
 
+/// API 0.5: bars a plugin draws: the statusline (in place of Pure's), a
+/// tab line at the top of the screen and a bar at the top of views (a
+/// winbar). `%{name}` in their text is filled in when drawn: `mode`,
+/// `file`, `filename`, `modified` ("[+]"), `line`, `column`, `lines`,
+/// `percent`, `language`, `branch`, `selections`, `errors`, `warnings`,
+/// `buffers`; `%%` is a "%". Set them again when what else they show
+/// changes. They go when the plugin is disabled.
+interface bars {
+  /// Text in a style: a theme scope ("ui.statusline.normal"), a style
+  /// written out ("fg:#ff8800 bold"), "mode" for the current mode's
+  /// statusline colours, or "" for the bar's own.
+  record span { text: string, scope: string }
+
+  record bar {
+    left: list<span>,
+    /// Centred (but never over the left part).
+    center: list<span>,
+    right: list<span>,
+  }
+
+  /// The statusline of every view (`view` none) or of one view; none
+  /// gives Pure's back.
+  set-statusline: func(view: option<u64>, bar: option<bar>) -> result<_, string>;
+  /// A row at the top of the screen, in place of the buffer line.
+  set-tabline: func(bar: option<bar>) -> result<_, string>;
+  /// A row at the top of every view (`view` none) or of one.
+  set-winbar: func(view: option<u64>, bar: option<bar>) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1254,6 +1283,7 @@ world helix-plugin {
   import folds;
   import history;
   import mouse;
+  import bars;
   export plugin;
   export callbacks;
   export events;

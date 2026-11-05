@@ -663,6 +663,14 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Set (or with `None` remove) one of the plugin's bars (API 0.5
+    /// `bars`); `view` `None` is every view.
+    Bar {
+        plugin: String,
+        kind: v05::BarKind,
+        view: Option<u64>,
+        bar: Option<v05::Bar>,
+    },
     /// Hear these kinds of mouse events through the plugin's "mouse"
     /// service (API 0.5 `mouse.listen`); none stops.
     Mouse {

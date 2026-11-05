@@ -1,0 +1,11 @@
+name = "statusbar"
+version = "0.1.0"
+api = "0.5"
+description = "A statusline like lualine and a tab line of open buffers, like bufferline"
+permissions = ["read-buffers"]
+wasm = "plugin.wasm"
+
+[settings.tabline]
+type = "boolean"
+default = true
+description = "Show the open buffers in a tab line"

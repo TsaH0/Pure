@@ -203,6 +203,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "bar",
                 "mouse-off",
                 "next-key",
                 "count-commands",
@@ -609,6 +610,26 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     Some("equalize") => w::equalize(),
                     Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
                     _ => Err("which?".into()),
+                }
+            }
+            // `bar statusline|tabline|winbar [view|all] [off]`.
+            "bar" => {
+                use helix::plugin::bars::{self, Bar, Span};
+                let span = |text: &str, scope: &str| Span { text: text.into(), scope: scope.into() };
+                let view = match args.get(1).map(String::as_str) {
+                    None | Some("all") | Some("off") => None,
+                    Some(view) => Some(view.parse::<u64>().map_err(|_| "a view".to_string())?),
+                };
+                let bar = (!args.iter().any(|a| a == "off")).then(|| Bar {
+                    left: vec![span("L%{line}:%{column} %{filename}%{modified}", "#ff8800")],
+                    center: vec![span("C%{lines}", "")],
+                    right: vec![span("%{mode}R 100%%", "ui.statusline.normal")],
+                });
+                match args.first().map(String::as_str) {
+                    Some("statusline") => bars::set_statusline(view, bar.as_ref()),
+                    Some("tabline") => bars::set_tabline(bar.as_ref()),
+                    Some("winbar") => bars::set_winbar(view, bar.as_ref()),
+                    _ => Err("which bar?".into()),
                 }
             }
             // `history` (the tree, in the status) or `history N` (jump).

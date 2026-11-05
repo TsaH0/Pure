@@ -118,6 +118,22 @@ pub enum Step {
     SetMode(Mode),
 }
 
+/// Which bar a plugin sets (API 0.5 `bars`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BarKind {
+    Statusline,
+    Tabline,
+    Winbar,
+}
+
+/// A bar: left, centre and right parts of `(text, scope)` spans.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bar {
+    pub left: Vec<(String, String)>,
+    pub center: Vec<(String, String)>,
+    pub right: Vec<(String, String)>,
+}
+
 /// One revision of a document's undo history (API 0.5 `history`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Revision {
@@ -1188,6 +1204,37 @@ impl State {
             first,
             last,
             fold,
+        });
+        Ok(())
+    }
+    pub(crate) fn set_bar(
+        &mut self,
+        kind: BarKind,
+        view: Option<u64>,
+        bar: Option<Bar>,
+    ) -> Result<(), String> {
+        if let Some(view) = view {
+            if !self.snapshot.views.iter().any(|v| v.id == view) {
+                return Err(format!("no view {view}"));
+            }
+        }
+        if let Some(bar) = &bar {
+            let spans = bar.left.len() + bar.center.len() + bar.right.len();
+            let bytes: usize = [&bar.left, &bar.center, &bar.right]
+                .iter()
+                .flat_map(|part| part.iter())
+                .map(|(text, scope)| text.len() + scope.len())
+                .sum();
+            if spans > 256 || bytes > 16 << 10 {
+                return Err("a bar holds at most 256 spans and 16 KiB".into());
+            }
+        }
+        let plugin = self.plugin.clone();
+        self.actions.push(crate::Action::Bar {
+            plugin,
+            kind,
+            view,
+            bar,
         });
         Ok(())
     }

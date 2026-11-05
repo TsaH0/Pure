@@ -134,6 +134,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     http::stop_plugin(Some(plugin));
     lsp_server::stop_plugin(editor, Some(plugin));
     mouse::stop_plugin(Some(plugin));
+    editor.plugin_bars.clear_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -734,6 +735,7 @@ fn install(
     http::stop_plugin(None);
     lsp_server::stop_plugin(editor, None);
     mouse::stop_plugin(None);
+    editor.plugin_bars.clear_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -1786,6 +1788,75 @@ fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
     snapshot
 }
 
+/// Set (or remove) one of `plugin`'s bars.
+fn set_bar(
+    editor: &mut Editor,
+    plugin: String,
+    kind: helix_plugin::v05::BarKind,
+    view: Option<u64>,
+    bar: Option<helix_plugin::v05::Bar>,
+) {
+    use helix_plugin::v05::BarKind;
+    use helix_view::bars;
+    let spans = |spans: Vec<(String, String)>| {
+        spans
+            .into_iter()
+            .map(|(text, scope)| bars::Span { text, scope })
+            .collect()
+    };
+    let bar = bar.map(|bar| {
+        (
+            plugin.clone(),
+            bars::Bar {
+                left: spans(bar.left),
+                center: spans(bar.center),
+                right: spans(bar.right),
+            },
+        )
+    });
+    let view = match view {
+        Some(number) => match view_by_number(editor, number) {
+            Some(view) => Some(view),
+            None => return,
+        },
+        None => None,
+    };
+    let all = &mut editor.plugin_bars;
+    // Another plugin's bar stays unless this one replaces it.
+    let mine = |slot: &Option<(String, bars::Bar)>| {
+        slot.as_ref().is_none_or(|(owner, _)| *owner == plugin)
+    };
+    match (kind, view) {
+        (BarKind::Statusline, None) if bar.is_some() || mine(&all.statusline) => {
+            all.statusline = bar
+        }
+        (BarKind::Tabline, _) if bar.is_some() || mine(&all.tabline) => all.tabline = bar,
+        (BarKind::Winbar, None) if bar.is_some() || mine(&all.winbar) => all.winbar = bar,
+        (BarKind::Statusline, Some(view)) => set_view_bar(&mut all.statuslines, view, &plugin, bar),
+        (BarKind::Winbar, Some(view)) => set_view_bar(&mut all.winbars, view, &plugin, bar),
+        _ => {}
+    }
+    helix_event::request_redraw();
+}
+
+fn set_view_bar(
+    bars: &mut HashMap<ViewId, (String, helix_view::bars::Bar)>,
+    view: ViewId,
+    plugin: &str,
+    bar: Option<(String, helix_view::bars::Bar)>,
+) {
+    match bar {
+        Some(bar) => {
+            bars.insert(view, bar);
+        }
+        None => {
+            if bars.get(&view).is_some_and(|(owner, _)| owner == plugin) {
+                bars.remove(&view);
+            }
+        }
+    }
+}
+
 /// A call from the editor to `plugin`'s `service`.
 fn editor_call(
     plugin: &str,
@@ -2459,6 +2530,12 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             }
             Action::LanguageServer(action) => lsp_server::apply(editor, action),
             Action::Mouse { plugin, kinds } => mouse::listen(plugin, kinds),
+            Action::Bar {
+                plugin,
+                kind,
+                view,
+                bar,
+            } => set_bar(editor, plugin, kind, view, bar),
             Action::Canvas { doc, lines } => {
                 if let Some(doc) =
                     editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))

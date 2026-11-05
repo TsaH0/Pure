@@ -5025,3 +5025,89 @@ async fn click_example_folds_from_the_gutter() -> anyhow::Result<()> {
     assert_eq!(cursor(&app), 3);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_draw_statuslines_tablines_and_winbars() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    let rows = |app: &Application| screen_rows(app);
+    let statusline = |app: &Application| {
+        let rows = rows(app);
+        rows[rows.len() - 2].clone()
+    };
+    keys(&mut app, ":plugin-run testplugin3/bar statusline<ret>l").await;
+    let line = statusline(&app);
+    assert!(line.starts_with("L1:2 [scratch]"), "{line:?}");
+    assert!(line.contains("C2"), "{line:?}");
+    assert!(line.trim_end().ends_with("NORR 100%"), "{line:?}");
+    // In insert mode, modified.
+    keys(&mut app, "ix").await;
+    assert!(
+        statusline(&app).starts_with("L1:3 [scratch][+]"),
+        "{:?}",
+        statusline(&app)
+    );
+    keys(&mut app, "<esc>").await;
+
+    // A winbar takes the view's top row: the text moves down.
+    let height = app.editor.tree.get(app.editor.tree.focus).area.height;
+    keys(&mut app, ":plugin-run testplugin3/bar winbar<ret>").await;
+    let screen = rows(&app);
+    assert!(screen[0].starts_with("L1:"), "{screen:?}");
+    assert!(screen[1].contains("oxne"), "{screen:?}");
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.height,
+        height - 1
+    );
+    // And a tab line above it.
+    keys(&mut app, ":plugin-run testplugin3/bar tabline<ret>").await;
+    let screen = rows(&app);
+    assert!(
+        screen[0].starts_with("L1:") && screen[1].starts_with("L1:"),
+        "{screen:?}"
+    );
+    assert!(screen[2].contains("oxne"), "{screen:?}");
+
+    // Off again: Pure's own.
+    for bar in ["statusline", "winbar", "tabline"] {
+        keys(
+            &mut app,
+            &format!(":plugin-run testplugin3/bar {bar} off<ret>"),
+        )
+        .await;
+    }
+    let screen = rows(&app);
+    assert!(screen[0].contains("oxne"), "{screen:?}");
+    assert!(!statusline(&app).starts_with('L'), "{:?}", statusline(&app));
+    assert_eq!(
+        app.editor.tree.get(app.editor.tree.focus).area.height,
+        height
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statusbar_example_draws_a_statusline_and_buffer_tabs() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_with_example("statusbar", "");
+    keys(&mut app, "l").await;
+    let rows = screen_rows(&app);
+    let statusline = &rows[rows.len() - 2];
+    assert!(statusline.starts_with(" NOR "), "{statusline:?}");
+    assert!(statusline.trim_end().ends_with("1:2"), "{statusline:?}");
+    assert!(
+        rows[0].contains(" [scratch] ") && rows[0].contains("1 buffers"),
+        "{:?}",
+        rows[0]
+    );
+    keys(&mut app, ":new<ret>").await;
+    let rows = screen_rows(&app);
+    assert!(rows[0].contains("2 buffers"), "{:?}", rows[0]);
+    assert_eq!(rows[0].matches("[scratch]").count(), 2, "{:?}", rows[0]);
+    keys(&mut app, "i").await;
+    let rows = screen_rows(&app);
+    assert!(
+        rows[rows.len() - 2].starts_with(" INS "),
+        "{:?}",
+        rows[rows.len() - 2]
+    );
+    Ok(())
+}

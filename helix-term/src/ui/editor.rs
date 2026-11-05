@@ -94,6 +94,22 @@ impl EditorView {
 
         let view_offset = doc.view_offset(view.id);
 
+        // A plugin's bar above the view.
+        if view.winbar {
+            if let Some(bar) = editor.plugin_bars.winbar(view.id) {
+                let row = Rect::new(area.x, area.y.saturating_sub(1), area.width, 1);
+                let base = theme
+                    .try_get("ui.winbar")
+                    .unwrap_or_else(|| theme.get("ui.statusline.inactive"));
+                let base = if is_focused {
+                    theme.try_get("ui.winbar.active").unwrap_or(base)
+                } else {
+                    base
+                };
+                crate::ui::bars::render(editor, Some((doc, view)), bar, row, surface, base);
+            }
+        }
+
         // A plugin draws this buffer itself.
         if let Some(canvas) = &doc.plugin_canvas {
             let lines_area = area.clip_bottom(1);
@@ -2137,11 +2153,12 @@ impl Component for EditorView {
 
         // check if bufferline should be rendered
         use helix_view::editor::BufferLine;
-        let use_bufferline = match config.bufferline {
-            BufferLine::Always => true,
-            BufferLine::Multiple if cx.editor.documents.len() > 1 => true,
-            _ => false,
-        };
+        let use_bufferline = cx.editor.plugin_bars.tabline.is_some()
+            || match config.bufferline {
+                BufferLine::Always => true,
+                BufferLine::Multiple if cx.editor.documents.len() > 1 => true,
+                _ => false,
+            };
 
         // -1 for commandline and -1 for bufferline
         let mut editor_area = area.clip_bottom(1);
@@ -2163,7 +2180,18 @@ impl Component for EditorView {
         // if the terminal size suddenly changed, we need to trigger a resize
         cx.editor.resize(editor_area);
 
-        if use_bufferline {
+        if let Some((_, bar)) = &cx.editor.plugin_bars.tabline {
+            let editor = &*cx.editor;
+            let at = {
+                let view = editor.tree.get(editor.tree.focus);
+                editor.document(view.doc).map(|doc| (doc, view))
+            };
+            let theme = &editor.theme;
+            let base = theme
+                .try_get("ui.bufferline.background")
+                .unwrap_or_else(|| theme.get("ui.statusline"));
+            crate::ui::bars::render(editor, at, bar, area.with_height(1), surface, base);
+        } else if use_bufferline {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
         }
 
