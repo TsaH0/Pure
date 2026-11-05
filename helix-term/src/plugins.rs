@@ -2057,6 +2057,13 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
             Default::default()
         },
         debug: debug::state(editor),
+        #[cfg(unix)]
+        terminals: crate::terminal::plugin_terminals()
+            .into_iter()
+            .map(|(id, owner, read)| helix_plugin::v05::TerminalHandle { id, owner, read })
+            .collect(),
+        #[cfg(not(unix))]
+        terminals: Vec::new(),
     }
 }
 
@@ -2621,6 +2628,35 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 debug::set_breakpoints(editor, path, breakpoints)
             }
             Action::DebugListen { plugin, events } => debug::listen(plugin, events),
+            #[cfg(unix)]
+            Action::TerminalOpen {
+                plugin,
+                id,
+                argv,
+                split,
+            } => {
+                use helix_view::editor::Action as Open;
+                let action = match split {
+                    Some(true) => Open::HorizontalSplit,
+                    Some(false) => Open::VerticalSplit,
+                    None => Open::Replace,
+                };
+                match crate::terminal::open_as(editor, &argv, action, Some(id), Some(plugin)) {
+                    // As `:terminal`: ready to type in.
+                    Ok(_) => editor.mode = Mode::Insert,
+                    Err(err) => editor.set_error(err.to_string()),
+                }
+            }
+            #[cfg(unix)]
+            Action::TerminalWrite { id, data } => {
+                crate::terminal::write(id, data.as_bytes());
+            }
+            #[cfg(unix)]
+            Action::TerminalClose(id) => crate::terminal::close_with_buffer(editor, id),
+            #[cfg(not(unix))]
+            Action::TerminalOpen { .. }
+            | Action::TerminalWrite { .. }
+            | Action::TerminalClose(_) => editor.set_error("terminals need a Unix system"),
             Action::Bar {
                 plugin,
                 kind,

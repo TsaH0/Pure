@@ -1329,6 +1329,28 @@ interface debug {
   listen: func(events: list<string>) -> result<_, string>;
 }
 
+/// API 0.5: terminals (`:terminal`) a plugin opens: a program on a
+/// pseudo-terminal, drawn in a view; in insert mode the user's keys go to
+/// it. Needs `process` and `allow-process` for the program (for the
+/// user's shell when none is given). A plugin sees only its own
+/// terminals.
+interface terminal {
+  use windows.{side};
+
+  /// Open a terminal running `argv` (the user's shell when empty) in a
+  /// split at `side`, or in place of the focused view; its id. It starts
+  /// after the call.
+  open: func(argv: list<string>, side: option<side>) -> result<u32, string>;
+  /// Send `data` to the program, as if typed ("\r" is Enter).
+  write: func(id: u32, data: string) -> result<_, string>;
+  /// The screen's rows, as text.
+  screen: func(id: u32) -> result<list<string>, string>;
+  /// The program's exit status once it ended.
+  exit-status: func(id: u32) -> result<option<s32>, string>;
+  /// Close it: its buffer goes and its program is ended.
+  close: func(id: u32) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1367,6 +1389,7 @@ world helix-plugin {
   import mouse;
   import bars;
   import debug;
+  import terminal;
   export plugin;
   export callbacks;
   export events;

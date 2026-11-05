@@ -27,4 +27,6 @@ mod test {
     mod registers;
     mod splits;
     mod substitute;
+    #[cfg(unix)]
+    mod terminal;
 }

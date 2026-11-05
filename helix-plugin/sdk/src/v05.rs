@@ -422,6 +422,11 @@ pub mod lsp {
     }
 }
 
+/// Terminals: open one running a program, write to it, read its screen.
+pub mod terminal {
+    pub use super::plugin::terminal::*;
+}
+
 /// The debugger: session, breakpoints, requests and events.
 pub mod debug {
     use super::*;

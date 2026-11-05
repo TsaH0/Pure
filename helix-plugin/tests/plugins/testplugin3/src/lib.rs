@@ -208,6 +208,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "term",
                 "debug",
                 "layers",
                 "bar",
@@ -730,6 +731,29 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     }
                     _ => Err("which?".into()),
                 }
+            }
+            // `term open ARGV...`, `term write ID TEXT` (Enter after it),
+            // `term screen ID`, `term exit ID`, `term close ID`.
+            "term" => {
+                use helix::plugin::terminal;
+                let id = |i: usize| -> Result<u32, String> {
+                    args.get(i).ok_or("an id")?.parse().map_err(|_| "an id".to_string())
+                };
+                match args.first().map(String::as_str) {
+                    Some("open") => {
+                        let id = terminal::open(&args[1..], Some(helix::plugin::windows::Side::Below))?;
+                        host::set_status(&format!("term:{id}"));
+                    }
+                    Some("write") => terminal::write(id(1)?, &format!("{}\r", args[2..].join(" ")))?,
+                    Some("screen") => {
+                        let rows = terminal::screen(id(1)?)?;
+                        host::set_status(&format!("screen:{}", rows.join("|").trim_end_matches('|')));
+                    }
+                    Some("exit") => host::set_status(&format!("exit:{:?}", terminal::exit_status(id(1)?)?)),
+                    Some("close") => terminal::close(id(1)?)?,
+                    _ => return Err("which?".into()),
+                }
+                Ok(())
             }
             // `history` (the tree, in the status) or `history N` (jump).
             "history" => {

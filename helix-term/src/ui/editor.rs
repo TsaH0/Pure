@@ -110,6 +110,31 @@ impl EditorView {
             }
         }
 
+        // A terminal.
+        #[cfg(unix)]
+        if let Some(id) = doc.terminal {
+            let lines_area = area.clip_bottom(1);
+            let cursor = (is_focused && editor.mode() == Mode::Insert).then(|| {
+                theme
+                    .get("ui.cursor.primary")
+                    .add_modifier(helix_view::graphics::Modifier::REVERSED)
+            });
+            crate::terminal::render(id, lines_area, surface, theme.get("ui.background"), cursor);
+            if viewport.right() != view.area.right() {
+                let border_style = theme.get("ui.window");
+                for y in area.top()..area.bottom() {
+                    surface[(area.right(), y)]
+                        .set_symbol(tui::symbols::line::VERTICAL)
+                        .set_style(border_style);
+                }
+            }
+            let statusline_area = area.clip_top(area.height.saturating_sub(1)).clip_bottom(1);
+            let mut context =
+                statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
+            statusline::render(&mut context, statusline_area, surface);
+            return;
+        }
+
         // A plugin draws this buffer itself.
         if let Some(canvas) = &doc.plugin_canvas {
             let lines_area = area.clip_bottom(1);
@@ -1639,7 +1664,6 @@ impl EditorView {
         if crate::plugins::mouse_event(cxt.editor, cxt.jobs, event) {
             return EventResult::Consumed(None);
         }
-
         let config = cxt.editor.config();
         let MouseEvent {
             kind,
@@ -1648,6 +1672,32 @@ impl EditorView {
             modifiers,
             ..
         } = *event;
+
+        // The wheel scrolls a terminal through what went off its top.
+        #[cfg(unix)]
+        if let MouseEventKind::ScrollUp | MouseEventKind::ScrollDown = kind {
+            let terminal = cxt.editor.tree.views().find_map(|(view, _)| {
+                let area = view.area;
+                let inside = row >= area.top()
+                    && row < area.bottom()
+                    && column >= area.left()
+                    && column < area.right();
+                inside
+                    .then(|| cxt.editor.documents.get(&view.doc)?.terminal)
+                    .flatten()
+            });
+            if let Some(id) = terminal {
+                crate::terminal::scroll(
+                    id,
+                    if kind == MouseEventKind::ScrollUp {
+                        3
+                    } else {
+                        -3
+                    },
+                );
+                return EventResult::Consumed(None);
+            }
+        }
 
         let pos_and_view = |editor: &Editor, row, column, ignore_virtual_text| {
             editor.tree.views().find_map(|(view, _focus)| {
@@ -1904,6 +1954,10 @@ impl Component for EditorView {
         };
 
         match event {
+            #[cfg(unix)]
+            Event::Paste(contents) if crate::terminal::handle_paste(cx.editor, contents) => {
+                EventResult::Consumed(None)
+            }
             Event::Paste(contents) => {
                 self.handle_non_key_input(&mut cx);
                 cx.count = cx.editor.count;
@@ -1931,6 +1985,12 @@ impl Component for EditorView {
             Event::Key(mut key) => {
                 cx.editor.reset_idle_timer();
                 canonicalize_key(&mut key);
+
+                // In insert mode a terminal takes every key.
+                #[cfg(unix)]
+                if crate::terminal::handle_key(cx.editor, key) {
+                    return EventResult::Consumed(None);
+                }
 
                 // A focused panel takes its keys.
                 let focused = cx.editor.panels.iter().find(|p| p.focused).map(|p| p.dock);

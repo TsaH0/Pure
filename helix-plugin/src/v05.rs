@@ -3,7 +3,7 @@
 
 use crate::{DocumentId, Mode, State};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// Where a plugin key binding sits among the keymaps.
@@ -117,6 +117,30 @@ pub enum Step {
     },
     SetMode(Mode),
 }
+
+/// A terminal a plugin opened, as snapshots carry it: its screen is read
+/// when asked for.
+#[derive(Clone)]
+pub struct TerminalHandle {
+    pub id: u32,
+    pub owner: String,
+    /// The screen's rows and the exit status, if it ended.
+    pub read: Arc<dyn Fn() -> Option<(Vec<String>, Option<i32>)> + Send + Sync>,
+}
+
+impl std::fmt::Debug for TerminalHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalHandle")
+            .field("id", &self.id)
+            .field("owner", &self.owner)
+            .finish()
+    }
+}
+
+/// Terminals plugins open are numbered from here; the editor's own are
+/// below.
+pub const PLUGIN_TERMINALS: u32 = 1 << 31;
+static NEXT_TERMINAL: AtomicU32 = AtomicU32::new(PLUGIN_TERMINALS);
 
 /// The debugger as plugins see it (API 0.5 `debug`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1260,6 +1284,66 @@ impl State {
             last,
             fold,
         });
+        Ok(())
+    }
+    pub(crate) fn terminal_open(
+        &mut self,
+        argv: Vec<String>,
+        split: Option<bool>,
+    ) -> Result<u32, String> {
+        // The shell when no program is given: it needs the grant too.
+        let program = if argv.is_empty() {
+            vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".into())]
+        } else {
+            argv.clone()
+        };
+        self.need_process(&program)?;
+        if argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 64 << 10 {
+            return Err("at most 256 arguments and 64 KiB".into());
+        }
+        let id = NEXT_TERMINAL.fetch_add(1, Ordering::Relaxed);
+        self.actions.push(crate::Action::TerminalOpen {
+            plugin: self.plugin.clone(),
+            id,
+            argv,
+            split,
+        });
+        Ok(id)
+    }
+    fn own_terminal(&self, id: u32) -> Result<&TerminalHandle, String> {
+        self.snapshot
+            .terminals
+            .iter()
+            .find(|terminal| terminal.id == id && terminal.owner == self.plugin)
+            .ok_or_else(|| format!("no terminal {id} of this plugin's"))
+    }
+    pub(crate) fn terminal_write(&mut self, id: u32, data: String) -> Result<(), String> {
+        self.need(crate::Permission::Process)?;
+        // A terminal opened in this call isn't in the snapshot yet.
+        let opened_now = self.actions.iter().any(
+            |action| matches!(action, crate::Action::TerminalOpen { id: opened, .. } if *opened == id),
+        );
+        if !opened_now {
+            self.own_terminal(id)?;
+        }
+        if data.len() > 1 << 20 {
+            return Err("at most 1 MiB at a time".into());
+        }
+        self.actions.push(crate::Action::TerminalWrite { id, data });
+        Ok(())
+    }
+    pub(crate) fn terminal_screen(
+        &mut self,
+        id: u32,
+    ) -> Result<(Vec<String>, Option<i32>), String> {
+        self.need(crate::Permission::Process)?;
+        let terminal = self.own_terminal(id)?;
+        (terminal.read)().ok_or_else(|| format!("terminal {id} is closed"))
+    }
+    pub(crate) fn terminal_close(&mut self, id: u32) -> Result<(), String> {
+        self.need(crate::Permission::Process)?;
+        self.own_terminal(id)?;
+        self.actions.push(crate::Action::TerminalClose(id));
         Ok(())
     }
     pub(crate) fn debug_state(&mut self) -> Result<DebugState, String> {

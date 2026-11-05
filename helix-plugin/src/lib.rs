@@ -593,6 +593,8 @@ pub struct Snapshot {
     /// The debugger and the breakpoints (API 0.5 `debug`), filled in only
     /// while an API 0.5 plugin has the `debug` permission.
     pub debug: Option<v05::DebugState>,
+    /// The terminals plugins opened (API 0.5 `terminal`).
+    pub terminals: Vec<v05::TerminalHandle>,
 }
 
 impl Default for Snapshot {
@@ -610,6 +612,7 @@ impl Default for Snapshot {
             views: Vec::new(),
             ui: v05::UiState::default(),
             debug: None,
+            terminals: Vec::new(),
         }
     }
 }
@@ -690,6 +693,19 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Open a terminal running `argv` (API 0.5 `terminal.open`), in a split
+    /// (`below`, or to the right) or in place of the focused view.
+    TerminalOpen {
+        plugin: String,
+        id: u32,
+        argv: Vec<String>,
+        split: Option<bool>,
+    },
+    TerminalWrite {
+        id: u32,
+        data: String,
+    },
+    TerminalClose(u32),
     /// A raw request to the debugger (API 0.5 `debug.request`); the reply
     /// goes to `callbacks2.on-lsp-reply`.
     DebugRequest {

@@ -289,6 +289,35 @@ mod folds_impl {
     }
 }
 
+mod terminal_impl {
+    use super::*;
+    use v0_5::helix::plugin::terminal::Host;
+    use v0_5::helix::plugin::windows::Side;
+
+    impl Host for State {
+        fn open(
+            &mut self,
+            argv: Vec<String>,
+            side: Option<Side>,
+        ) -> std::result::Result<u32, String> {
+            let split = side.map(|side| matches!(side, Side::Below));
+            self.terminal_open(argv, split)
+        }
+        fn write(&mut self, id: u32, data: String) -> std::result::Result<(), String> {
+            self.terminal_write(id, data)
+        }
+        fn screen(&mut self, id: u32) -> std::result::Result<Vec<String>, String> {
+            Ok(self.terminal_screen(id)?.0)
+        }
+        fn exit_status(&mut self, id: u32) -> std::result::Result<Option<i32>, String> {
+            Ok(self.terminal_screen(id)?.1)
+        }
+        fn close(&mut self, id: u32) -> std::result::Result<(), String> {
+            self.terminal_close(id)
+        }
+    }
+}
+
 mod debug_impl {
     use super::*;
     use crate::v05::BreakpointInfo;

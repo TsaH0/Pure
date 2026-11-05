@@ -57,6 +57,7 @@ Ready-made examples are in
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `find-char` | `f`, `F`, `t`, `T` like Vim's: on the cursor's line, optional smart case; `repeat` and `repeat-reverse` (bind them to `;` and `,` if you like) |
 | `vim-registers` | Vim's numbered registers (`"0`, `"1`–`"9`, `"-`), done by a plugin; the same as `editor.registers = "vim"` |
+| `toggleterm` | Like toggleterm and vim-slime: `space t` opens a terminal below (your shell, or the `command` setting, e.g. a REPL) and closes it; `space ;` sends the selections or the line to it (needs `allow-process`) |
 | `dap-ui` | Like nvim-dap-ui: while the program you debug is stopped, a panel below shows its stack and local variables (needs `allow-debug = true`) |
 | `statusbar` | Like lualine and bufferline: a statusline in the mode's colours (mode, branch, file, diagnostics, language, position) and a tab line of the open buffers (`tabline = false` turns it off) |
 | `click` | Mouse actions: ctrl+click goes to the definition, alt+click to the references, a click on the gutter folds or unfolds the block there |
@@ -144,6 +145,15 @@ with its register and count, to add to it or cancel it (`vim-registers`).
 A plugin can take over a whole menu key (`g`, `z`, `Z`, `space`...) too,
 unless you have bound something in that menu yourself: then your menu
 stays.
+
+`:terminal` (or `:term`) opens a terminal in a split below, running your
+shell or the program given (`:terminal python3`), like Neovim's. In insert
+mode every key goes to the program, Esc included, so vim, htop or a REPL
+work inside it; `C-\ C-n` goes back to normal mode, where the editor's
+keys work again (`C-w k` to the window above, `i` to type again). It
+follows the split's size, the mouse wheel scrolls back through what went
+off its top, and closing its buffer (`:buffer-close`) ends the program.
+Plugins can open terminals and write to them (`toggleterm`).
 
 Code can be folded, like Vim: `zc` (or `zf`) folds the selected lines, or
 the syntax node around the cursor (a function, a block; the indented lines

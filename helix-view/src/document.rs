@@ -227,6 +227,9 @@ pub struct Document {
     /// Lines the owning plugin draws instead of the text: `(text, scope)`
     /// spans each (plugin API 0.5 `windows.set-canvas`).
     pub plugin_canvas: Option<Vec<Vec<(String, String)>>>,
+    /// The terminal (`:terminal`) this document shows in place of its
+    /// text.
+    pub terminal: Option<u32>,
 
     pub previous_diagnostic_ids: HashMap<LanguageServerId, String>,
 
@@ -781,6 +784,7 @@ impl Document {
             name: None,
             plugin_owner: None,
             plugin_canvas: None,
+            terminal: None,
             folds: Vec::new(),
             jump_labels: HashMap::new(),
             document_highlights: HashMap::new(),
@@ -1909,7 +1913,9 @@ impl Document {
             self.last_saved_revision,
             current_revision
         );
-        current_revision != self.last_saved_revision || !self.changes.is_empty()
+        // A terminal's text isn't shown: nothing in it to lose.
+        self.terminal.is_none()
+            && (current_revision != self.last_saved_revision || !self.changes.is_empty())
     }
 
     /// Save modifications to history, and so [`Self::is_modified`] will return false.

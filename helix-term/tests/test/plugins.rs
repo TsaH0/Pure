@@ -5238,7 +5238,7 @@ async fn plugins_see_and_drive_the_debugger() -> anyhow::Result<()> {
         &format!(":debug-start binary {}<ret>", program.display()),
     )
     .await;
-    let mut wait_for_line = async |app: &mut Application, line: u32| {
+    let wait_for_line = async |app: &mut Application, line: u32| {
         let mut session = String::new();
         for _ in 0..100 {
             keys(app, ":plugin-run testplugin3/debug session<ret>").await;
@@ -5313,5 +5313,111 @@ async fn dap_ui_example_shows_the_stack_and_locals() -> anyhow::Result<()> {
     .await;
     assert!(panel(&app).contains("main  main.c:3"), "{}", panel(&app));
     keys(&mut app, "<space>Gt").await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_open_and_drive_terminals() -> anyhow::Result<()> {
+    // Without the grant for the program: refused.
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = [\"cat\"]\n",
+    );
+    keys(&mut app, ":plugin-run testplugin3/term open sh<ret>").await;
+    assert_error(&app, "sh");
+    keys(&mut app, ":plugin-run testplugin3/term screen 1<ret>").await;
+    assert_error(&app, "no terminal 1 of this plugin's");
+
+    let (mut app, _dir) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""process""#,
+        "[testplugin3]\nallow-process = [\"sh\"]\n",
+    );
+    keys(
+        &mut app,
+        ":plugin-run testplugin3/term open sh -c \"echo ready; exec cat\"<ret>",
+    )
+    .await;
+    let id = status_after(&status(&app).0, "term:").to_string();
+    assert_eq!(app.editor.tree.views().count(), 2);
+    // It starts in insert mode, taking the keys: give them back.
+    assert_eq!(app.editor.mode(), helix_view::document::Mode::Insert);
+    keys(&mut app, "<C-\\><C-n>").await;
+    let screen = async |app: &mut Application| {
+        keys(
+            app,
+            &format!(":plugin-run testplugin3/term screen {id}<ret>"),
+        )
+        .await;
+        status(app).0
+    };
+    let mut rows = String::new();
+    for _ in 0..100 {
+        rows = screen(&mut app).await;
+        if rows.contains("ready") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert!(rows.starts_with("screen:ready"), "{rows}");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term write {id} from the plugin<ret>"),
+    )
+    .await;
+    for _ in 0..100 {
+        rows = screen(&mut app).await;
+        if rows.matches("from the plugin").count() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    assert_eq!(rows, "screen:ready|from the plugin|from the plugin");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term exit {id}<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, "exit:None");
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term close {id}<ret>"),
+    )
+    .await;
+    assert_eq!(app.editor.tree.views().count(), 1);
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/term screen {id}<ret>"),
+    )
+    .await;
+    assert_error(&app, "no terminal");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn toggleterm_example_opens_closes_and_sends() -> anyhow::Result<()> {
+    let settings = "[toggleterm]\nallow-process = [\"sh\"]\ncommand = [\"sh\"]\n";
+    let (mut app, _dir) = app_with_example("toggleterm", settings);
+    keys(&mut app, "%cecho sent-from-the-buffer<esc>").await;
+    keys(&mut app, "<space>t").await;
+    assert_eq!(app.editor.tree.views().count(), 2);
+    // Back to the buffer, then its line goes to the terminal.
+    keys(&mut app, "<C-\\><C-n><C-w>k<space>;").await;
+    wait_for(&mut app, |app| {
+        let rows = screen_rows(app);
+        // Typed (echoed), then printed by echo.
+        (rows
+            .iter()
+            .filter(|row| row.contains("sent-from-the-buffer"))
+            .count()
+            >= 2)
+            .then_some(())
+    })
+    .await;
+    keys(&mut app, "<space>t").await;
+    assert_eq!(app.editor.tree.views().count(), 1);
     Ok(())
 }
