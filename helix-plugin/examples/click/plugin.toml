@@ -1,0 +1,6 @@
+name = "click"
+version = "0.1.0"
+api = "0.5"
+description = "Mouse actions: ctrl+click goes to the definition, a click on the gutter folds"
+permissions = ["read-buffers", "run-commands"]
+wasm = "plugin.wasm"

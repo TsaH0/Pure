@@ -1191,6 +1191,22 @@ impl State {
         });
         Ok(())
     }
+    pub(crate) fn mouse_listen(&mut self, kinds: Vec<String>) -> Result<(), String> {
+        if !kinds.is_empty() {
+            self.need_own_service("mouse", "mouse.listen")?;
+        }
+        if let Some(bad) = kinds
+            .iter()
+            .find(|kind| !["down", "up", "drag", "scroll"].contains(&kind.as_str()))
+        {
+            return Err(format!(
+                "unknown mouse event '{bad}': down, up, drag or scroll"
+            ));
+        }
+        let plugin = self.plugin.clone();
+        self.actions.push(crate::Action::Mouse { plugin, kinds });
+        Ok(())
+    }
     pub(crate) fn history(&mut self, doc: DocumentId) -> Result<crate::History, String> {
         self.need(crate::Permission::ReadBuffers)?;
         Ok(self
@@ -2244,18 +2260,20 @@ impl crate::PluginHost {
             call.method.clone(),
             call.payload.clone(),
         );
-        let result = plugin.call(
-            snapshot.clone(),
-            crate::CallContext::Event,
-            limit,
-            move |guest, store| {
-                Box::pin(async move {
-                    guest
-                        .call_service(store, &caller, &service, &method, &payload)
-                        .await
-                })
-            },
-        );
+        // A click is the user's, like a key: the plugin may show UI and
+        // run commands, as from its key bindings.
+        let context = if call.caller == "editor" && call.service == "mouse" {
+            crate::CallContext::Callback
+        } else {
+            crate::CallContext::Event
+        };
+        let result = plugin.call(snapshot.clone(), context, limit, move |guest, store| {
+            Box::pin(async move {
+                guest
+                    .call_service(store, &caller, &service, &method, &payload)
+                    .await
+            })
+        });
         plugin.store.data_mut().v05.chain.clear();
         match result {
             Ok((Ok(reply), actions)) => match check_json("the reply", &reply) {

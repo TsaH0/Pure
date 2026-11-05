@@ -132,6 +132,12 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             helix::plugin::services::register("lsp-notification", "1.0.0", &[])?;
             helix::plugin::lsp::listen(&["window/logMessage".to_string()])?;
         }
+        // Clicks and scrolls, in the status; with `mouse-take` taken from
+        // the editor.
+        if config.contains("mouse") {
+            helix::plugin::services::register("mouse", "1.0.0", &[])?;
+            helix::plugin::mouse::listen(&["down".to_string(), "scroll".to_string()])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -197,6 +203,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "mouse-off",
                 "next-key",
                 "count-commands",
                 "call",
@@ -742,6 +749,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 host::set_status(&format!("discovered:{}", found.join(",")));
                 Ok(())
             }
+            "mouse-off" => helix::plugin::mouse::listen(&[]),
             "register-late" => helix::plugin::services::register("late", "1.0.0", &[]),
             "mark" => {
                 // mark position before|after
@@ -1317,6 +1325,11 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
             }
             "testplugin3.lsp-filter" => {
                 return Ok(r#"{"contents": {"kind": "markdown", "value": "filtered"}}"#.into());
+            }
+            "testplugin3.mouse" => {
+                host::set_status(&format!("mouse:{method}:{payload}"));
+                let take = CONFIG.with_borrow(|config| config.contains("mouse-take"));
+                return Ok(take.to_string());
             }
             "testplugin3.lsp-notification" => {
                 host::set_status(&format!("notified:{method}"));

@@ -24,6 +24,7 @@ pub use install::{install_command, remove_command, update_command};
 mod http;
 mod listen;
 mod lsp_server;
+mod mouse;
 mod picker;
 mod popup;
 mod process;
@@ -132,6 +133,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     watch::stop_plugin(Some(plugin));
     http::stop_plugin(Some(plugin));
     lsp_server::stop_plugin(editor, Some(plugin));
+    mouse::stop_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
     for doc in editor.documents.values_mut() {
@@ -731,6 +733,7 @@ fn install(
     watch::stop_plugin(None);
     http::stop_plugin(None);
     lsp_server::stop_plugin(editor, None);
+    mouse::stop_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
         EVENT_KINDS
@@ -1783,6 +1786,49 @@ fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
     snapshot
 }
 
+/// A call from the editor to `plugin`'s `service`.
+fn editor_call(
+    plugin: &str,
+    service: &str,
+    method: &str,
+    payload: String,
+) -> helix_plugin::v05::ServiceCall {
+    helix_plugin::v05::ServiceCall {
+        caller: "editor".into(),
+        id: 0,
+        provider: plugin.into(),
+        service: service.into(),
+        method: method.into(),
+        payload,
+        chain: Vec::new(),
+    }
+}
+
+/// Make `call` now and apply what the plugin asked for; its reply.
+fn serve_now(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    call: &helix_plugin::v05::ServiceCall,
+) -> Result<String, String> {
+    let snapshot = snapshot(editor);
+    match with_host(|host| host.serve(call, &snapshot)) {
+        Some((reply, actions)) => {
+            apply(editor, Some(jobs), actions);
+            reply
+        }
+        None => Err("plugins aren't loaded".into()),
+    }
+}
+
+/// Tell plugins about a mouse event; whether one took it.
+pub fn mouse_event(
+    editor: &mut Editor,
+    jobs: &mut Jobs,
+    event: &helix_view::input::MouseEvent,
+) -> bool {
+    mouse::handle(editor, jobs, event)
+}
+
 /// What plugins can see of the editor. Cheap: ropes are reference counted.
 pub fn snapshot(editor: &Editor) -> Snapshot {
     let (views, ui) = views_and_ui(editor);
@@ -2412,6 +2458,7 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 }
             }
             Action::LanguageServer(action) => lsp_server::apply(editor, action),
+            Action::Mouse { plugin, kinds } => mouse::listen(plugin, kinds),
             Action::Canvas { doc, lines } => {
                 if let Some(doc) =
                     editor_doc_id(editor, doc).and_then(|doc| editor.documents.get_mut(&doc))

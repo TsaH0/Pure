@@ -156,23 +156,10 @@ pub fn notification(server: &str, method: &str, params: &Value) {
     }
     let payload = json!({ "server": server, "params": params }).to_string();
     for plugin in listeners {
-        let call = editor_call(&plugin, "lsp-notification", method, payload.clone());
+        let call = super::editor_call(&plugin, "lsp-notification", method, payload.clone());
         tokio::spawn(async move {
             let _ = serve(call).await;
         });
-    }
-}
-
-/// A call from the editor to `plugin`'s `service`.
-fn editor_call(plugin: &str, service: &str, method: &str, payload: String) -> ServiceCall {
-    ServiceCall {
-        caller: "editor".into(),
-        id: 0,
-        provider: plugin.into(),
-        service: service.into(),
-        method: method.into(),
-        payload,
-        chain: Vec::new(),
     }
 }
 
@@ -215,7 +202,7 @@ fn filter_reply(
     tokio::spawn(async move {
         for plugin in plugins {
             let payload = json!({ "server": server, "result": result }).to_string();
-            match serve(editor_call(&plugin, "lsp-filter", &method, payload)).await {
+            match serve(super::editor_call(&plugin, "lsp-filter", &method, payload)).await {
                 Ok(changed) => match serde_json::from_str(&changed) {
                     Ok(changed) => result = changed,
                     Err(err) => log::warn!("{plugin}: lsp-filter reply for {method}: {err}"),
@@ -276,14 +263,16 @@ async fn run(name: String, stream: tokio::io::DuplexStream) {
                 let out = out.clone();
                 tokio::spawn(async move {
                     let reply = match plugin {
-                        Some(plugin) => {
-                            serve(editor_call(&plugin, "lsp", &method, params.to_string()))
-                                .await
-                                .and_then(|reply| {
-                                    serde_json::from_str::<Value>(&reply)
-                                        .map_err(|err| err.to_string())
-                                })
-                        }
+                        Some(plugin) => serve(super::editor_call(
+                            &plugin,
+                            "lsp",
+                            &method,
+                            params.to_string(),
+                        ))
+                        .await
+                        .and_then(|reply| {
+                            serde_json::from_str::<Value>(&reply).map_err(|err| err.to_string())
+                        }),
                         None => Err("the plugin is gone".into()),
                     };
                     let message = match reply {

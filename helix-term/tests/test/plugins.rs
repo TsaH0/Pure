@@ -4922,3 +4922,106 @@ async fn plugins_read_the_undo_tree_and_jump_in_it() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Send a mouse event at `row`, `column` of the screen.
+#[cfg(not(windows))]
+async fn mouse(app: &mut Application, kind: termina::event::MouseEventKind, row: u16, column: u16) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+    tx.send(Ok(termina::event::Event::Mouse(
+        termina::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: termina::event::Modifiers::NONE,
+        },
+    )))
+    .unwrap();
+    assert!(app.event_loop_until_idle(&mut stream).await);
+}
+
+/// Where char `pos` of the first line is on the screen.
+#[cfg(not(windows))]
+fn screen_pos(app: &Application, pos: u16) -> (u16, u16) {
+    let (view, doc) = helix_view::current_ref!(app.editor);
+    (
+        view.area.top(),
+        view.area.left() + view.gutter_offset(doc) + pos,
+    )
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_hear_and_take_mouse_events() -> anyhow::Result<()> {
+    use termina::event::{MouseButton, MouseEventKind};
+    let left = MouseEventKind::Down(MouseButton::Left);
+
+    // Heard, then the editor moves the cursor as usual.
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "[testplugin3]\nmouse = true\n");
+    let (row, column) = screen_pos(&app, 4);
+    mouse(&mut app, left, row, column).await;
+    let (heard, _) = status(&app);
+    assert!(heard.starts_with("mouse:down:"), "{heard}");
+    for part in [
+        r#""pos":4"#,
+        r#""line":0"#,
+        r#""gutter":false"#,
+        r#""button":"left""#,
+    ] {
+        assert!(heard.contains(part), "{part} in {heard}");
+    }
+    assert_eq!(cursor(&app), 4);
+    // On the gutter: no position, but the line.
+    let (row, _) = screen_pos(&app, 0);
+    mouse(&mut app, left, row, 0).await;
+    let (heard, _) = status(&app);
+    assert!(
+        heard.contains(r#""gutter":true"#) && heard.contains(r#""pos":null"#),
+        "{heard}"
+    );
+    assert!(heard.contains(r#""line":0"#), "{heard}");
+    mouse(&mut app, MouseEventKind::ScrollDown, row, column).await;
+    assert!(
+        status(&app).0.contains(r#""direction":"down""#),
+        "{}",
+        status(&app).0
+    );
+    // Kinds not listened to aren't heard (and a click clears the status).
+    mouse(&mut app, MouseEventKind::Up(MouseButton::Left), row, column).await;
+    assert!(app.editor.get_status().is_none());
+    keys(&mut app, ":plugin-run testplugin3/mouse-off<ret>").await;
+    mouse(&mut app, left, row, column).await;
+    assert!(app.editor.get_status().is_none());
+
+    // Taken: the cursor stays.
+    let (mut app, _dir) = app_v5(
+        "#[o|]#ne two\n",
+        None,
+        "[testplugin3]\nmouse = true\nmouse-take = true\n",
+    );
+    let (row, column) = screen_pos(&app, 4);
+    mouse(&mut app, left, row, column).await;
+    assert!(status(&app).0.starts_with("mouse:down:"));
+    assert_eq!(cursor(&app), 0);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tokio::test(flavor = "multi_thread")]
+async fn click_example_folds_from_the_gutter() -> anyhow::Result<()> {
+    use termina::event::{MouseButton, MouseEventKind};
+    let left = MouseEventKind::Down(MouseButton::Left);
+    let (mut app, _dir) = app_with_example("click", "");
+    keys(&mut app, "%ca<ret>  b<ret>c<esc>gg").await;
+    let folds = |app: &Application| helix_view::doc!(app.editor).folds.len();
+    let (row, _) = screen_pos(&app, 0);
+    mouse(&mut app, left, row, 0).await;
+    assert_eq!(folds(&app), 1, "{:?}", app.editor.get_status());
+    mouse(&mut app, left, row, 0).await;
+    assert_eq!(folds(&app), 0);
+    // A plain click is the editor's: it moves the cursor.
+    let (row, column) = screen_pos(&app, 1);
+    mouse(&mut app, left, row + 1, column).await;
+    assert_eq!(cursor(&app), 3);
+    Ok(())
+}

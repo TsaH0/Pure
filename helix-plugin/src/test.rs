@@ -155,6 +155,7 @@ fn manifest_parsing() {
         err("name = \"Bad Name\"\nversion = \"1\"\napi = \"0.1\"").contains("invalid plugin name")
     );
     assert!(err("name = \"x\"\nversion = \"1\"\napi = \"9.9\"").contains("needs plugin API 9.9"));
+    assert!(err("name = \"editor\"\nversion = \"1\"\napi = \"0.5\"").contains("reserved"));
     assert!(
         err("name = \"x\"\nversion = \"1\"\napi = \"0.1\"\nunknown = 1").contains("unknown field")
     );

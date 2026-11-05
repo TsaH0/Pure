@@ -461,6 +461,10 @@ impl Manifest {
                 manifest.name
             );
         }
+        // Services see the editor's own calls as coming from "editor".
+        if manifest.name == "editor" {
+            bail!("the plugin name 'editor' is reserved");
+        }
         if !matches!(manifest.api.as_str(), "0.1" | "0.2" | "0.3" | "0.4" | "0.5") {
             bail!(
                 "plugin '{}' needs plugin API {} but this Pure supports 0.1 to 0.5",
@@ -659,6 +663,12 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Hear these kinds of mouse events through the plugin's "mouse"
+    /// service (API 0.5 `mouse.listen`); none stops.
+    Mouse {
+        plugin: String,
+        kinds: Vec<String>,
+    },
     /// Make a document's text that of one of its revisions (API 0.5
     /// `history.jump`).
     HistoryJump {

@@ -200,6 +200,25 @@ pub mod http {
     }
 }
 
+/// Mouse events on documents.
+pub mod mouse {
+    pub use super::plugin::mouse::*;
+
+    /// Hear `kinds` ("down", "up", "drag", "scroll") with `handler`: it
+    /// gets the kind and the event's JSON (see the WIT) and returns whether
+    /// it takes the event from the editor. Call it from `init`.
+    pub fn on(
+        kinds: &[&str],
+        mut handler: impl FnMut(&str, &str) -> Result<bool, String> + 'static,
+    ) -> Result<(), String> {
+        super::services::provide("mouse", "1.0.0", &["editor"], move |_caller, kind, payload| {
+            handler(kind, payload).map(|taken| taken.to_string())
+        })?;
+        let kinds: Vec<String> = kinds.iter().map(|kind| kind.to_string()).collect();
+        listen(&kinds)
+    }
+}
+
 /// Undo history, a tree: read it, jump to a revision.
 pub mod history {
     pub use super::plugin::history::*;

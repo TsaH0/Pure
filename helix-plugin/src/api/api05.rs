@@ -289,6 +289,17 @@ mod folds_impl {
     }
 }
 
+mod mouse_impl {
+    use super::*;
+    use v0_5::helix::plugin::mouse::Host;
+
+    impl Host for State {
+        fn listen(&mut self, kinds: Vec<String>) -> std::result::Result<(), String> {
+            State::mouse_listen(self, kinds)
+        }
+    }
+}
+
 mod history_impl {
     use super::*;
     use v0_5::helix::plugin::history::{Host, Revision, Tree};

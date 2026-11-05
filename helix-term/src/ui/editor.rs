@@ -1620,6 +1620,9 @@ impl EditorView {
         if event.kind != MouseEventKind::Moved {
             self.handle_non_key_input(cxt)
         }
+        if crate::plugins::mouse_event(cxt.editor, cxt.jobs, event) {
+            return EventResult::Consumed(None);
+        }
 
         let config = cxt.editor.config();
         let MouseEvent {

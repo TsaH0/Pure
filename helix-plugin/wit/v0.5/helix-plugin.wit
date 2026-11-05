@@ -1195,6 +1195,29 @@ interface history {
   jump: func(doc: document-id, revision: u32) -> result<_, string>;
 }
 
+/// API 0.5: mouse clicks, drags and scrolls on documents. Register the
+/// service "mouse" (`services.register`) first: each event is a call to it
+/// from "editor", the method its kind ("down", "up", "drag", "scroll") and
+/// the payload JSON:
+///
+///   {"button": "left" | "right" | "middle" | null,
+///    "direction": "up" | "down" | "left" | "right" | null (scrolls),
+///    "view": 7, "doc": 1,
+///    "pos": char under the pointer, or null (in the gutter, past the end),
+///    "line": the line it is on, or null,
+///    "gutter": true when on the gutter,
+///    "row": 3, "column": 10 (in the view),
+///    "modifiers": ["shift", "ctrl", "alt"]}
+///
+/// Reply "true" to take the event: the editor then does nothing with it
+/// (and later plugins don't hear it). Calls are made right away, during
+/// the event, so keep them quick.
+interface mouse {
+  /// Hear these kinds of events, in place of the ones heard before; none
+  /// stops.
+  listen: func(kinds: list<string>) -> result<_, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1230,6 +1253,7 @@ world helix-plugin {
   import windows;
   import folds;
   import history;
+  import mouse;
   export plugin;
   export callbacks;
   export events;
