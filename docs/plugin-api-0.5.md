@@ -294,13 +294,17 @@ editor renders, handles keys, scrolls, resizes and cleans up (a plugin's
 floats, marks and layers go when it is disabled or reloaded). Plugins never
 get raw drawing access.
 
-**What needs editor-core work rather than a host function:** folding (Helix
-has none), embedded terminals (no terminal emulator), arbitrary split
-layouts owned by plugins (the view tree has no non-document views), and
-multi-line virtual blocks between lines with their own scrolling. Virtual
-lines here are the subset Helix's line annotations support: whole rows
-attached to a document line, which scrolling and cursor movement account
-for.
+**Editor-core work done since:** folding (`folds`, native `zc`/`zo`),
+embedded terminals (`terminal`, native `:terminal`), split control and
+plugin-drawn buffers (`windows`), statuslines, tab lines and winbars
+(`bars`), the undo tree (`history`), mouse events (`mouse`), the debugger
+(`debug`) and injected languages' trees (`syntax.layers`). Still not
+there: multi-line virtual blocks between lines with their own scrolling,
+and plugin-provided tree-sitter grammars (native parsers can't be
+sandboxed; plugins can run their own queries over the editor's trees and
+decorate with the results). Virtual lines are the subset Helix's line
+annotations support: whole rows attached to a document line, which
+scrolling and cursor movement account for.
 
 ## 7. Async work and external integrations
 

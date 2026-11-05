@@ -118,6 +118,9 @@ pub enum Step {
     SetMode(Mode),
 }
 
+/// Reads a terminal's screen rows and exit status (if it ended).
+pub type TerminalReader = Arc<dyn Fn() -> Option<(Vec<String>, Option<i32>)> + Send + Sync>;
+
 /// A terminal a plugin opened, as snapshots carry it: its screen is read
 /// when asked for.
 #[derive(Clone)]
@@ -125,7 +128,7 @@ pub struct TerminalHandle {
     pub id: u32,
     pub owner: String,
     /// The screen's rows and the exit status, if it ended.
-    pub read: Arc<dyn Fn() -> Option<(Vec<String>, Option<i32>)> + Send + Sync>,
+    pub read: TerminalReader,
 }
 
 impl std::fmt::Debug for TerminalHandle {

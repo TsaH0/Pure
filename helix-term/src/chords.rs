@@ -62,7 +62,7 @@ fn starts_chord(editor: &Editor, key: KeyEvent) -> bool {
 }
 
 fn same_key(a: &TermKey, b: &TermKey) -> bool {
-    KeyEvent::from(a.clone()).code == KeyEvent::from(b.clone()).code
+    KeyEvent::from(*a).code == KeyEvent::from(*b).code
 }
 
 fn run(editor: &mut Editor, compositor: &mut Compositor, jobs: &mut Jobs, names: &[String]) {
@@ -138,9 +138,9 @@ pub fn filter(
             Vec::new()
         }
         _ => {
-            let key = KeyEvent::from(event.clone());
+            let key = KeyEvent::from(event);
             if let Some(first) = held.as_mut() {
-                let first_key = KeyEvent::from(first.key.clone());
+                let first_key = KeyEvent::from(first.key);
                 if let Some(commands) = chord(editor, first_key, key) {
                     first.used = true;
                     drop(held);

@@ -782,7 +782,7 @@ impl Application {
                     &mut self.editor,
                     &mut self.compositor,
                     &mut self.jobs,
-                    key.clone(),
+                    *key,
                 );
                 for key in keys {
                     self.handle_terminal_event(Ok(termina::Event::Key(key)))

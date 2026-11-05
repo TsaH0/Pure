@@ -337,7 +337,12 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "N" => search_prev,
         },
         "Z" => { "View" sticky=true
-            "z" | "c" => align_view_center,
+            "z" => align_view_center,
+            "c" | "f" => fold,
+            "o" => unfold,
+            "a" => toggle_fold,
+            "M" => fold_all,
+            "R" => unfold_all,
             "t" => align_view_top,
             "b" => align_view_bottom,
             "m" => align_view_middle,

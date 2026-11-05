@@ -98,6 +98,8 @@ fn snapshot(text: &str, anchor: usize, head: usize) -> Snapshot {
             focused: true,
         }],
         ui: crate::v05::UiState::default(),
+        debug: None,
+        terminals: Vec::new(),
     }
 }
 

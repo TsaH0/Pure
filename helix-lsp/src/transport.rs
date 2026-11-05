@@ -64,12 +64,16 @@ enum ServerMessage {
     Call(jsonrpc::Call),
 }
 
+type PendingRequest = (String, Sender<Result<Value>>);
+
 #[derive(Debug)]
 pub struct Transport {
     id: LanguageServerId,
     name: String,
     /// The method and reply channel of each request sent.
-    pending_requests: Mutex<HashMap<jsonrpc::Id, (String, Sender<Result<Value>>)>>,
+    /// The method of each request waiting for its reply, and where the
+    /// reply goes.
+    pending_requests: Mutex<HashMap<jsonrpc::Id, PendingRequest>>,
     shutdown_requested: AtomicBool,
     inject_tx: UnboundedSender<Payload>,
     /// Notified once the `exit` notification has been flushed to the server's stdin

@@ -196,7 +196,7 @@ fn filter_reply(
     let plugins: Vec<String> = FILTERS
         .lock()
         .iter()
-        .filter(|(_, methods)| methods.iter().any(|m| *m == method))
+        .filter(|(_, methods)| methods.contains(&method))
         .map(|(plugin, _)| plugin.clone())
         .collect();
     tokio::spawn(async move {
