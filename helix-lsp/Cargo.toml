@@ -1,5 +1,6 @@
 [package]
-name = "helix-lsp"
+include = ["src/**", "README.md", "LICENSE"]
+name = "pure-editor-lsp"
 description = "LSP client implementation for Helix project"
 version.workspace = true
 authors.workspace = true
@@ -13,10 +14,10 @@ homepage.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-helix-stdx = { path = "../helix-stdx" }
-helix-core = { path = "../helix-core" }
-helix-loader = { path = "../helix-loader" }
-helix-lsp-types = { path = "../helix-lsp-types" }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-loader = { version = "=0.1.0", package = "pure-editor-loader", path = "../helix-loader" }
+helix-lsp-types = { version = "=0.1.0", package = "pure-editor-lsp-types", path = "../helix-lsp-types" }
 
 anyhow = "1.0"
 futures-executor.workspace = true
@@ -32,3 +33,6 @@ arc-swap = "1"
 slotmap.workspace = true
 thiserror.workspace = true
 sonic-rs.workspace = true
+
+[lib]
+name = "helix_lsp"

@@ -1,7 +1,7 @@
 [package]
-name = "helix-parsec"
+name = "pure-editor-parsec"
 description = "Parser combinators for Helix"
-include = ["src/**/*", "README.md"]
+include = ["src/**", "README.md", "LICENSE"]
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -12,3 +12,6 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+
+[lib]
+name = "helix_parsec"

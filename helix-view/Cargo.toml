@@ -1,5 +1,6 @@
 [package]
-name = "helix-view"
+include = ["src/**", "README.md", "LICENSE", "theme.toml", "base16_theme.toml"]
+name = "pure-editor-view"
 description = "UI abstractions for use in backends"
 version.workspace = true
 authors.workspace = true
@@ -12,7 +13,7 @@ homepage.workspace = true
 
 [lib]
 # Skip libtest benchmark harness, the benches use criterion.
-# cargo bench -p helix-view --features bench
+# cargo bench -p pure-editor-view --features bench
 bench = false
 
 [features]
@@ -23,13 +24,13 @@ unicode-lines = []
 bench = []
 
 [dependencies]
-helix-stdx = { path = "../helix-stdx" }
-helix-core = { path = "../helix-core" }
-helix-event = { path = "../helix-event" }
-helix-loader = { path = "../helix-loader" }
-helix-lsp = { path = "../helix-lsp" }
-helix-dap = { path = "../helix-dap" }
-helix-vcs = { path = "../helix-vcs" }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-event = { version = "=0.1.0", package = "pure-editor-event", path = "../helix-event" }
+helix-loader = { version = "=0.1.0", package = "pure-editor-loader", path = "../helix-loader" }
+helix-lsp = { version = "=0.1.0", package = "pure-editor-lsp", path = "../helix-lsp" }
+helix-dap = { version = "=0.1.0", package = "pure-editor-dap", path = "../helix-dap" }
+helix-vcs = { version = "=0.1.0", package = "pure-editor-vcs", path = "../helix-vcs" }
 
 bitflags.workspace = true
 foldhash.workspace = true
@@ -67,7 +68,7 @@ libc = "0.2"
 rustix = { version = "1.1", features = ["fs"] }
 
 [dev-dependencies]
-helix-tui = { path = "../helix-tui" }
+helix-tui = { package = "pure-editor-tui", path = "../helix-tui" }
 criterion.workspace = true
 quickcheck.workspace = true
 

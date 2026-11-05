@@ -1,7 +1,7 @@
 [package]
-name = "helix-term"
-description = "A post-modern text editor."
-include = ["src/**/*", "README.md"]
+name = "pure-editor"
+description = "Pure: a Helix-derived terminal editor with WebAssembly plugins"
+include = ["src/**", "README.md", "LICENSE", "build.rs", "assets/**"]
 default-run = "pure"
 version.workspace = true
 authors.workspace = true
@@ -31,6 +31,8 @@ assets = [
 ]
 
 [features]
+# Optional network-heavy parser setup; otherwise run pure --grammar fetch/build.
+build-grammars = []
 default = ["git", "plugins"]
 unicode-lines = ["helix-core/unicode-lines", "helix-view/unicode-lines"]
 integration = ["helix-event/integration_test"]
@@ -44,21 +46,21 @@ path = "src/main.rs"
 
 [dependencies]
 slotmap.workspace = true
-helix-stdx = { path = "../helix-stdx" }
-helix-core = { path = "../helix-core" }
-helix-event = { path = "../helix-event" }
-helix-view = { path = "../helix-view" }
-helix-lsp = { path = "../helix-lsp" }
-helix-dap = { path = "../helix-dap" }
-helix-vcs = { path = "../helix-vcs" }
-helix-loader = { path = "../helix-loader" }
-helix-plugin = { path = "../helix-plugin", optional = true }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-event = { version = "=0.1.0", package = "pure-editor-event", path = "../helix-event" }
+helix-view = { version = "=0.1.0", package = "pure-editor-view", path = "../helix-view" }
+helix-lsp = { version = "=0.1.0", package = "pure-editor-lsp", path = "../helix-lsp" }
+helix-dap = { version = "=0.1.0", package = "pure-editor-dap", path = "../helix-dap" }
+helix-vcs = { version = "=0.1.0", package = "pure-editor-vcs", path = "../helix-vcs" }
+helix-loader = { version = "=0.1.0", package = "pure-editor-loader", path = "../helix-loader" }
+helix-plugin = { version = "=0.1.0", package = "pure-editor-plugin", path = "../helix-plugin", optional = true }
 sha2 = { version = "0.11", optional = true }
 
 anyhow = "1"
 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "io-util", "net", "sync", "io-std", "time", "process", "macros", "fs", "parking_lot"] }
-tui = { path = "../helix-tui", package = "helix-tui", default-features = false, features = ["termina", "crossterm"] }
+tui = { version = "=0.1.0", path = "../helix-tui", package = "pure-editor-tui", default-features = false, features = ["termina", "crossterm"] }
 termina = { workspace = true, features = ["event-stream"] }
 signal-hook = "0.4"
 tokio-stream = "0.1"
@@ -103,10 +105,13 @@ signal-hook-tokio = { version = "0.4", features = ["futures-v0_3"] }
 libc = "0.2.186"
 
 [build-dependencies]
-helix-loader = { path = "../helix-loader" }
+helix-loader = { version = "=0.1.0", package = "pure-editor-loader", path = "../helix-loader" }
 
 [dev-dependencies]
 smallvec = "1.15"
 indoc = "2.0.6"
 tempfile.workspace = true
 same-file = "1.0.1"
+
+[lib]
+name = "helix_term"

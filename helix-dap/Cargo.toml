@@ -1,5 +1,6 @@
 [package]
-name = "helix-dap"
+include = ["src/**", "README.md", "LICENSE"]
+name = "pure-editor-dap"
 description = "DAP client implementation for Helix project"
 version.workspace = true
 authors.workspace = true
@@ -13,9 +14,9 @@ homepage.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-helix-stdx = { path = "../helix-stdx" }
-helix-core = { path = "../helix-core" }
-helix-dap-types = { path = "../helix-dap-types" }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
+helix-dap-types = { version = "=0.1.0", package = "pure-editor-dap-types", path = "../helix-dap-types" }
 
 anyhow = "1.0"
 log = "0.4"
@@ -28,3 +29,6 @@ futures-executor.workspace = true
 futures-util.workspace = true
 tokio-stream.workspace = true
 sonic-rs.workspace = true
+
+[lib]
+name = "helix_dap"

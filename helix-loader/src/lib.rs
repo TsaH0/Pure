@@ -1,3 +1,4 @@
+mod bundled_runtime;
 pub mod config;
 pub mod grammar;
 pub mod workspace_trust;
@@ -74,6 +75,13 @@ fn prioritize_runtime_dirs() -> Vec<PathBuf> {
         .and_then(|path| path.parent().map(|path| path.to_path_buf().join(RT_DIR)))
         .unwrap();
     rt_dirs.push(exe_rt_dir);
+    // Cargo installs executables, not data directories. Keep bundled assets
+    // last so explicit runtime paths and user overrides retain precedence.
+    let bundled = cache_dir().join("runtime").join(bundled_runtime::ID);
+    if let Err(error) = bundled_runtime::install(&bundled) {
+        log::warn!("Could not install bundled runtime: {error}");
+    }
+    rt_dirs.push(bundled);
     rt_dirs
 }
 
@@ -330,7 +338,7 @@ mod merge_toml_tests {
         indent = { tab-width = 4, unit = "    ", test = "aaa" }
         "#;
 
-        let base = include_bytes!("../../languages.toml");
+        let base = include_bytes!("../languages.toml");
         let base = str::from_utf8(base).expect("Couldn't parse built-in languages config");
         let base: Value = toml::from_str(base).expect("Couldn't parse built-in languages config");
         let user: Value = toml::from_str(USER).unwrap();
@@ -364,7 +372,7 @@ mod merge_toml_tests {
         language-server = { command = "deno", args = ["lsp"] }
         "#;
 
-        let base = include_bytes!("../../languages.toml");
+        let base = include_bytes!("../languages.toml");
         let base = str::from_utf8(base).expect("Couldn't parse built-in languages config");
         let base: Value = toml::from_str(base).expect("Couldn't parse built-in languages config");
         let user: Value = toml::from_str(USER).unwrap();

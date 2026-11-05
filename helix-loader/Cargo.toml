@@ -1,5 +1,6 @@
 [package]
-name = "helix-loader"
+include = ["src/**", "README.md", "LICENSE", "build.rs", "languages.toml", "runtime/queries/**", "runtime/themes/**", "runtime/tutor"]
+name = "pure-editor-loader"
 description = "Build bootstrapping for Helix crates"
 version.workspace = true
 authors.workspace = true
@@ -15,7 +16,7 @@ name = "hx-loader"
 path = "src/main.rs"
 
 [dependencies]
-helix-stdx = { path = "../helix-stdx" }
+helix-stdx = { version = "=0.1.0", package = "pure-editor-stdx", path = "../helix-stdx" }
 
 anyhow = "1"
 serde = { version = "1.0", features = ["derive"] }
@@ -34,3 +35,9 @@ threadpool = { version = "1.0" }
 tempfile.workspace = true
 
 tree-house.workspace = true
+
+[lib]
+name = "helix_loader"
+
+[build-dependencies]
+sha2 = "0.11"

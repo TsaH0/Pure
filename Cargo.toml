@@ -16,6 +16,8 @@ members = [
   "helix-plugin",
   "helix-stdx",
   "xtask",
+  "vendor/tree-house",
+  "vendor/tree-house-bindings",
 ]
 
 default-members = [
@@ -35,12 +37,12 @@ opt-level = 3
 
 [profile.integration]
 inherits = "test"
-package.helix-core.opt-level = 2
-package.helix-tui.opt-level = 2
-package.helix-term.opt-level = 2
+package.pure-editor-core.opt-level = 2
+package.pure-editor-tui.opt-level = 2
+package.pure-editor.opt-level = 2
 
 [workspace.dependencies]
-tree-house = { version = "0.4", default-features = false }
+tree-house = { package = "pure-editor-tree-house", version = "=0.1.0", path = "vendor/tree-house", default-features = false }
 nucleo = "0.5.0"
 slotmap = "1.1.1"
 thiserror = "2.0"
@@ -66,17 +68,14 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 quickcheck = { version = "1", default-features = false }
 
 [workspace.package]
-version = "25.7.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["Blaž Hrastnik <blaz@mxxn.io>"]
-categories = ["editor"]
-repository = "https://github.com/helix-editor/helix"
-homepage = "https://helix-editor.com"
+categories = ["text-editors"]
+repository = "https://github.com/TsaH0/Pure"
+homepage = "https://github.com/TsaH0/Pure"
 license = "MPL-2.0"
 rust-version = "1.90"
 
 # Local fork of tree-house with incremental injection/locals queries.
 # See vendor/README.md.
-[patch.crates-io]
-tree-house = { path = "vendor/tree-house" }
-tree-house-bindings = { path = "vendor/tree-house-bindings" }

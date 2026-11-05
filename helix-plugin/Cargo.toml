@@ -1,5 +1,6 @@
 [package]
-name = "helix-plugin"
+include = ["src/**", "README.md", "LICENSE", "wit/**"]
+name = "pure-editor-plugin"
 description = "WebAssembly plugin host for Helix"
 version.workspace = true
 authors.workspace = true
@@ -11,7 +12,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-helix-core = { path = "../helix-core" }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
 
 anyhow = "1"
 globset.workspace = true
@@ -28,3 +29,6 @@ tokio = { version = "1", features = ["rt", "time", "net", "sync"] }
 quickcheck.workspace = true
 tempfile.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lib]
+name = "helix_plugin"

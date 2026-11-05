@@ -10,10 +10,11 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
+include = ["src/**", "README.md", "LICENSE"]
 edition = "2021"
 rust-version = "1.82.0"
-name = "tree-house"
-version = "0.4.0"
+name = "pure-editor-tree-house"
+version = "0.1.0"
 authors = [
     "Pascal Kuthe <pascalkuthe@pm.me>",
     "Michael Davis <mcarsondavis@gmail.com>",
@@ -27,7 +28,7 @@ autobenches = false
 description = "A robust and cozy highlighter library for tree-sitter"
 readme = "README.md"
 license = "MPL-2.0"
-repository = "https://github.com/helix-editor/tree-house"
+repository = "https://github.com/TsaH0/Pure"
 
 [features]
 default = ["fixtures"]
@@ -75,9 +76,10 @@ default-features = false
 version = "0.4"
 
 [dependencies.tree-sitter]
-version = "0.3"
+version = "=0.1.0"
+path = "../tree-house-bindings"
 features = ["ropey"]
-package = "tree-house-bindings"
+package = "pure-editor-tree-house-bindings"
 
 [dependencies.unicode-width]
 version = "=0.1.12"

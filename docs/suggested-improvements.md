@@ -619,9 +619,9 @@ non-incremental build and enlarged-stack settings.
 
 | Check | Observed result |
 | --- | --- |
-| `cargo test -p helix-plugin` | 95 passed; 2 ignored benchmarks; no failures |
-| `cargo test -p helix-core --lib doc_formatter` | 13 passed; 179 filtered out |
-| `cargo test -p helix-term --lib` | 47 passed; no failures |
+| `cargo test -p pure-editor-plugin` | 95 passed; 2 ignored benchmarks; no failures |
+| `cargo test -p pure-editor-core --lib doc_formatter` | 13 passed; 179 filtered out |
+| `cargo test -p pure-editor --lib` | 47 passed; no failures |
 | Workspace formatting check | Passed |
 | `cargo clippy --workspace --all-targets` | Passed without warnings |
 | Plugin integration, default parallelism | 67 passed; 1 failed (idle assertion) |

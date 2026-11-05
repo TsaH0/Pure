@@ -43,12 +43,15 @@ Note: Only certain languages have indentation definitions at the moment. Check
 # Installation
 
 ```sh
-cargo install --path helix-term --locked
+cargo install pure-editor --locked
 ```
 
-installs `pure`. See Helix's
-[installation documentation](https://docs.helix-editor.com/install.html) for
-the runtime files and grammars.
+This installs `pure`, with themes, queries, language definitions and the tutor
+bundled. Install native syntax parsers with `pure --grammar fetch` followed by
+`pure --grammar build`. See [Cargo installation and releases](docs/crates-io.md)
+for prerequisites, updates and parser options.
+
+From a source checkout: `cargo install --path helix-term --locked`.
 
 # Documentation
 

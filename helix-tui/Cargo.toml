@@ -1,7 +1,7 @@
 [package]
-name = "helix-tui"
+name = "pure-editor-tui"
 description = """A library to build rich terminal user interfaces or dashboards"""
-include = ["src/**/*", "README.md"]
+include = ["src/**", "README.md", "LICENSE"]
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -15,8 +15,8 @@ homepage.workspace = true
 default = ["termina", "crossterm"]
 
 [dependencies]
-helix-view = { path = "../helix-view", features = ["term"] }
-helix-core = { path = "../helix-core" }
+helix-view = { version = "=0.1.0", package = "pure-editor-view", path = "../helix-view", features = ["term"] }
+helix-core = { version = "=0.1.0", package = "pure-editor-core", path = "../helix-core" }
 
 bitflags.workspace = true
 cassowary = "0.3"
@@ -28,3 +28,6 @@ log = "~0.4"
 
 [target.'cfg(windows)'.dependencies]
 crossterm = { version = "0.28", optional = true }
+
+[lib]
+name = "helix_tui"

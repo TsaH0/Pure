@@ -16,12 +16,12 @@ use crate::graphics::UnderlineStyle;
 pub use crate::graphics::{Color, Modifier, Style};
 
 pub static DEFAULT_THEME_DATA: LazyLock<Value> = LazyLock::new(|| {
-    let bytes = include_bytes!("../../theme.toml");
+    let bytes = include_bytes!("../theme.toml");
     toml::from_str(str::from_utf8(bytes).unwrap()).expect("Failed to parse base default theme")
 });
 
 pub static BASE16_DEFAULT_THEME_DATA: LazyLock<Value> = LazyLock::new(|| {
-    let bytes = include_bytes!("../../base16_theme.toml");
+    let bytes = include_bytes!("../base16_theme.toml");
     toml::from_str(str::from_utf8(bytes).unwrap()).expect("Failed to parse base 16 default theme")
 });
 

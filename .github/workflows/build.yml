@@ -81,7 +81,7 @@ jobs:
           cache-key: plugins
 
       - name: Build without plugin support
-        run: cargo check -p helix-term --no-default-features --features git
+        run: cargo check -p pure-editor --no-default-features --features git
 
       - name: Native tests of the examples and test plugins
         run: |

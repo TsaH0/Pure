@@ -88,9 +88,9 @@ design doc).
 ```sh
 export HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1     # grammars can't be fetched in CI sandboxes
 
-cargo test -p helix-plugin                    # host unit tests
-cargo test -p helix-term --lib
-cargo test -p helix-term --features integration --test integration -- plugins
+cargo test -p pure-editor-plugin                    # host unit tests
+cargo test -p pure-editor --lib
+cargo test -p pure-editor --features integration --test integration -- plugins
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo xtask docgen                            # after adding/changing commands
@@ -112,7 +112,7 @@ The full run aborts (SIGABRT, a stack overflow) without a bigger stack, and
 the 8 `commands::movement` tests can still abort it. Run the full suite as:
 
 ```sh
-cargo test -p helix-term --features integration --test integration --no-run
+cargo test -p pure-editor --features integration --test integration --no-run
 B=$(ls -t target/debug/deps/integration-* | grep -v '\.d$' | head -1)
 RUST_MIN_STACK=16777216 $B --test-threads 4 --skip test::commands::movement
 ```
@@ -458,7 +458,7 @@ their process group; `name = false` in `plugins.toml` disables a plugin.
   editor tests cover fresh snapshots, document closure, recursion recovery,
   ordered UI actions, picker replacement, Alt-Enter, `--`, and boolean disable
   settings. Private editor tests cover file-grant boundaries and stale load
-  installation (`cargo test -p helix-term --lib --features integration plugins::tests`).
+  installation (`cargo test -p pure-editor --lib --features integration plugins::tests`).
 
 - [x] **M11.1 Blocking WASI calls can hang the editor** (high). The epoch
   time limit only interrupts running wasm; a plugin calling
@@ -686,7 +686,7 @@ Small, self-contained; each one is a good single task.
 
 ## Guidelines for agents (lessons from earlier work)
 
-- `cargo test -p helix-term --features integration` relinks
+- `cargo test -p pure-editor --features integration` relinks
   `target/debug/pure` with the in-memory test terminal: run by hand, it
   draws nothing. Before checking the real editor (tmux, pty scripts),
   `touch helix-term/src/main.rs && cargo build`.
@@ -746,5 +746,5 @@ Small, self-contained; each one is a good single task.
     plugin call (`Ticker::busy`);
   - anything that walks the file system or scans documents per call must be
     cached (see `plugins::workspace`);
-  - measure with `cargo test -p helix-plugin --release -- --ignored
+  - measure with `cargo test -p pure-editor-plugin --release -- --ignored
     --nocapture benchmarks` and update the numbers in `plugin-progress.md`.

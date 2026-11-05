@@ -687,6 +687,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1906,298 +1912,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "helix-core"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "bitflags",
- "chrono",
- "encoding_rs",
- "foldhash 0.2.0",
- "globset",
- "helix-loader",
- "helix-parsec",
- "helix-stdx",
- "imara-diff",
- "indoc",
- "log",
- "nucleo",
- "parking_lot",
- "quickcheck",
- "regex",
- "regex-cursor",
- "ropey",
- "serde",
- "serde_json",
- "slotmap",
- "smallvec",
- "smartstring",
- "textwrap",
- "toml",
- "tree-house",
- "unicode-general-category",
- "unicode-segmentation",
- "unicode-width 0.1.12",
-]
-
-[[package]]
-name = "helix-dap"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "futures-executor",
- "futures-util",
- "helix-core",
- "helix-dap-types",
- "helix-stdx",
- "log",
- "serde",
- "serde_json",
- "slotmap",
- "sonic-rs",
- "thiserror",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
-name = "helix-dap-types"
-version = "25.7.1"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "helix-event"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "foldhash 0.2.0",
- "futures-executor",
- "hashbrown 0.17.1",
- "log",
- "parking_lot",
- "tokio",
-]
-
-[[package]]
-name = "helix-loader"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "cc",
- "etcetera",
- "globset",
- "helix-stdx",
- "log",
- "parking_lot",
- "serde",
- "sha2",
- "tempfile",
- "threadpool",
- "toml",
- "tree-house",
-]
-
-[[package]]
-name = "helix-lsp"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "futures-executor",
- "futures-util",
- "globset",
- "helix-core",
- "helix-loader",
- "helix-lsp-types",
- "helix-stdx",
- "log",
- "parking_lot",
- "serde",
- "serde_json",
- "slotmap",
- "sonic-rs",
- "thiserror",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
-name = "helix-lsp-types"
-version = "0.95.1"
-dependencies = [
- "bitflags",
- "helix-stdx",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "helix-parsec"
-version = "25.7.1"
-
-[[package]]
-name = "helix-plugin"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "globset",
- "helix-core",
- "log",
- "quickcheck",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
- "wasmtime",
- "wasmtime-wasi",
-]
-
-[[package]]
-name = "helix-stdx"
-version = "25.7.1"
-dependencies = [
- "bitflags",
- "dunce",
- "etcetera",
- "percent-encoding",
- "regex-automata",
- "regex-cursor",
- "ropey",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "tempfile",
- "unicode-segmentation",
- "which",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "helix-term"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "crossterm",
- "dashmap",
- "futures-util",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "helix-core",
- "helix-dap",
- "helix-event",
- "helix-loader",
- "helix-lsp",
- "helix-plugin",
- "helix-stdx",
- "helix-tui",
- "helix-vcs",
- "helix-view",
- "ignore",
- "indexmap",
- "indoc",
- "libc",
- "log",
- "notify",
- "nucleo",
- "open",
- "parking_lot",
- "pulldown-cmark",
- "same-file",
- "serde",
- "serde_json",
- "sha2",
- "signal-hook 0.4.4",
- "signal-hook-tokio",
- "slotmap",
- "smallvec",
- "tempfile",
- "termina",
- "termini",
- "thiserror",
- "tokio",
- "tokio-stream",
- "toml",
- "trash",
-]
-
-[[package]]
-name = "helix-tui"
-version = "25.7.1"
-dependencies = [
- "arrayvec",
- "bitflags",
- "cassowary",
- "crossterm",
- "helix-core",
- "helix-view",
- "log",
- "termina",
- "termini",
- "unicode-segmentation",
-]
-
-[[package]]
-name = "helix-vcs"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "gix",
- "helix-core",
- "helix-event",
- "imara-diff",
- "log",
- "parking_lot",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "helix-view"
-version = "25.7.1"
-dependencies = [
- "anyhow",
- "arc-swap",
- "bitflags",
- "chardetng",
- "clipboard-win",
- "criterion",
- "crossterm",
- "foldhash 0.2.0",
- "futures-util",
- "helix-core",
- "helix-dap",
- "helix-event",
- "helix-loader",
- "helix-lsp",
- "helix-stdx",
- "helix-tui",
- "helix-vcs",
- "kstring",
- "libc",
- "log",
- "parking_lot",
- "quickcheck",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "slotmap",
- "tempfile",
- "termina",
- "thiserror",
- "tokio",
- "tokio-stream",
- "toml",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2954,6 +2668,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3033,6 +2757,328 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "pure-editor"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "crossterm",
+ "dashmap",
+ "futures-util",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "indexmap",
+ "indoc",
+ "libc",
+ "log",
+ "notify",
+ "nucleo",
+ "open",
+ "parking_lot",
+ "pulldown-cmark",
+ "pure-editor-core",
+ "pure-editor-dap",
+ "pure-editor-event",
+ "pure-editor-loader",
+ "pure-editor-lsp",
+ "pure-editor-plugin",
+ "pure-editor-stdx",
+ "pure-editor-tui",
+ "pure-editor-vcs",
+ "pure-editor-view",
+ "same-file",
+ "serde",
+ "serde_json",
+ "sha2",
+ "signal-hook 0.4.4",
+ "signal-hook-tokio",
+ "slotmap",
+ "smallvec",
+ "tempfile",
+ "termina",
+ "termini",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "trash",
+]
+
+[[package]]
+name = "pure-editor-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "bitflags",
+ "chrono",
+ "encoding_rs",
+ "foldhash 0.2.0",
+ "globset",
+ "imara-diff",
+ "indoc",
+ "log",
+ "nucleo",
+ "parking_lot",
+ "pure-editor-loader",
+ "pure-editor-parsec",
+ "pure-editor-stdx",
+ "pure-editor-tree-house",
+ "quickcheck",
+ "regex",
+ "regex-cursor",
+ "ropey",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "smallvec",
+ "smartstring",
+ "textwrap",
+ "toml",
+ "unicode-general-category",
+ "unicode-segmentation",
+ "unicode-width 0.1.12",
+]
+
+[[package]]
+name = "pure-editor-dap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-executor",
+ "futures-util",
+ "log",
+ "pure-editor-core",
+ "pure-editor-dap-types",
+ "pure-editor-stdx",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "sonic-rs",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "pure-editor-dap-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pure-editor-event"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "foldhash 0.2.0",
+ "futures-executor",
+ "hashbrown 0.17.1",
+ "log",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "pure-editor-loader"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cc",
+ "etcetera",
+ "globset",
+ "log",
+ "parking_lot",
+ "pure-editor-stdx",
+ "pure-editor-tree-house",
+ "serde",
+ "sha2",
+ "tempfile",
+ "threadpool",
+ "toml",
+]
+
+[[package]]
+name = "pure-editor-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "futures-executor",
+ "futures-util",
+ "globset",
+ "log",
+ "parking_lot",
+ "pure-editor-core",
+ "pure-editor-loader",
+ "pure-editor-lsp-types",
+ "pure-editor-stdx",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "sonic-rs",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+]
+
+[[package]]
+name = "pure-editor-lsp-types"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "pure-editor-stdx",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pure-editor-parsec"
+version = "0.1.0"
+
+[[package]]
+name = "pure-editor-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "globset",
+ "log",
+ "pure-editor-core",
+ "quickcheck",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
+name = "pure-editor-stdx"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "dunce",
+ "etcetera",
+ "percent-encoding",
+ "regex-automata",
+ "regex-cursor",
+ "ropey",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "unicode-segmentation",
+ "which",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pure-editor-tree-house"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "hashbrown 0.15.5",
+ "indexmap",
+ "kstring",
+ "once_cell",
+ "pretty_assertions",
+ "pure-editor-tree-house-bindings",
+ "regex",
+ "regex-cursor",
+ "ropey",
+ "slab",
+ "unicode-width 0.1.12",
+]
+
+[[package]]
+name = "pure-editor-tree-house-bindings"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libloading",
+ "regex-cursor",
+ "ropey",
+ "thiserror",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "pure-editor-tui"
+version = "0.1.0"
+dependencies = [
+ "arrayvec",
+ "bitflags",
+ "cassowary",
+ "crossterm",
+ "log",
+ "pure-editor-core",
+ "pure-editor-view",
+ "termina",
+ "termini",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "pure-editor-vcs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "gix",
+ "imara-diff",
+ "log",
+ "parking_lot",
+ "pure-editor-core",
+ "pure-editor-event",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "pure-editor-view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "bitflags",
+ "chardetng",
+ "clipboard-win",
+ "criterion",
+ "crossterm",
+ "foldhash 0.2.0",
+ "futures-util",
+ "kstring",
+ "libc",
+ "log",
+ "parking_lot",
+ "pure-editor-core",
+ "pure-editor-dap",
+ "pure-editor-event",
+ "pure-editor-loader",
+ "pure-editor-lsp",
+ "pure-editor-stdx",
+ "pure-editor-tui",
+ "pure-editor-vcs",
+ "quickcheck",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "tempfile",
+ "termina",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "toml",
 ]
 
 [[package]]
@@ -3904,30 +3950,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-house"
-version = "0.4.0"
-dependencies = [
- "arc-swap",
- "hashbrown 0.15.5",
- "kstring",
- "once_cell",
- "regex",
- "regex-cursor",
- "ropey",
- "slab",
- "tree-house-bindings",
-]
-
-[[package]]
-name = "tree-house-bindings"
-version = "0.3.2"
-dependencies = [
- "cc",
- "libloading",
- "regex-cursor",
- "ropey",
- "thiserror",
-]
+name = "tree-sitter-language"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
 name = "typenum"
@@ -4953,16 +4979,22 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "25.7.1"
+version = "0.1.0"
 dependencies = [
- "helix-core",
- "helix-loader",
- "helix-stdx",
- "helix-term",
- "helix-view",
+ "pure-editor",
+ "pure-editor-core",
+ "pure-editor-loader",
+ "pure-editor-stdx",
+ "pure-editor-view",
  "ropey",
  "toml",
 ]
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"
