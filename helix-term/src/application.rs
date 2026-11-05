@@ -741,7 +741,16 @@ impl Application {
                 helix_event::request_redraw();
             }
             EditorEvent::DebuggerEvent((id, payload)) => {
+                let event = match &payload {
+                    helix_dap::Payload::Event(event) => {
+                        Some((event.event.clone(), event.body.clone()))
+                    }
+                    _ => None,
+                };
                 let needs_render = self.editor.handle_debugger_message(id, payload).await;
+                if let Some((name, body)) = event {
+                    crate::plugins::debug_event(&name, body.as_ref());
+                }
                 if needs_render {
                     self.render().await;
                 }

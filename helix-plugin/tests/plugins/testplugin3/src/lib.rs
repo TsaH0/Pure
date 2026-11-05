@@ -138,6 +138,11 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
             helix::plugin::services::register("mouse", "1.0.0", &[])?;
             helix::plugin::mouse::listen(&["down".to_string(), "scroll".to_string()])?;
         }
+        // Debugger events, recorded.
+        if config.contains("debug-listen") {
+            helix::plugin::services::register("debug-event", "1.0.0", &[])?;
+            helix::plugin::debug::listen(&["*".to_string()])?;
+        }
         if config.contains("bind-in-init") {
             bind(&["plugin".into(), "init-key".into(), "normal".into(), "C-q".into()])?;
         }
@@ -203,6 +208,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "debug",
                 "layers",
                 "bar",
                 "mouse-off",
@@ -664,6 +670,65 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     Some("tabline") => bars::set_tabline(bar.as_ref()),
                     Some("winbar") => bars::set_winbar(view, bar.as_ref()),
                     _ => Err("which bar?".into()),
+                }
+            }
+            // `debug session`, `debug breakpoints`, `debug bp PATH LINE...`,
+            // `debug eval EXPR`.
+            "debug" => {
+                use helix::plugin::debug;
+                match args.first().map(String::as_str) {
+                    Some("session") => {
+                        let status = match debug::session()? {
+                            None => "session:none".to_string(),
+                            Some(s) => format!(
+                                "session:{}:thread={:?}:frames={}",
+                                s.adapter,
+                                s.thread,
+                                s.frames
+                                    .iter()
+                                    .map(|f| format!("{}@{}", f.name, f.line))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                        };
+                        host::set_status(&status);
+                        Ok(())
+                    }
+                    Some("breakpoints") => {
+                        let list = debug::breakpoints()?
+                            .iter()
+                            .map(|b| format!("{}:{}", b.path.rsplit('/').next().unwrap_or_default(), b.line))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("breakpoints:{}", list.join(",")));
+                        Ok(())
+                    }
+                    Some("bp") => {
+                        let path = args.get(1).ok_or("a path")?;
+                        let breakpoints = args[2..]
+                            .iter()
+                            .map(|line| debug::Breakpoint {
+                                path: String::new(),
+                                line: line.parse().unwrap_or(0),
+                                condition: None,
+                                log_message: None,
+                                verified: false,
+                            })
+                            .collect::<Vec<_>>();
+                        debug::set_breakpoints(path, &breakpoints)
+                    }
+                    Some("eval") => {
+                        let frame = debug::session()?
+                            .and_then(|s| s.frames.first().map(|f| format!(r#", "frameId": {}"#, f.id)))
+                            .unwrap_or_default();
+                        let arguments = format!(
+                            r#"{{"expression": "{}"{frame}, "context": "watch"}}"#,
+                            args[1..].join(" ")
+                        );
+                        let id = debug::request("evaluate", &arguments)?;
+                        host::set_status(&format!("debug-request:{id}"));
+                        Ok(())
+                    }
+                    _ => Err("which?".into()),
                 }
             }
             // `history` (the tree, in the status) or `history N` (jump).
@@ -1385,6 +1450,10 @@ impl exports::helix::plugin::hooks::Guest for TestPlugin {
                 host::set_status(&format!("mouse:{method}:{payload}"));
                 let take = CONFIG.with_borrow(|config| config.contains("mouse-take"));
                 return Ok(take.to_string());
+            }
+            "testplugin3.debug-event" => {
+                record(format!("debug-event:{method}"));
+                return Ok("null".into());
             }
             "testplugin3.lsp-notification" => {
                 host::set_status(&format!("notified:{method}"));

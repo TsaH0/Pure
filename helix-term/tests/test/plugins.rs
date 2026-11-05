@@ -5145,3 +5145,173 @@ async fn plugins_see_injected_languages() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// A C program to debug and gdb (in its DAP mode) as C's debugger, the
+/// source open; `None` without gcc or gdb.
+#[cfg(unix)]
+async fn debuggable(app: &mut Application) -> Option<(tempfile::TempDir, PathBuf, PathBuf)> {
+    let have = |program: &str| {
+        std::process::Command::new(program)
+            .arg("--version")
+            .output()
+            .is_ok()
+    };
+    if !have("gcc") || !have("gdb") {
+        return None;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("main.c");
+    std::fs::write(
+        &source,
+        "int main(void) {\n  int x = 41;\n  x++;\n  return x - 42;\n}\n",
+    )
+    .unwrap();
+    let program = dir.path().join("main");
+    let built = std::process::Command::new("gcc")
+        .args(["-g", "-O0", "-o"])
+        .arg(&program)
+        .arg(&source)
+        .status()
+        .unwrap();
+    assert!(built.success());
+    // C debugged by gdb (Pure's default is lldb-dap), stopping at main.
+    let gdb = r#"
+[[language]]
+name = "c"
+[language.debugger]
+name = "gdb"
+transport = "stdio"
+command = "gdb"
+args = ["--interpreter=dap", "-q", "-nx"]
+[[language.debugger.templates]]
+name = "binary"
+request = "launch"
+completion = ["filename"]
+args = { program = "{0}", stopAtBeginningOfMainSubprogram = true }
+"#;
+    app.editor
+        .syn_loader
+        .store(std::sync::Arc::new(helpers::test_syntax_loader(Some(
+            gdb.into(),
+        ))));
+    keys(app, &format!(":open {}<ret>", source.display())).await;
+    Some((dir, source, program))
+}
+
+/// A real debug session (gdb's DAP mode) seen and driven by a plugin.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_see_and_drive_the_debugger() -> anyhow::Result<()> {
+    let (mut app, _plugins) = app_v5_granted(
+        "#[o|]#ne\n",
+        r#""debug""#,
+        "[testplugin3]\nallow-debug = true\ndebug-listen = true\n",
+    );
+    let Some((_dir, source, program)) = debuggable(&mut app).await else {
+        return Ok(());
+    };
+
+    // Breakpoints, before and without a session.
+    keys(&mut app, ":plugin-run testplugin3/debug session<ret>").await;
+    assert_eq!(status(&app).0, "session:none");
+    keys(
+        &mut app,
+        &format!(
+            ":plugin-run testplugin3/debug bp {} 2<ret>",
+            source.display()
+        ),
+    )
+    .await;
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_eq!(status(&app).0, "breakpoints:main.c:2");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x<ret>").await;
+    assert!(
+        status(&app).0.contains("no debug session"),
+        "{}",
+        status(&app).0
+    );
+
+    // Stopped at the start of main, then a step (gdb takes breakpoints
+    // only while stopped): the stack, and an expression evaluated.
+    keys(
+        &mut app,
+        &format!(":debug-start binary {}<ret>", program.display()),
+    )
+    .await;
+    let mut wait_for_line = async |app: &mut Application, line: u32| {
+        let mut session = String::new();
+        for _ in 0..100 {
+            keys(app, ":plugin-run testplugin3/debug session<ret>").await;
+            session = status(app).0;
+            if session.contains(&format!("frames=main@{line}")) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        session
+    };
+    let session = wait_for_line(&mut app, 1).await;
+    assert!(session.starts_with("session:gdb:thread=Some("), "{session}");
+    assert!(session.contains("frames=main@1"), "{session}");
+    keys(&mut app, ":plugin-run testplugin3/exec dap_next<ret>").await;
+    let session = wait_for_line(&mut app, 2).await;
+    assert!(session.contains("frames=main@2"), "{session}");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x + 1<ret>").await;
+    // (The reply can come before the request's status is read.)
+    let reply = match app.editor.get_status() {
+        Some((status, _)) if status.starts_with("lsp-reply:") => status.to_string(),
+        _ => wait_for_status(&mut app, |s| s.starts_with("lsp-reply:")).await,
+    };
+    assert!(reply.contains(r#"\"result\":\"42\""#), "{reply}");
+    let events = helix_term::plugins::log_lines("testplugin3")?;
+    assert!(
+        events
+            .iter()
+            .any(|line| line.contains("debug-event:stopped")),
+        "{events:?}"
+    );
+    // Plugins drive the session with the native commands too.
+    keys(&mut app, ":plugin-run testplugin3/exec dap_terminate<ret>").await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn debugger_requests_need_the_grant() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5_granted("#[o|]#ne\n", r#""debug""#, "");
+    keys(&mut app, ":plugin-run testplugin3/debug eval x<ret>").await;
+    assert_error(&app, "allow-debug = true");
+    // Reading needs only the permission.
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_eq!(status(&app).0, "breakpoints:");
+    let (mut app, _dir) = app_v5("#[o|]#ne\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/debug breakpoints<ret>").await;
+    assert_error(&app, "\"debug\"");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn dap_ui_example_shows_the_stack_and_locals() -> anyhow::Result<()> {
+    let (mut app, _plugins) = app_with_example("dap-ui", "[dap-ui]\nallow-debug = true\n");
+    let Some((_dir, _source, program)) = debuggable(&mut app).await else {
+        return Ok(());
+    };
+    keys(
+        &mut app,
+        &format!(":debug-start binary {}<ret>", program.display()),
+    )
+    .await;
+    let panel = |app: &Application| screen_rows(app).join("\n");
+    wait_for(&mut app, |app| {
+        panel(app).contains("main  main.c:2").then_some(())
+    })
+    .await;
+    keys(&mut app, "<space>Gn").await;
+    wait_for(&mut app, |app| {
+        panel(app).contains("x: int = 41").then_some(())
+    })
+    .await;
+    assert!(panel(&app).contains("main  main.c:3"), "{}", panel(&app));
+    keys(&mut app, "<space>Gt").await;
+    Ok(())
+}

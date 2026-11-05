@@ -289,6 +289,75 @@ mod folds_impl {
     }
 }
 
+mod debug_impl {
+    use super::*;
+    use crate::v05::BreakpointInfo;
+    use v0_5::helix::plugin::debug::{Breakpoint, Frame, Host, SessionInfo};
+
+    impl Host for State {
+        fn session(&mut self) -> std::result::Result<Option<SessionInfo>, String> {
+            Ok(self.debug_state()?.session.map(|session| SessionInfo {
+                adapter: session.adapter,
+                thread: session.thread,
+                threads: session.threads,
+                frames: session
+                    .frames
+                    .into_iter()
+                    .map(|frame| Frame {
+                        id: frame.id,
+                        name: frame.name,
+                        path: frame.path,
+                        line: frame.line,
+                        column: frame.column,
+                    })
+                    .collect(),
+                active_frame: session.active_frame,
+            }))
+        }
+        fn breakpoints(&mut self) -> std::result::Result<Vec<Breakpoint>, String> {
+            Ok(self
+                .debug_state()?
+                .breakpoints
+                .into_iter()
+                .map(|b| Breakpoint {
+                    path: b.path,
+                    line: b.line,
+                    condition: b.condition,
+                    log_message: b.log_message,
+                    verified: b.verified,
+                })
+                .collect())
+        }
+        fn set_breakpoints(
+            &mut self,
+            path: String,
+            breakpoints: Vec<Breakpoint>,
+        ) -> std::result::Result<(), String> {
+            let breakpoints = breakpoints
+                .into_iter()
+                .map(|b| BreakpointInfo {
+                    path: path.clone(),
+                    line: b.line,
+                    condition: b.condition,
+                    log_message: b.log_message,
+                    verified: false,
+                })
+                .collect();
+            State::set_breakpoints(self, path, breakpoints)
+        }
+        fn request(
+            &mut self,
+            command: String,
+            arguments: String,
+        ) -> std::result::Result<u32, String> {
+            self.debug_request(command, arguments)
+        }
+        fn listen(&mut self, events: Vec<String>) -> std::result::Result<(), String> {
+            self.debug_listen(events)
+        }
+    }
+}
+
 mod bars_impl {
     use super::*;
     use crate::v05::BarKind;

@@ -77,6 +77,10 @@ pub enum Permission {
     /// Send HTTPS requests (API 0.5 `http`), only to the hosts the user
     /// lists in `allow-network`.
     Network,
+    /// See and drive the debugger (API 0.5 `debug`). Raw debugger requests
+    /// (which can run code in the program being debugged) also need
+    /// `allow-debug`.
+    Debug,
 }
 
 impl Permission {
@@ -92,6 +96,7 @@ impl Permission {
             Permission::Listen => "listen",
             Permission::Lsp => "lsp",
             Permission::Network => "network",
+            Permission::Debug => "debug",
         }
     }
 }
@@ -156,6 +161,8 @@ pub struct PluginSettings {
     pub key_override: bool,
     /// Requests to language servers (`allow-lsp`).
     pub lsp: bool,
+    /// Raw requests to the debugger (`allow-debug`).
+    pub debug: bool,
     /// Hosts HTTPS requests may go to (`allow-network`): names, IP
     /// addresses or `*.domain`.
     pub network: Vec<String>,
@@ -583,6 +590,9 @@ pub struct Snapshot {
     pub views: Vec<v05::ViewInfo>,
     /// What the UI shows (API 0.5).
     pub ui: v05::UiState,
+    /// The debugger and the breakpoints (API 0.5 `debug`), filled in only
+    /// while an API 0.5 plugin has the `debug` permission.
+    pub debug: Option<v05::DebugState>,
 }
 
 impl Default for Snapshot {
@@ -599,6 +609,7 @@ impl Default for Snapshot {
             completion_menu: None,
             views: Vec::new(),
             ui: v05::UiState::default(),
+            debug: None,
         }
     }
 }
@@ -679,6 +690,25 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// A raw request to the debugger (API 0.5 `debug.request`); the reply
+    /// goes to `callbacks2.on-lsp-reply`.
+    DebugRequest {
+        plugin: String,
+        id: u32,
+        command: String,
+        arguments: String,
+    },
+    /// Replace the breakpoints of a file (API 0.5 `debug.set-breakpoints`).
+    SetBreakpoints {
+        path: PathBuf,
+        breakpoints: Vec<v05::BreakpointInfo>,
+    },
+    /// Hear these debugger events through the plugin's "debug-event"
+    /// service; none stops.
+    DebugListen {
+        plugin: String,
+        events: Vec<String>,
+    },
     /// Set (or with `None` remove) one of the plugin's bars (API 0.5
     /// `bars`); `view` `None` is every view.
     Bar {
@@ -3263,6 +3293,7 @@ impl PluginHost {
             v05: v05::V05 {
                 key_override: settings.key_override,
                 lsp: settings.lsp,
+                debug: settings.debug,
                 network: settings.network,
                 editor: self.editor_fns,
                 marks: self.marks.clone(),

@@ -12,9 +12,8 @@ use serde_json::{json, Value};
 
 use crate::job::Jobs;
 
-static ANY: AtomicBool = AtomicBool::new(false);
-
 runtime_local! {
+    static ANY: AtomicBool = AtomicBool::new(false);
     /// The kinds each plugin hears.
     static LISTENERS: Mutex<Vec<(String, Vec<String>)>> = Mutex::new(Vec::new());
 }

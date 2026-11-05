@@ -422,6 +422,38 @@ pub mod lsp {
     }
 }
 
+/// The debugger: session, breakpoints, requests and events.
+pub mod debug {
+    use super::*;
+    pub use plugin::debug::{breakpoints, session, set_breakpoints, Breakpoint, Frame, SessionInfo};
+
+    /// Send `command` with `arguments` (JSON) to the running debugger;
+    /// `reply` gets the response's body (JSON) or the error.
+    pub fn request(
+        command: &str,
+        arguments: &str,
+        reply: impl FnOnce(Result<String, String>) -> Result<(), String> + 'static,
+    ) -> Result<RequestId, String> {
+        let id = plugin::debug::request(command, arguments)?;
+        REPLIES.with_borrow_mut(|replies| replies.insert(id, Box::new(reply)));
+        Ok(id)
+    }
+
+    /// Hear the debugger's `events` ("stopped", "output"... or "*") with
+    /// `handler`, which gets the event's name and body (JSON). Call it from
+    /// `init`.
+    pub fn on(
+        events: &[&str],
+        mut handler: impl FnMut(&str, &str) -> Result<(), String> + 'static,
+    ) -> Result<(), String> {
+        super::services::provide("debug-event", "1.0.0", &["editor"], move |_caller, event, body| {
+            handler(event, body).map(|()| "null".to_string())
+        })?;
+        let events: Vec<String> = events.iter().map(|event| event.to_string()).collect();
+        plugin::debug::listen(&events)
+    }
+}
+
 /// Forget the closures of request `id` (cancelled).
 pub(crate) fn forget(id: RequestId) {
     WATCHES.with_borrow_mut(|watches| watches.remove(&id));

@@ -57,6 +57,7 @@ Ready-made examples are in
 | `snippets` | Snippets with tab stops in the completion menu (`fn`, `test`, `for`...); add your own in `plugins.toml` |
 | `find-char` | `f`, `F`, `t`, `T` like Vim's: on the cursor's line, optional smart case; `repeat` and `repeat-reverse` (bind them to `;` and `,` if you like) |
 | `vim-registers` | Vim's numbered registers (`"0`, `"1`–`"9`, `"-`), done by a plugin; the same as `editor.registers = "vim"` |
+| `dap-ui` | Like nvim-dap-ui: while the program you debug is stopped, a panel below shows its stack and local variables (needs `allow-debug = true`) |
 | `statusbar` | Like lualine and bufferline: a statusline in the mode's colours (mode, branch, file, diagnostics, language, position) and a tab line of the open buffers (`tabline = false` turns it off) |
 | `click` | Mouse actions: ctrl+click goes to the definition, alt+click to the references, a click on the gutter folds or unfolds the block there |
 | `undotree` | Like undotree: `space U` shows every revision of the undo tree, branches included; pick one to go back (or forward) to it |
@@ -237,6 +238,9 @@ allow-key-override = true        # its keys may take precedence over yours
 [my-lsp-tool]
 allow-lsp = true                 # it may send requests to language servers
 
+[dap-ui]
+allow-debug = true               # it may send requests to the debugger
+
 [markdown]
 lazy = false                     # load at startup even if it would wait
 
@@ -262,6 +266,11 @@ so web pages can't reach it.
 code actions, go-to-definition and the like show as any server's), hear
 language servers' notifications and change their replies before Pure uses
 them. Starting a language server program needs `allow-process` for it too.
+
+`allow-debug` lets a plugin send requests to a running debugger
+(`:debug-start`), such as evaluating an expression or listing variables,
+which can run code in the program being debugged. Seeing the stack and
+setting breakpoints need only the plugin's `debug` permission.
 
 `allow-network` lets a plugin send HTTPS requests to the hosts listed
 (`*.example.org` means its subdomains). The editor sends them with `curl`,

@@ -1,0 +1,8 @@
+name = "dap-ui"
+version = "0.1.0"
+api = "0.5"
+description = "Like nvim-dap-ui: the stack and local variables in a panel while the debugger is stopped"
+# Asking the debugger for variables also needs `allow-debug = true` under
+# [dap-ui] in plugins.toml.
+permissions = ["debug"]
+wasm = "plugin.wasm"

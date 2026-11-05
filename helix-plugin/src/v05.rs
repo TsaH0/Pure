@@ -118,6 +118,48 @@ pub enum Step {
     SetMode(Mode),
 }
 
+/// The debugger as plugins see it (API 0.5 `debug`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DebugState {
+    /// The running session, if there is one.
+    pub session: Option<DebugSession>,
+    pub breakpoints: Vec<BreakpointInfo>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DebugSession {
+    /// The debug adapter's name.
+    pub adapter: String,
+    /// The thread being looked at.
+    pub thread: Option<u64>,
+    /// Threads and their states ("stopped", "running"...).
+    pub threads: Vec<(u64, String)>,
+    /// The stack of the thread being looked at, innermost first.
+    pub frames: Vec<StackFrame>,
+    pub active_frame: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StackFrame {
+    pub id: u64,
+    pub name: String,
+    pub path: Option<String>,
+    /// 0-based.
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BreakpointInfo {
+    pub path: String,
+    /// 0-based.
+    pub line: u32,
+    pub condition: Option<String>,
+    pub log_message: Option<String>,
+    /// The debugger accepted it.
+    pub verified: bool,
+}
+
 /// Which bar a plugin sets (API 0.5 `bars`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarKind {
@@ -354,6 +396,8 @@ pub(crate) struct V05 {
     pub key_override: bool,
     /// The user's `allow-lsp`.
     pub lsp: bool,
+    /// The user's `allow-debug`.
+    pub debug: bool,
     /// The user's `allow-network`.
     pub network: Vec<String>,
     pub editor: EditorFns,
@@ -424,6 +468,7 @@ impl Default for V05 {
         Self {
             key_override: false,
             lsp: false,
+            debug: false,
             network: Vec::new(),
             editor: EditorFns::default(),
             key_bindings: Vec::new(),
@@ -1215,6 +1260,89 @@ impl State {
             last,
             fold,
         });
+        Ok(())
+    }
+    pub(crate) fn debug_state(&mut self) -> Result<DebugState, String> {
+        self.need(crate::Permission::Debug)?;
+        Ok(self.snapshot.debug.clone().unwrap_or_default())
+    }
+    pub(crate) fn set_breakpoints(
+        &mut self,
+        path: String,
+        breakpoints: Vec<BreakpointInfo>,
+    ) -> Result<(), String> {
+        self.need(crate::Permission::Debug)?;
+        let path = std::path::PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err("the path must be absolute".into());
+        }
+        if breakpoints.len() > 1000 {
+            return Err("at most 1000 breakpoints a file".into());
+        }
+        self.actions
+            .push(crate::Action::SetBreakpoints { path, breakpoints });
+        Ok(())
+    }
+    pub(crate) fn debug_request(
+        &mut self,
+        command: String,
+        arguments: String,
+    ) -> Result<u32, String> {
+        self.need(crate::Permission::Debug)?;
+        if !self.v05.debug {
+            return Err(format!(
+                "debugger requests need allow-debug = true under [{}] in plugins.toml",
+                self.plugin
+            ));
+        }
+        if self.context == crate::CallContext::Init {
+            return Err("debug.request can't be used from init".into());
+        }
+        if self
+            .snapshot
+            .debug
+            .as_ref()
+            .is_none_or(|debug| debug.session.is_none())
+        {
+            return Err("no debug session is running".into());
+        }
+        // The editor's own: they would confuse its view of the session.
+        if [
+            "initialize",
+            "launch",
+            "attach",
+            "disconnect",
+            "terminate",
+            "restart",
+        ]
+        .contains(&command.as_str())
+        {
+            return Err(format!("'{command}' is the editor's to send"));
+        }
+        if command.is_empty() || command.len() > 256 {
+            return Err("a command of 1 to 256 bytes".into());
+        }
+        check_json("the arguments", &arguments)?;
+        let id = self.request(crate::PendingKind::Lsp)?;
+        self.actions.push(crate::Action::DebugRequest {
+            plugin: self.plugin.clone(),
+            id,
+            command,
+            arguments,
+        });
+        Ok(id)
+    }
+    pub(crate) fn debug_listen(&mut self, events: Vec<String>) -> Result<(), String> {
+        self.need(crate::Permission::Debug)?;
+        if !events.is_empty() {
+            self.need_own_service("debug-event", "debug.listen")?;
+        }
+        if events.len() > 64 || events.iter().any(|e| e.is_empty() || e.len() > 64) {
+            return Err("at most 64 event names".into());
+        }
+        let plugin = self.plugin.clone();
+        self.actions
+            .push(crate::Action::DebugListen { plugin, events });
         Ok(())
     }
     pub(crate) fn set_bar(
@@ -2567,6 +2695,9 @@ impl crate::PluginHost {
             if state.v05.lsp {
                 grants.push("allow-lsp".into());
             }
+            if state.v05.debug {
+                grants.push("allow-debug".into());
+            }
             if !state.v05.network.is_empty() {
                 grants.push(format!("allow-network = {:?}", state.v05.network));
             }
@@ -2590,6 +2721,7 @@ impl crate::PluginHost {
                     "allow-listen",
                 ),
                 (crate::Permission::Lsp, state.v05.lsp, "allow-lsp"),
+                (crate::Permission::Debug, state.v05.debug, "allow-debug"),
                 (
                     crate::Permission::Network,
                     !state.v05.network.is_empty(),

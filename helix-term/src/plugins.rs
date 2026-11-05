@@ -21,6 +21,7 @@
 pub mod install;
 pub use helix_plugin::PluginCompletion;
 pub use install::{install_command, remove_command, update_command};
+mod debug;
 mod http;
 mod listen;
 mod lsp_server;
@@ -134,6 +135,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     http::stop_plugin(Some(plugin));
     lsp_server::stop_plugin(editor, Some(plugin));
     mouse::stop_plugin(Some(plugin));
+    debug::stop_plugin(Some(plugin));
     editor.plugin_bars.clear_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
@@ -735,6 +737,7 @@ fn install(
     http::stop_plugin(None);
     lsp_server::stop_plugin(editor, None);
     mouse::stop_plugin(None);
+    debug::stop_plugin(None);
     editor.plugin_bars.clear_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
@@ -758,6 +761,7 @@ fn install(
         Ordering::Relaxed,
     );
     HAS_V05.store(host.as_ref().is_some_and(has_v05), Ordering::Relaxed);
+    debug::WANTED.store(host.as_ref().is_some_and(wants_debug), Ordering::Relaxed);
     clear_plugin_diagnostics(editor);
     COMPLETIONS.lock().clear();
     *MARKS.lock() = host.as_ref().map(PluginHost::marks);
@@ -902,6 +906,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
     table.remove("allow-listen");
     table.remove("allow-key-override");
     table.remove("allow-lsp");
+    table.remove("allow-debug");
     table.remove("allow-network");
     table.remove("lazy");
     table.remove("keys");
@@ -915,6 +920,7 @@ fn plugin_settings(settings: &toml::Table, name: &str) -> Option<anyhow::Result<
             listen: allowed_ports(settings, name)?,
             key_override: flag(settings, name, "allow-key-override")?,
             lsp: flag(settings, name, "allow-lsp")?,
+            debug: flag(settings, name, "allow-debug")?,
             network: allowed_hosts(settings, name)?,
             eager: settings
                 .get(name)
@@ -1204,6 +1210,15 @@ struct UiFlags {
     picker: bool,
     popup: bool,
     pending: Vec<helix_view::input::KeyEvent>,
+}
+
+fn wants_debug(host: &PluginHost) -> bool {
+    host.plugins().iter().any(|p| {
+        p.disabled().is_none()
+            && p.manifest()
+                .permissions
+                .contains(&helix_plugin::Permission::Debug)
+    })
 }
 
 fn has_v05(host: &PluginHost) -> bool {
@@ -2041,7 +2056,13 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
         } else {
             Default::default()
         },
+        debug: debug::state(editor),
     }
+}
+
+/// The debugger sent an event: tell the plugins listening.
+pub fn debug_event(name: &str, body: Option<&serde_json::Value>) {
+    debug::event(name, body);
 }
 
 /// Apply the actions of a plugin call. `jobs` is needed to run commands; it is
@@ -2590,6 +2611,16 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
             }
             Action::LanguageServer(action) => lsp_server::apply(editor, action),
             Action::Mouse { plugin, kinds } => mouse::listen(plugin, kinds),
+            Action::DebugRequest {
+                plugin,
+                id,
+                command,
+                arguments,
+            } => debug::request(editor, plugin, id, command, arguments),
+            Action::SetBreakpoints { path, breakpoints } => {
+                debug::set_breakpoints(editor, path, breakpoints)
+            }
+            Action::DebugListen { plugin, events } => debug::listen(plugin, events),
             Action::Bar {
                 plugin,
                 kind,
@@ -3340,6 +3371,10 @@ fn refresh_wanted(editor: &mut Editor) {
     );
     HAS_V05.store(
         with_host(|host| has_v05(host)).unwrap_or(false),
+        Ordering::Relaxed,
+    );
+    debug::WANTED.store(
+        with_host(|host| wants_debug(host)).unwrap_or(false),
         Ordering::Relaxed,
     );
     for plugin in disabled {
