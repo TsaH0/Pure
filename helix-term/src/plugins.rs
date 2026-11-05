@@ -1755,6 +1755,61 @@ runtime_local! {
         Mutex::new(std::collections::BTreeMap::new());
 }
 
+runtime_local! {
+    /// Each document's syntax layers as plugins see them, with the
+    /// revision they are of.
+    static LAYERS: Mutex<std::collections::BTreeMap<DocumentId, (i32, Arc<Vec<helix_plugin::SyntaxLayer>>)>> =
+        Mutex::new(std::collections::BTreeMap::new());
+}
+
+/// `doc`'s syntax layers for plugins, made again only when the document
+/// changed.
+fn syntax_layers(
+    editor: &Editor,
+    doc: &helix_view::Document,
+) -> Option<Arc<Vec<helix_plugin::SyntaxLayer>>> {
+    let syntax = doc.syntax()?;
+    let version = doc.version();
+    let mut cache = LAYERS.lock();
+    if let Some((cached, layers)) = cache.get(&doc.id()) {
+        if *cached == version {
+            return Some(layers.clone());
+        }
+    }
+    let loader = editor.syn_loader.load();
+    // The root first, then the others; parents by their index here.
+    let mut order: Vec<_> = syntax
+        .layers()
+        .filter(|(_, layer)| layer.tree().is_some())
+        .map(|(layer, _)| layer)
+        .collect();
+    order.sort_by_key(|layer| (*layer != syntax.root_layer(), layer.index()));
+    let index_of = |layer: helix_core::Layer| {
+        order
+            .iter()
+            .position(|other| *other == layer)
+            .map(|i| i as u32)
+    };
+    let layers: Vec<_> = order
+        .iter()
+        .filter_map(|layer| {
+            let data = syntax.layer(*layer);
+            Some(helix_plugin::SyntaxLayer {
+                language: loader.language(data.language).config().language_id.clone(),
+                tree: data.tree()?.clone(),
+                ranges: data
+                    .byte_ranges()
+                    .map(|range| (range.start, range.end.min(doc.text().len_bytes() as u32)))
+                    .collect(),
+                parent: data.parent().and_then(index_of),
+            })
+        })
+        .collect();
+    let layers = Arc::new(layers);
+    cache.insert(doc.id(), (version, layers.clone()));
+    Some(layers)
+}
+
 /// `doc`'s undo history for plugins: the last one, unless it changed.
 fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
     let history = doc.history.take();
@@ -1939,6 +1994,11 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                     },
                     history: if HAS_V05.load(Ordering::Relaxed) {
                         Some(history(doc))
+                    } else {
+                        None
+                    },
+                    layers: if HAS_V05.load(Ordering::Relaxed) {
+                        syntax_layers(editor, doc)
                     } else {
                         None
                     },
@@ -3211,6 +3271,7 @@ pub fn register_hooks() {
     });
     register_hook!(move |event: &mut DocumentDidClose<'_>| {
         HISTORIES.lock().remove(&event.doc.id());
+        LAYERS.lock().remove(&event.doc.id());
         if let Some(marks) = &*MARKS.lock() {
             marks
                 .lock()

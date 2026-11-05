@@ -5111,3 +5111,37 @@ async fn statusbar_example_draws_a_statusline_and_buffer_tabs() -> anyhow::Resul
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_see_injected_languages() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[#|]# T\n\n```rust\nfn main() {}\n```\n", None, "");
+    keys(&mut app, ":set-language markdown<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/layers<ret>").await;
+    let (layers, _) = status(&app);
+    assert!(layers.starts_with("layers:0:markdown@None"), "{layers}");
+    let rust = layers
+        .split(' ')
+        .find(|layer| layer.contains(":rust@"))
+        .unwrap_or_else(|| panic!("no rust layer in {layers}"));
+    assert!(rust.contains("@Some(0)"), "{rust}");
+    let index = rust.split(':').next().unwrap();
+    // "fn main() {}" starts at char 13.
+    keys(&mut app, ":plugin-run testplugin3/layers at 16<ret>").await;
+    assert_eq!(
+        status(&app).0,
+        format!("layer-at:Some({index}):source_file")
+    );
+    keys(
+        &mut app,
+        &format!(":plugin-run testplugin3/layers query {index} (function_item name: (identifier) @name)<ret>"),
+    )
+    .await;
+    assert_eq!(status(&app).0, "layer-query:name=16..20");
+    keys(&mut app, ":plugin-run testplugin3/layers query 99 (x)<ret>").await;
+    assert!(
+        status(&app).0.contains("no syntax layer 99"),
+        "{}",
+        status(&app).0
+    );
+    Ok(())
+}

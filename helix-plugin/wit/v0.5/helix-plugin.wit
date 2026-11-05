@@ -1016,9 +1016,10 @@ interface callbacks2 {
 }
 
 /// API 0.5: documents' syntax trees (tree-sitter), for outlines, text
-/// objects, motions and structural edits. Needs `read-buffers`. Covers the
-/// document's own language, not languages injected into it. Positions are
-/// char offsets, like the rest of the API.
+/// objects, motions and structural edits. Needs `read-buffers`. `query`,
+/// `node-at` and the rest cover the document's own language; the
+/// `layer-*` functions the languages injected into it. Positions are char
+/// offsets, like the rest of the API.
 interface syntax {
   use types.{document-id};
 
@@ -1067,6 +1068,32 @@ interface syntax {
   prev-sibling: func(doc: document-id, node: node, named: bool) -> result<option<node>, string>;
   /// The tree under `node` as an S-expression, for debugging.
   sexp: func(doc: document-id, node: node) -> result<string, string>;
+
+  /// A language in the document: the document's own (layer 0) or one
+  /// injected into it (code blocks in Markdown, CSS and JavaScript in
+  /// HTML, SQL in strings...).
+  record layer {
+    /// For the `layer-*` functions; valid for this revision of the
+    /// document.
+    index: u32,
+    language: string,
+    /// The layer it is injected into; none for layer 0.
+    parent: option<u32>,
+    /// The chars it covers.
+    ranges: list<tuple<u32, u32>>,
+  }
+
+  /// The document's layers, layer 0 first; none without a tree.
+  layers: func(doc: document-id) -> result<list<layer>, string>;
+  /// The innermost layer covering chars `from..to`.
+  layer-at: func(doc: document-id, %from: u32, to: u32) -> result<option<u32>, string>;
+  /// As `query`, `root`, `node-at`, `parent` and `children`, in layer
+  /// `layer`'s tree (positions are still the document's).
+  layer-query: func(doc: document-id, layer: u32, source: string, range: option<tuple<u32, u32>>) -> result<list<query-match>, string>;
+  layer-root: func(doc: document-id, layer: u32) -> result<node, string>;
+  layer-node-at: func(doc: document-id, layer: u32, %from: u32, to: u32, named: bool) -> result<option<node>, string>;
+  layer-parent: func(doc: document-id, layer: u32, node: node) -> result<option<node>, string>;
+  layer-children: func(doc: document-id, layer: u32, node: node, named: bool) -> result<list<node>, string>;
 }
 
 /// API 0.5: HTTPS requests, only to hosts the user lists for the plugin

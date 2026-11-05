@@ -75,4 +75,4 @@ pub use transaction::{Assoc, Change, ChangeSet, Deletion, Operation, Transaction
 
 pub use uri::Uri;
 
-pub use tree_house::Language;
+pub use tree_house::{Language, Layer};

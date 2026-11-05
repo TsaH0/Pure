@@ -305,7 +305,7 @@ services::provide("uses", "1.0.0", &[], |_caller, _method, payload| Ok(payload.i
 | `history` | the undo tree: every revision with its parent, time and size, and the current one; jump to any revision (all branches, like undotree) | `read-buffers` (`jump`: `edit-buffers`) |
 | `folds` | fold lines (they show as the first with `⋯ N lines`), unfold, list the folds | `read-buffers` |
 | `windows` | open a document in a split (right or below), focus, close (not the last), resize by columns and rows, equalize, set a split's gutters; **canvases**: draw styled lines in place of one of your buffers' text (dashboards, graphs) | `run-commands` (canvases: –) |
-| `syntax` | the document's tree-sitter tree: queries (with `#eq?`, `#match?`; compiled once and cached; at most 10000 matches), the node at a position, parents, children, siblings, S-expressions; the editor's own query files (`query-file("rust", "textobjects.scm")`) to reuse its text objects and symbol queries. The document's language only, not injected ones | `read-buffers` |
+| `syntax` | the document's tree-sitter tree: queries (with `#eq?`, `#match?`; compiled once and cached; at most 10000 matches), the node at a position, parents, children, siblings, S-expressions; the editor's own query files (`query-file("rust", "textobjects.scm")`) to reuse its text objects and symbol queries; **injected languages** too (code blocks in Markdown, CSS in HTML): `layers`, `layer-at`, and `layer-query`, `layer-root`, `layer-node-at`, `layer-parent`, `layer-children` in a layer's tree | `read-buffers` |
 
 **Settings schemas.** Declare settings in `plugin.toml`; the editor checks
 the user's against them before `init` (unknown names, wrong types and

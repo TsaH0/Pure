@@ -530,11 +530,27 @@ pub struct DocumentSnapshot {
     /// Its syntax tree (API 0.5 `syntax`), filled in only while an API 0.5
     /// plugin is loaded. A copy shares the tree, so it is cheap.
     pub syntax: Option<helix_core::tree_sitter::Tree>,
+    /// Its syntax layers, the root (the same tree as `syntax`) first and
+    /// then the injected languages' (API 0.5 `syntax.layers`). Filled in
+    /// like `syntax`; shared between snapshots of the same revision.
+    pub layers: Option<std::sync::Arc<Vec<SyntaxLayer>>>,
     /// Its folds, `(first, last)` lines (API 0.5 `folds`).
     pub folds: Vec<(u32, u32)>,
     /// Its undo history (API 0.5 `history`), filled in only while an API
     /// 0.5 plugin is loaded. Shared between snapshots until it changes.
     pub history: Option<std::sync::Arc<History>>,
+}
+
+/// A language in a document: the root one or one injected into it (code
+/// in Markdown, CSS in HTML).
+#[derive(Debug, Clone)]
+pub struct SyntaxLayer {
+    pub language: String,
+    pub tree: helix_core::tree_sitter::Tree,
+    /// The byte ranges it covers.
+    pub ranges: Vec<(u32, u32)>,
+    /// The index of the layer it is injected into.
+    pub parent: Option<u32>,
 }
 
 /// A document's undo history: a tree of revisions.

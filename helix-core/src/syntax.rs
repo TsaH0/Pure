@@ -546,6 +546,11 @@ impl Syntax {
         self.inner.root()
     }
 
+    /// Every layer: the root and the injected ones.
+    pub fn layers(&self) -> impl Iterator<Item = (Layer, &tree_house::LayerData)> {
+        self.inner.layers()
+    }
+
     /// Finds the smallest injection layer which fully includes the range `start..=end`.
     ///
     /// This is the same as using the last item in the `layers_for_byte_range` iterator.

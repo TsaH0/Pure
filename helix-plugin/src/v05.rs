@@ -134,6 +134,16 @@ pub struct Bar {
     pub right: Vec<(String, String)>,
 }
 
+/// A syntax layer as plugins see it (API 0.5 `syntax.layers`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerInfo {
+    pub index: u32,
+    pub language: String,
+    pub parent: Option<u32>,
+    /// Char ranges.
+    pub ranges: Vec<(u32, u32)>,
+}
+
 /// One revision of a document's undo history (API 0.5 `history`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Revision {
@@ -1336,6 +1346,99 @@ impl State {
         Ok(self
             .syntax_tree(doc)?
             .map(|(tree, text)| crate::syntax::root(tree, text)))
+    }
+    /// The tree of layer `layer` of `doc`.
+    fn layer_tree(
+        &self,
+        doc: DocumentId,
+        layer: u32,
+    ) -> Result<(&helix_core::tree_sitter::Tree, &helix_core::Rope), String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let layer = document
+            .layers
+            .as_ref()
+            .and_then(|layers| layers.get(layer as usize))
+            .ok_or_else(|| format!("document {doc} has no syntax layer {layer}"))?;
+        Ok((&layer.tree, &document.text))
+    }
+    pub(crate) fn syntax_layers(&mut self, doc: DocumentId) -> Result<Vec<LayerInfo>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let text = &document.text;
+        let len = text.len_bytes();
+        let char_at = |byte: u32| text.byte_to_char((byte as usize).min(len)) as u32;
+        Ok(document
+            .layers
+            .iter()
+            .flat_map(|layers| layers.iter())
+            .enumerate()
+            .map(|(index, layer)| LayerInfo {
+                index: index as u32,
+                language: layer.language.clone(),
+                parent: layer.parent,
+                ranges: layer
+                    .ranges
+                    .iter()
+                    .map(|(start, end)| (char_at(*start), char_at(*end)))
+                    .collect(),
+            })
+            .collect())
+    }
+    /// The innermost layer covering chars `from..to`.
+    pub(crate) fn syntax_layer_at(
+        &mut self,
+        doc: DocumentId,
+        from: u32,
+        to: u32,
+    ) -> Result<Option<u32>, String> {
+        self.need(crate::Permission::ReadBuffers)?;
+        let document = self.document(doc)?;
+        let Some(layers) = &document.layers else {
+            return Ok(None);
+        };
+        let text = &document.text;
+        let byte = |pos: u32| text.char_to_byte((pos as usize).min(text.len_chars())) as u32;
+        let (from, to) = (byte(from), byte(to.max(from)));
+        let depth = |mut layer: u32| {
+            let mut depth = 0;
+            while let Some(parent) = layers.get(layer as usize).and_then(|l| l.parent) {
+                layer = parent;
+                depth += 1;
+            }
+            depth
+        };
+        Ok(layers
+            .iter()
+            .enumerate()
+            .filter(|(_, layer)| {
+                layer
+                    .ranges
+                    .iter()
+                    .any(|(start, end)| *start <= from && to <= *end)
+            })
+            .map(|(index, _)| index as u32)
+            .max_by_key(|index| depth(*index)))
+    }
+    pub(crate) fn layer_query(
+        &mut self,
+        doc: DocumentId,
+        layer: u32,
+        source: &str,
+        range: Option<(u32, u32)>,
+    ) -> Result<Vec<crate::syntax::QueryMatch>, String> {
+        let (tree, text) = self.layer_tree(doc, layer)?;
+        crate::syntax::query(tree, text, source, range)
+    }
+    /// Run `f` on the tree of layer `layer` of `doc`.
+    pub(crate) fn with_layer<T>(
+        &mut self,
+        doc: DocumentId,
+        layer: u32,
+        f: impl FnOnce(&helix_core::tree_sitter::Tree, &helix_core::Rope) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let (tree, text) = self.layer_tree(doc, layer)?;
+        f(tree, text)
     }
     /// Run `f` on the tree of `doc`, which must have one.
     pub(crate) fn with_syntax<T>(

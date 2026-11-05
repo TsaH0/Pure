@@ -203,6 +203,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "layers",
                 "bar",
                 "mouse-off",
                 "next-key",
@@ -611,6 +612,39 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     Some("gutters") => w::set_gutters(view(1)?, &args[2..]),
                     _ => Err("which?".into()),
                 }
+            }
+            // `layers` (in the status), `layers at POS`, `layers query N QUERY`.
+            "layers" => {
+                use helix::plugin::syntax;
+                let doc = host::current_document().ok_or("no document")?;
+                match args.first().map(String::as_str) {
+                    Some("at") => {
+                        let pos: u32 = args.get(1).ok_or("a position")?.parse().map_err(|_| "a position".to_string())?;
+                        let layer = syntax::layer_at(doc, pos, pos)?;
+                        let root = match layer {
+                            Some(layer) => syntax::layer_root(doc, layer)?.kind,
+                            None => "none".into(),
+                        };
+                        host::set_status(&format!("layer-at:{layer:?}:{root}"));
+                    }
+                    Some("query") => {
+                        let layer: u32 = args.get(1).ok_or("a layer")?.parse().map_err(|_| "a layer".to_string())?;
+                        let found = syntax::layer_query(doc, layer, &args[2..].join(" "), None)?;
+                        let names = found
+                            .iter()
+                            .flat_map(|m| m.captures.iter().map(|c| format!("{}={}..{}", c.name, c.node.start, c.node.end)))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("layer-query:{}", names.join(",")));
+                    }
+                    _ => {
+                        let layers = syntax::layers(doc)?
+                            .iter()
+                            .map(|layer| format!("{}:{}@{:?}{:?}", layer.index, layer.language, layer.parent, layer.ranges))
+                            .collect::<Vec<_>>();
+                        host::set_status(&format!("layers:{}", layers.join(" ")));
+                    }
+                }
+                Ok(())
             }
             // `bar statusline|tabline|winbar [view|all] [off]`.
             "bar" => {
