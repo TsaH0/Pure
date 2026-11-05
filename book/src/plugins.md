@@ -155,6 +155,24 @@ follows the split's size, the mouse wheel scrolls back through what went
 off its top, and closing its buffer (`:buffer-close`) ends the program.
 Plugins can open terminals and write to them (`toggleterm`).
 
+Other programs can drive a running editor, as with Neovim's `--listen`.
+Start it with `pure --listen` (or `--listen=/path/to/socket`): it then
+takes requests on a Unix socket only you can use, and programs in its
+terminals find the socket in `$PURE_LISTEN`. From a shell:
+
+```sh
+pure --remote src/main.rs          # open files in it
+pure --remote-command 'write'      # run a command, as typed after `:`
+pure --remote-send 'ggdd'          # play keys, as if typed
+pure --remote-state                # its mode, file, cursor and documents, as JSON
+```
+
+(`--server=<path>` names the socket when `$PURE_LISTEN` isn't set.) Other
+programs can speak to the socket directly: one JSON request per line, such
+as `{"id": 1, "method": "command", "params": {"line": "open a.rs"}}`
+(methods `command`, `keys`, `open` and `state`), answered by one line with
+`result` or `error`.
+
 Code can be folded, like Vim: `zc` (or `zf`) folds the selected lines, or
 the syntax node around the cursor (a function, a block; the indented lines
 below it where there is no syntax tree), `zo` unfolds, `za` toggles, `zM`

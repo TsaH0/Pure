@@ -25,6 +25,8 @@ pub mod plugins;
 #[path = "plugins_disabled.rs"]
 pub mod plugins;
 #[cfg(unix)]
+pub mod remote;
+#[cfg(unix)]
 pub mod terminal;
 pub mod ui;
 

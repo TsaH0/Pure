@@ -177,6 +177,10 @@ pub fn spawn(
     let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
     let stdio = |fd: &OwnedFd| -> anyhow::Result<Stdio> { Ok(Stdio::from(fd.try_clone()?)) };
     let mut command = Command::new(&program);
+    // Programs in it can drive the editor (`pure --remote...`).
+    if let Some(socket) = crate::remote::listening() {
+        command.env("PURE_LISTEN", socket);
+    }
     command
         .args(&args)
         .current_dir(cwd)

@@ -25,6 +25,8 @@ mod test {
     mod plugins;
     mod quickfix;
     mod registers;
+    #[cfg(unix)]
+    mod remote;
     mod splits;
     mod substitute;
     #[cfg(unix)]

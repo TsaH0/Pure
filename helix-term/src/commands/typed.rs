@@ -5146,6 +5146,11 @@ pub static TYPABLE_COMMAND_MAP: LazyLock<HashMap<&'static str, &'static TypableC
             .collect()
     });
 
+/// Run `line` as if typed after `:` (`pure --remote-command`).
+pub fn run_command_line(cx: &mut compositor::Context, line: &str) -> anyhow::Result<()> {
+    execute_command_line(cx, line, PromptEvent::Validate)
+}
+
 fn execute_command_line(
     cx: &mut compositor::Context,
     input: &str,

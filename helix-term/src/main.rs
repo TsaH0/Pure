@@ -63,6 +63,13 @@ FLAGS:
     --vsplit                       Split all given files vertically into different windows
     --hsplit                       Split all given files horizontally into different windows
     -w, --working-dir <path>       Specify an initial working directory
+    --listen[=<path>]              Take requests from other programs on a socket (only yours);
+                                   programs in its terminals find it in $PURE_LISTEN
+    --remote <files>...            Open the files in the editor listening on --server=<path>
+                                   (default $PURE_LISTEN) instead of starting one
+    --remote-command <line>        Run a command line (as after `:`) in that editor
+    --remote-send <keys>           Play keys in that editor, as if typed (\"ihello<esc>\")
+    --remote-state                 Print that editor's mode, file, cursor and documents (JSON)
     +[N]                           Open the first given file at line number N, or the last line, if
                                    N is not specified.
 ",
@@ -95,6 +102,10 @@ FLAGS:
         }
 
         std::process::exit(0);
+    }
+
+    if let Some(remote) = &args.remote {
+        return remote_request(&args, remote);
     }
 
     if args.fetch_grammars {
@@ -151,10 +162,68 @@ FLAGS:
         });
 
     // TODO: use the thread local executor to spawn the application task separately from the work pool
+    let listen = args.listen.clone();
     let mut app = Application::new(args, config, lang_loader, workspace_trust)
         .context(format!("unable to start {}", helix_term::NAME))?;
 
-    let exit_code = app.run(|app| app.event_stream()).await?;
+    #[cfg(unix)]
+    if let Some(path) = listen {
+        let path = path.unwrap_or_else(helix_term::remote::default_path);
+        if let Err(err) = helix_term::remote::listen(path) {
+            app.editor.set_error(err.to_string());
+        }
+    }
+    #[cfg(not(unix))]
+    if listen.is_some() {
+        app.editor.set_error("--listen needs a Unix system");
+    }
+
+    let exit_code = app.run(|app| app.event_stream()).await;
+    #[cfg(unix)]
+    helix_term::remote::stop();
+    let exit_code = exit_code?;
 
     Ok(exit_code)
+}
+
+/// `pure --remote...`: ask the editor listening on `--server` (or
+/// `$PURE_LISTEN`), print its answer.
+#[cfg(unix)]
+fn remote_request(args: &Args, remote: &helix_term::args::Remote) -> Result<i32> {
+    use helix_term::args::Remote;
+    use serde_json::json;
+    let Some(server) = args
+        .server
+        .clone()
+        .or_else(|| std::env::var_os("PURE_LISTEN").map(Into::into))
+    else {
+        eprintln!("No editor to talk to: give --server=<path> or set $PURE_LISTEN");
+        return Ok(1);
+    };
+    let request = match remote {
+        Remote::Open => {
+            let paths: Vec<_> = args.files.keys().collect();
+            json!({ "method": "open", "params": { "paths": paths } })
+        }
+        Remote::Command(line) => json!({ "method": "command", "params": { "line": line } }),
+        Remote::Keys(keys) => json!({ "method": "keys", "params": { "keys": keys } }),
+        Remote::State => json!({ "method": "state" }),
+    };
+    match helix_term::remote::request(&server, request) {
+        Ok(serde_json::Value::Null) => Ok(0),
+        Ok(result) => {
+            println!("{result}");
+            Ok(0)
+        }
+        Err(err) => {
+            eprintln!("{err}");
+            Ok(1)
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn remote_request(_args: &Args, _remote: &helix_term::args::Remote) -> Result<i32> {
+    eprintln!("--remote needs a Unix system");
+    Ok(1)
 }

@@ -20,6 +20,23 @@ pub struct Args {
     pub config_file: Option<PathBuf>,
     pub files: IndexMap<PathBuf, Vec<Position>>,
     pub working_directory: Option<PathBuf>,
+    /// `--listen[=path]`: take requests on a socket.
+    pub listen: Option<Option<PathBuf>>,
+    /// `--server=path`: the editor `--remote...` talks to (default
+    /// `$PURE_LISTEN`).
+    pub server: Option<PathBuf>,
+    /// `--remote...`: ask a running editor instead of starting one.
+    pub remote: Option<Remote>,
+}
+
+/// What `--remote...` asks of a running editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Remote {
+    /// Open the files given (`--remote`).
+    Open,
+    Command(String),
+    Keys(String),
+    State,
 }
 
 impl Args {
@@ -90,6 +107,23 @@ impl Args {
                     None => {
                         anyhow::bail!("--working-dir must specify an initial working directory")
                     }
+                },
+                "--listen" => args.listen = Some(None),
+                arg if arg.starts_with("--listen=") => {
+                    args.listen = Some(Some(PathBuf::from(&arg["--listen=".len()..])))
+                }
+                arg if arg.starts_with("--server=") => {
+                    args.server = Some(PathBuf::from(&arg["--server=".len()..]))
+                }
+                "--remote" => args.remote = Some(Remote::Open),
+                "--remote-state" => args.remote = Some(Remote::State),
+                "--remote-command" => match argv.next() {
+                    Some(line) => args.remote = Some(Remote::Command(line)),
+                    None => anyhow::bail!("--remote-command must be followed by a command line"),
+                },
+                "--remote-send" => match argv.next() {
+                    Some(keys) => args.remote = Some(Remote::Keys(keys)),
+                    None => anyhow::bail!("--remote-send must be followed by keys"),
                 },
                 arg if arg.starts_with("--") => {
                     anyhow::bail!("unexpected double dash argument: {}", arg)
