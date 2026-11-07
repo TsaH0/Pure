@@ -136,6 +136,7 @@ fn tear_down(editor: &mut Editor, plugin: &str) {
     lsp_server::stop_plugin(editor, Some(plugin));
     mouse::stop_plugin(Some(plugin));
     debug::stop_plugin(Some(plugin));
+    crate::keymap::modes::remove_plugin(Some(plugin));
     editor.plugin_bars.clear_plugin(Some(plugin));
     clear_key_bindings(Some(plugin));
     COMPLETIONS.lock().retain(|(owner, _, _)| owner != plugin);
@@ -738,6 +739,7 @@ fn install(
     lsp_server::stop_plugin(editor, None);
     mouse::stop_plugin(None);
     debug::stop_plugin(None);
+    crate::keymap::modes::remove_plugin(None);
     editor.plugin_bars.clear_plugin(None);
     clear_key_bindings(None);
     let wanted = host.as_ref().map_or(0, |host| {
@@ -1858,6 +1860,48 @@ fn history(doc: &helix_view::Document) -> Arc<helix_plugin::History> {
     snapshot
 }
 
+/// A key mode `plugin` defines.
+fn define_key_mode(editor: &mut Editor, plugin: String, def: helix_plugin::v05::KeyModeDef) {
+    use crate::keymap::modes;
+    let bindings: Vec<_> = def
+        .bindings
+        .iter()
+        .map(|(mode, keys, command)| {
+            let mode = match mode {
+                helix_plugin::Mode::Normal => Mode::Normal,
+                helix_plugin::Mode::Insert => Mode::Insert,
+                helix_plugin::Mode::Select => Mode::Select,
+            };
+            (mode, keys.clone(), command.clone())
+        })
+        .collect();
+    let keys = match modes::keys_from_bindings(&bindings) {
+        Ok(keys) => keys,
+        Err(err) => return editor.set_error(format!("{plugin}: mode {}: {err}", def.name)),
+    };
+    let mode = modes::KeyMode {
+        name: def.name.clone(),
+        owner: modes::Owner::Plugin(plugin.clone()),
+        config: modes::ModeConfig {
+            description: def.description,
+            lighter: def.lighter,
+            global: def.global,
+            enabled: def.enabled,
+            languages: def.languages,
+            conflicts: def.conflicts,
+            requires: def.requires,
+            keys,
+            on_enable: def.on_enable,
+            on_disable: def.on_disable,
+            chords: HashMap::new(),
+        },
+    };
+    if let Err(err) = modes::define(mode) {
+        editor.set_error(format!("{plugin}: {err}"));
+    }
+    helix_event::request_redraw();
+}
+
 /// Set (or remove) one of `plugin`'s bars.
 fn set_bar(
     editor: &mut Editor,
@@ -2006,6 +2050,14 @@ pub fn snapshot(editor: &Editor) -> Snapshot {
                         doc.syntax().map(|syntax| syntax.tree().clone())
                     } else {
                         None
+                    },
+                    key_modes: if HAS_V05.load(Ordering::Relaxed) {
+                        crate::keymap::modes::active(Some(doc.id()), doc.language_name())
+                            .iter()
+                            .map(|mode| mode.name.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
                     },
                     history: if HAS_V05.load(Ordering::Relaxed) {
                         Some(history(doc))
@@ -2628,6 +2680,34 @@ fn apply(editor: &mut Editor, mut jobs: Option<&mut Jobs>, actions: Vec<Action>)
                 debug::set_breakpoints(editor, path, breakpoints)
             }
             Action::DebugListen { plugin, events } => debug::listen(plugin, events),
+            Action::KeyModeDefine { plugin, def } => define_key_mode(editor, plugin, def),
+            Action::KeyModeSwitch { name, doc, how } => {
+                use crate::keymap::modes::Switch;
+                let how = match how {
+                    helix_plugin::v05::KeyModeSwitch::On => Switch::On,
+                    helix_plugin::v05::KeyModeSwitch::Off => Switch::Off,
+                    helix_plugin::v05::KeyModeSwitch::Toggle => Switch::Toggle,
+                };
+                let doc = match doc {
+                    Some(doc) => editor_doc_id(editor, doc),
+                    None => Some(editor.tree.get(editor.tree.focus).doc),
+                };
+                let language = doc
+                    .and_then(|doc| editor.documents.get(&doc))
+                    .and_then(|doc| doc.language_name().map(str::to_string));
+                match crate::keymap::modes::switch(doc, language.as_deref(), &name, how) {
+                    Ok((_, commands)) if !commands.is_empty() => {
+                        crate::compositor::defer_ui(crate::compositor::DeferredUi::Callback(
+                            Box::new(move |_compositor, cx| {
+                                crate::commands::modes::run_commands(cx, &commands)
+                            }),
+                        ));
+                        helix_event::request_redraw();
+                    }
+                    Ok(_) => helix_event::request_redraw(),
+                    Err(err) => editor.set_error(format!("mode {name}: {err}")),
+                }
+            }
             #[cfg(unix)]
             Action::TerminalOpen {
                 plugin,

@@ -162,6 +162,7 @@ where
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
         helix_view::editor::StatusLineElement::CodeActionHint => render_code_action_hint,
         helix_view::editor::StatusLineElement::Plugins => render_plugins,
+        helix_view::editor::StatusLineElement::Modes => render_key_modes,
     }
 }
 
@@ -528,6 +529,21 @@ where
     let style = context.editor.theme.get("ui.statusline.separator");
 
     write(context, Span::styled(sep.to_string(), style));
+}
+
+/// The key modes on in the buffer, by their lighters.
+fn render_key_modes<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let language = crate::keymap::modes::need_language()
+        .then(|| context.doc.language_name())
+        .flatten();
+    let lighters = crate::keymap::modes::lighters(Some(context.doc.id()), language);
+    if !lighters.is_empty() {
+        let style = context.editor.theme.get("ui.statusline.modes");
+        write(context, Span::styled(format!(" [{lighters}] "), style));
+    }
 }
 
 /// What plugins put in the statusline, segment by segment.

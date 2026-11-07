@@ -1,0 +1,337 @@
+# Ki editor keys (https://github.com/ki-editor/ki-editor), Qwerty
+# positions. As in Ki, first pick a selection mode, then the same keys move
+# in it:
+#   a LINE   s WORD   w SUBWORD   W CHAR   d NODE (syntax)   E PARAGRAPH
+#   j/l left/right   u/o previous/next   i/k up/down   y/p first/last
+# and act: f change, r delete, x cut, c copy, v paste, h/; insert before/
+# after, z/Z undo/redo, I join, K break line, L/J indent/dedent, m jump,
+# / and ? flip, Y/P align, F transform (case), , surround, n local menu
+# (search, diagnostics, changes, quickfix), g o/O open line, q movement
+# history, Enter save, Tab/Backspace through earlier selections, Alt-i/k
+# scroll, Alt-; centre the view, Alt-/ next window.
+#
+# Ki's momentary layers are chords here: hold r (delete), x (cut) or c
+# (copy) and press a movement to act along it, g (open) and q (history)
+# with i/k and j/l. They need a terminal that reports key releases (kitty,
+# WezTerm, foot, Ghostty...); elsewhere, and when tapped, r x c act on the
+# selection. Turn on with `:mode ki`; each selection mode is a mode of its
+# own (ki-line, ki-word...), shown in the statusline.
+#
+# Not here, because Pure has nothing to bind them to: Ki's multi-cursor (b)
+# and swap (t) layers, M (go to index), . (parent line), the buffer layer
+# (e), Shift-Enter (save as), * (keyboard layouts: this file is Qwerty).
+
+[modes.ki]
+description = "Ki editor keys: selection modes (a s w W d E), movements (j l u o i k y p), actions, and Ki's held layers as chords"
+lighter = "Ki"
+global = true
+conflicts = ["vim", "emacs"]
+on-enable = ["normal_mode", ":mode ki-word on"]
+
+[modes.ki.keys.normal]
+a = ":mode ki-line on"
+s = ":mode ki-word on"
+w = ":mode ki-subword on"
+W = ":mode ki-char on"
+d = ":mode ki-node on"
+E = ":mode ki-paragraph on"
+A = ["extend_to_line_bounds", ":mode ki-line on"]
+D = ["expand_selection", ":mode ki-node on"]
+S = ["move_next_long_word_start", ":mode ki-word on"]
+f = "change_selection"
+r = "delete_selection"
+x = ["yank", "delete_selection"]
+c = "yank"
+v = "paste_after"
+h = "insert_mode"
+";" = "append_mode"
+z = "undo"
+Z = "redo"
+I = "join_selections"
+K = ["append_mode", "insert_newline", "normal_mode"]
+L = "indent"
+J = "unindent"
+m = "goto_word"
+"/" = "flip_selections"
+"?" = "flip_selections"
+Y = "align_selections"
+P = "align_selections"
+"," = "surround_add"
+ret = ":write"
+tab = "jump_forward"
+backspace = "jump_backward"
+"A-i" = "half_page_up"
+"A-k" = "half_page_down"
+"A-;" = "align_view_center"
+"A-/" = "rotate_view"
+"C-z" = "suspend"
+
+[modes.ki.keys.normal.F]
+u = "switch_to_uppercase"
+l = "switch_to_lowercase"
+c = "switch_case"
+
+[modes.ki.keys.normal.n]
+n = "search_next"
+N = "search_prev"
+"/" = "search"
+d = "goto_next_diag"
+D = "goto_prev_diag"
+g = "goto_next_change"
+G = "goto_prev_change"
+q = "quickfix_next"
+Q = "quickfix_prev"
+s = "symbol_picker"
+
+[modes.ki.keys.normal.g]
+k = "open_below"
+i = "open_above"
+o = "open_below"
+O = "open_above"
+
+[modes.ki.keys.normal.q]
+j = "jump_backward"
+l = "jump_forward"
+
+[modes.ki.chords.normal]
+"g+k" = "open_below"
+"g+i" = "open_above"
+"q+j" = "jump_backward"
+"q+l" = "jump_forward"
+"z+j" = "undo"
+"z+l" = "redo"
+
+[modes.ki-line]
+description = "Ki LINE: j/l and i/k move a line at a time, y/p to the first/last line"
+lighter = "LINE"
+global = true
+requires = ["ki"]
+conflicts = ["ki-word", "ki-subword", "ki-char", "ki-node", "ki-paragraph"]
+
+[modes.ki-line.keys.normal]
+"l" = ["collapse_selection", "move_line_down", "extend_to_line_bounds"]
+"k" = ["collapse_selection", "move_line_down", "extend_to_line_bounds"]
+"o" = ["collapse_selection", "move_line_down", "extend_to_line_bounds"]
+"j" = ["flip_selections", "collapse_selection", "move_line_up", "extend_to_line_bounds"]
+"i" = ["flip_selections", "collapse_selection", "move_line_up", "extend_to_line_bounds"]
+"u" = ["flip_selections", "collapse_selection", "move_line_up", "extend_to_line_bounds"]
+"y" = ["goto_file_start", "extend_to_line_bounds"]
+"p" = ["goto_last_line", "extend_to_line_bounds"]
+
+[modes.ki-line.chords.normal]
+"r+l" = ["extend_to_line_bounds", "extend_line_below", "delete_selection"]
+"r+k" = ["extend_to_line_bounds", "extend_line_below", "delete_selection"]
+"r+o" = ["extend_to_line_bounds", "extend_line_below", "delete_selection"]
+"r+j" = ["extend_to_line_bounds", "extend_line_above", "delete_selection"]
+"r+i" = ["extend_to_line_bounds", "extend_line_above", "delete_selection"]
+"r+u" = ["extend_to_line_bounds", "extend_line_above", "delete_selection"]
+"r+y" = ["extend_to_line_bounds", "extend_to_file_start", "delete_selection"]
+"r+p" = ["extend_to_line_bounds", "extend_to_last_line", "delete_selection"]
+"x+l" = ["extend_to_line_bounds", "extend_line_below", "yank", "delete_selection"]
+"x+k" = ["extend_to_line_bounds", "extend_line_below", "yank", "delete_selection"]
+"x+o" = ["extend_to_line_bounds", "extend_line_below", "yank", "delete_selection"]
+"x+j" = ["extend_to_line_bounds", "extend_line_above", "yank", "delete_selection"]
+"x+i" = ["extend_to_line_bounds", "extend_line_above", "yank", "delete_selection"]
+"x+u" = ["extend_to_line_bounds", "extend_line_above", "yank", "delete_selection"]
+"x+y" = ["extend_to_line_bounds", "extend_to_file_start", "yank", "delete_selection"]
+"x+p" = ["extend_to_line_bounds", "extend_to_last_line", "yank", "delete_selection"]
+"c+l" = ["extend_to_line_bounds", "extend_line_below", "yank", "collapse_selection"]
+"c+k" = ["extend_to_line_bounds", "extend_line_below", "yank", "collapse_selection"]
+"c+o" = ["extend_to_line_bounds", "extend_line_below", "yank", "collapse_selection"]
+"c+j" = ["extend_to_line_bounds", "extend_line_above", "yank", "collapse_selection"]
+"c+i" = ["extend_to_line_bounds", "extend_line_above", "yank", "collapse_selection"]
+"c+u" = ["extend_to_line_bounds", "extend_line_above", "yank", "collapse_selection"]
+"c+y" = ["extend_to_line_bounds", "extend_to_file_start", "yank", "collapse_selection"]
+"c+p" = ["extend_to_line_bounds", "extend_to_last_line", "yank", "collapse_selection"]
+
+[modes.ki-word]
+description = "Ki WORD: j/l by word, u/o by WORD (with symbols), i/k up/down, y/p line start/end"
+lighter = "WORD"
+global = true
+requires = ["ki"]
+conflicts = ["ki-line", "ki-subword", "ki-char", "ki-node", "ki-paragraph"]
+
+[modes.ki-word.keys.normal]
+"l" = "move_next_word_start"
+"j" = "move_prev_word_start"
+"o" = "move_next_long_word_start"
+"u" = "move_prev_long_word_start"
+"k" = "move_visual_line_down"
+"i" = "move_visual_line_up"
+"y" = "goto_line_start"
+"p" = "goto_line_end"
+
+[modes.ki-word.chords.normal]
+"r+l" = ["extend_next_word_start", "delete_selection"]
+"r+j" = ["extend_prev_word_start", "delete_selection"]
+"r+o" = ["extend_next_long_word_start", "delete_selection"]
+"r+u" = ["extend_prev_long_word_start", "delete_selection"]
+"r+k" = ["extend_visual_line_down", "delete_selection"]
+"r+i" = ["extend_visual_line_up", "delete_selection"]
+"r+y" = ["extend_to_line_start", "delete_selection"]
+"r+p" = ["extend_to_line_end", "delete_selection"]
+"x+l" = ["extend_next_word_start", "yank", "delete_selection"]
+"x+j" = ["extend_prev_word_start", "yank", "delete_selection"]
+"x+o" = ["extend_next_long_word_start", "yank", "delete_selection"]
+"x+u" = ["extend_prev_long_word_start", "yank", "delete_selection"]
+"x+k" = ["extend_visual_line_down", "yank", "delete_selection"]
+"x+i" = ["extend_visual_line_up", "yank", "delete_selection"]
+"x+y" = ["extend_to_line_start", "yank", "delete_selection"]
+"x+p" = ["extend_to_line_end", "yank", "delete_selection"]
+"c+l" = ["extend_next_word_start", "yank", "collapse_selection"]
+"c+j" = ["extend_prev_word_start", "yank", "collapse_selection"]
+"c+o" = ["extend_next_long_word_start", "yank", "collapse_selection"]
+"c+u" = ["extend_prev_long_word_start", "yank", "collapse_selection"]
+"c+k" = ["extend_visual_line_down", "yank", "collapse_selection"]
+"c+i" = ["extend_visual_line_up", "yank", "collapse_selection"]
+"c+y" = ["extend_to_line_start", "yank", "collapse_selection"]
+"c+p" = ["extend_to_line_end", "yank", "collapse_selection"]
+
+[modes.ki-subword]
+description = "Ki SUBWORD: j/l by camelCase/snake_case part, u/o by word"
+lighter = "SUBWORD"
+global = true
+requires = ["ki"]
+conflicts = ["ki-line", "ki-word", "ki-char", "ki-node", "ki-paragraph"]
+
+[modes.ki-subword.keys.normal]
+"l" = "move_next_sub_word_start"
+"j" = "move_prev_sub_word_start"
+"o" = "move_next_word_start"
+"u" = "move_prev_word_start"
+"k" = "move_visual_line_down"
+"i" = "move_visual_line_up"
+"y" = "goto_line_start"
+"p" = "goto_line_end"
+
+[modes.ki-subword.chords.normal]
+"r+l" = ["extend_next_sub_word_start", "delete_selection"]
+"r+j" = ["extend_prev_sub_word_start", "delete_selection"]
+"r+o" = ["extend_next_word_start", "delete_selection"]
+"r+u" = ["extend_prev_word_start", "delete_selection"]
+"r+k" = ["extend_visual_line_down", "delete_selection"]
+"r+i" = ["extend_visual_line_up", "delete_selection"]
+"r+y" = ["extend_to_line_start", "delete_selection"]
+"r+p" = ["extend_to_line_end", "delete_selection"]
+"x+l" = ["extend_next_sub_word_start", "yank", "delete_selection"]
+"x+j" = ["extend_prev_sub_word_start", "yank", "delete_selection"]
+"x+o" = ["extend_next_word_start", "yank", "delete_selection"]
+"x+u" = ["extend_prev_word_start", "yank", "delete_selection"]
+"x+k" = ["extend_visual_line_down", "yank", "delete_selection"]
+"x+i" = ["extend_visual_line_up", "yank", "delete_selection"]
+"x+y" = ["extend_to_line_start", "yank", "delete_selection"]
+"x+p" = ["extend_to_line_end", "yank", "delete_selection"]
+"c+l" = ["extend_next_sub_word_start", "yank", "collapse_selection"]
+"c+j" = ["extend_prev_sub_word_start", "yank", "collapse_selection"]
+"c+o" = ["extend_next_word_start", "yank", "collapse_selection"]
+"c+u" = ["extend_prev_word_start", "yank", "collapse_selection"]
+"c+k" = ["extend_visual_line_down", "yank", "collapse_selection"]
+"c+i" = ["extend_visual_line_up", "yank", "collapse_selection"]
+"c+y" = ["extend_to_line_start", "yank", "collapse_selection"]
+"c+p" = ["extend_to_line_end", "yank", "collapse_selection"]
+
+[modes.ki-char]
+description = "Ki CHAR: j/l a character at a time"
+lighter = "CHAR"
+global = true
+requires = ["ki"]
+conflicts = ["ki-line", "ki-word", "ki-subword", "ki-node", "ki-paragraph"]
+
+[modes.ki-char.keys.normal]
+"l" = "move_char_right"
+"j" = "move_char_left"
+"o" = "move_char_right"
+"u" = "move_char_left"
+"k" = "move_visual_line_down"
+"i" = "move_visual_line_up"
+"y" = "goto_line_start"
+"p" = "goto_line_end"
+
+[modes.ki-char.chords.normal]
+"r+l" = ["extend_char_right", "delete_selection"]
+"r+j" = ["extend_char_left", "delete_selection"]
+"r+o" = ["extend_char_right", "delete_selection"]
+"r+u" = ["extend_char_left", "delete_selection"]
+"r+k" = ["extend_visual_line_down", "delete_selection"]
+"r+i" = ["extend_visual_line_up", "delete_selection"]
+"r+y" = ["extend_to_line_start", "delete_selection"]
+"r+p" = ["extend_to_line_end", "delete_selection"]
+"x+l" = ["extend_char_right", "yank", "delete_selection"]
+"x+j" = ["extend_char_left", "yank", "delete_selection"]
+"x+o" = ["extend_char_right", "yank", "delete_selection"]
+"x+u" = ["extend_char_left", "yank", "delete_selection"]
+"x+k" = ["extend_visual_line_down", "yank", "delete_selection"]
+"x+i" = ["extend_visual_line_up", "yank", "delete_selection"]
+"x+y" = ["extend_to_line_start", "yank", "delete_selection"]
+"x+p" = ["extend_to_line_end", "yank", "delete_selection"]
+"c+l" = ["extend_char_right", "yank", "collapse_selection"]
+"c+j" = ["extend_char_left", "yank", "collapse_selection"]
+"c+o" = ["extend_char_right", "yank", "collapse_selection"]
+"c+u" = ["extend_char_left", "yank", "collapse_selection"]
+"c+k" = ["extend_visual_line_down", "yank", "collapse_selection"]
+"c+i" = ["extend_visual_line_up", "yank", "collapse_selection"]
+"c+y" = ["extend_to_line_start", "yank", "collapse_selection"]
+"c+p" = ["extend_to_line_end", "yank", "collapse_selection"]
+
+[modes.ki-node]
+description = "Ki NODE: j/l to the previous/next syntax node, i/k out to the parent and back in, y/p all siblings/children"
+lighter = "NODE"
+global = true
+requires = ["ki"]
+conflicts = ["ki-line", "ki-word", "ki-subword", "ki-char", "ki-paragraph"]
+
+[modes.ki-node.keys.normal]
+"l" = "select_next_sibling"
+"j" = "select_prev_sibling"
+"o" = "move_parent_node_end"
+"u" = "move_parent_node_start"
+"i" = "expand_selection"
+"k" = "shrink_selection"
+"y" = "select_all_siblings"
+"p" = "select_all_children"
+
+[modes.ki-node.chords.normal]
+"r+l" = ["select_mode", "select_next_sibling", "normal_mode", "delete_selection"]
+"r+j" = ["select_mode", "select_prev_sibling", "normal_mode", "delete_selection"]
+"r+i" = ["expand_selection", "delete_selection"]
+"r+o" = ["extend_parent_node_end", "delete_selection"]
+"r+u" = ["extend_parent_node_start", "delete_selection"]
+"x+l" = ["select_mode", "select_next_sibling", "normal_mode", "yank", "delete_selection"]
+"x+j" = ["select_mode", "select_prev_sibling", "normal_mode", "yank", "delete_selection"]
+"x+i" = ["expand_selection", "yank", "delete_selection"]
+"x+o" = ["extend_parent_node_end", "yank", "delete_selection"]
+"x+u" = ["extend_parent_node_start", "yank", "delete_selection"]
+"c+l" = ["select_mode", "select_next_sibling", "normal_mode", "yank", "collapse_selection"]
+"c+j" = ["select_mode", "select_prev_sibling", "normal_mode", "yank", "collapse_selection"]
+"c+i" = ["expand_selection", "yank", "collapse_selection"]
+"c+o" = ["extend_parent_node_end", "yank", "collapse_selection"]
+"c+u" = ["extend_parent_node_start", "yank", "collapse_selection"]
+
+[modes.ki-paragraph]
+description = "Ki PARAGRAPH: j/l to the previous/next paragraph"
+lighter = "PARAGRAPH"
+global = true
+requires = ["ki"]
+conflicts = ["ki-line", "ki-word", "ki-subword", "ki-char", "ki-node"]
+
+[modes.ki-paragraph.keys.normal]
+"l" = "goto_next_paragraph"
+"j" = "goto_prev_paragraph"
+"o" = "goto_next_paragraph"
+"u" = "goto_prev_paragraph"
+"y" = "goto_file_start"
+"p" = "goto_last_line"
+
+[modes.ki-paragraph.chords.normal]
+"r+l" = ["select_mode", "goto_next_paragraph", "normal_mode", "delete_selection"]
+"r+j" = ["select_mode", "goto_prev_paragraph", "normal_mode", "delete_selection"]
+"r+o" = ["select_mode", "goto_next_paragraph", "normal_mode", "delete_selection"]
+"r+u" = ["select_mode", "goto_prev_paragraph", "normal_mode", "delete_selection"]
+"x+l" = ["select_mode", "goto_next_paragraph", "normal_mode", "yank", "delete_selection"]
+"x+j" = ["select_mode", "goto_prev_paragraph", "normal_mode", "yank", "delete_selection"]
+"x+o" = ["select_mode", "goto_next_paragraph", "normal_mode", "yank", "delete_selection"]
+"x+u" = ["select_mode", "goto_prev_paragraph", "normal_mode", "yank", "delete_selection"]
+"c+l" = ["select_mode", "goto_next_paragraph", "normal_mode", "yank", "collapse_selection"]
+"c+j" = ["select_mode", "goto_prev_paragraph", "normal_mode", "yank", "collapse_selection"]
+"c+o" = ["select_mode", "goto_next_paragraph", "normal_mode", "yank", "collapse_selection"]
+"c+u" = ["select_mode", "goto_prev_paragraph", "normal_mode", "yank", "collapse_selection"]

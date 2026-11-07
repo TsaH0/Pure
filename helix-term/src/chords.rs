@@ -39,26 +39,48 @@ fn parse(chord: &str) -> Option<(KeyEvent, KeyEvent)> {
     ))
 }
 
+/// The chords in the current mode, as `(chord, commands)`: the key modes'
+/// on in the focused buffer (the one turned on last first), then
+/// `[editor.chords]`.
+fn chords(editor: &Editor) -> Vec<(String, Vec<String>)> {
+    let mode = editor.mode();
+    let doc = helix_view::doc!(editor);
+    let mut all = crate::keymap::modes::chords(Some(doc.id()), doc.language_name(), mode);
+    if let Some(chords) = editor.config().chords.get(&mode) {
+        all.extend(
+            chords
+                .iter()
+                .map(|(chord, commands)| (chord.clone(), commands.commands().to_vec())),
+        );
+    }
+    all
+}
+
 /// The commands of the chord `first+second` in the current mode.
 fn chord(editor: &Editor, first: KeyEvent, second: KeyEvent) -> Option<Vec<String>> {
-    let config = editor.config();
-    config
-        .chords
-        .get(&editor.mode())?
-        .iter()
-        .find_map(|(chord, commands)| {
-            (parse(chord)? == (first, second)).then(|| commands.commands().to_vec())
-        })
+    chords(editor)
+        .into_iter()
+        .find_map(|(chord, commands)| (parse(&chord)? == (first, second)).then_some(commands))
 }
 
 /// Whether `key` starts a chord in the current mode.
 fn starts_chord(editor: &Editor, key: KeyEvent) -> bool {
-    let config = editor.config();
-    config.chords.get(&editor.mode()).is_some_and(|chords| {
-        chords
-            .keys()
-            .any(|chord| parse(chord).is_some_and(|(first, _)| first == key))
-    })
+    chords(editor)
+        .iter()
+        .any(|(chord, _)| parse(chord).is_some_and(|(first, _)| first == key))
+}
+
+/// Whether there are chords to handle: in `[editor.chords]`, or in a key
+/// mode that is on somewhere.
+pub fn any(editor: &Editor) -> bool {
+    !editor.config().chords.is_empty() || crate::keymap::modes::wants_key_releases()
+}
+
+runtime_local! {
+    /// The terminal has told about a key being let go: it reports releases.
+    /// Until then a key that starts a chord doesn't wait (it would wait for a
+    /// release that never comes).
+    static RELEASES_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 }
 
 fn same_key(a: &TermKey, b: &TermKey) -> bool {
@@ -66,32 +88,33 @@ fn same_key(a: &TermKey, b: &TermKey) -> bool {
 }
 
 fn run(editor: &mut Editor, compositor: &mut Compositor, jobs: &mut Jobs, names: &[String]) {
+    let mut commands = Vec::new();
     for name in names {
-        let command = match MappableCommand::from_str(name) {
-            Ok(command) => command,
+        match MappableCommand::from_str(name) {
+            Ok(command) => commands.push(command),
             Err(err) => {
                 editor.set_error(format!("chord: {err}"));
                 return;
             }
-        };
-        let mut cx = commands::Context {
-            register: None,
-            count: None,
-            editor: &mut *editor,
-            callback: Vec::new(),
-            on_next_key_callback: None,
-            jobs: &mut *jobs,
-        };
-        command.execute(&mut cx);
-        let callbacks = std::mem::take(&mut cx.callback);
-        let mut cx = crate::compositor::Context {
-            editor: &mut *editor,
-            jobs: &mut *jobs,
-            scroll: None,
-        };
-        for callback in callbacks {
-            callback(compositor, &mut cx);
         }
+    }
+    let mut cx = commands::Context {
+        register: None,
+        count: None,
+        editor: &mut *editor,
+        callback: Vec::new(),
+        on_next_key_callback: None,
+        jobs: &mut *jobs,
+    };
+    commands::execute_sequence(&mut cx, &commands);
+    let callbacks = std::mem::take(&mut cx.callback);
+    let mut cx = crate::compositor::Context {
+        editor: &mut *editor,
+        jobs: &mut *jobs,
+        scroll: None,
+    };
+    for callback in callbacks {
+        callback(compositor, &mut cx);
     }
 }
 
@@ -104,7 +127,11 @@ pub fn filter(
     event: TermKey,
 ) -> Vec<TermKey> {
     // Chords are for the editor's own keys, not prompts and pickers.
-    if editor.config().chords.is_empty() || compositor.layer_count() > 1 {
+    if event.kind == KeyEventKind::Release {
+        RELEASES_SEEN.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let releases = RELEASES_SEEN.load(std::sync::atomic::Ordering::Relaxed);
+    if !any(editor) || !releases || compositor.layer_count() > 1 {
         let held = HELD.lock().take();
         return held
             .filter(|held| !held.used)

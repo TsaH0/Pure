@@ -1,9 +1,10 @@
 use crate::keymap;
+use crate::keymap::modes::ModeConfig;
 use crate::keymap::{merge_keys, KeyTrie};
 use helix_loader::merge_toml_values;
 use helix_view::{document::Mode, theme};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::fs;
 use std::io::Error as IOError;
@@ -14,6 +15,9 @@ pub struct Config {
     pub theme: Option<theme::Config>,
     pub keys: HashMap<Mode, KeyTrie>,
     pub editor: helix_view::editor::Config,
+    /// Key modes (`[modes.<name>]`, and `modes/*.toml` in the config
+    /// directory), see [`keymap::modes`].
+    pub modes: BTreeMap<String, ModeConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -22,6 +26,7 @@ pub struct ConfigRaw {
     pub theme: Option<theme::Config>,
     pub keys: Option<HashMap<Mode, KeyTrie>>,
     pub editor: Option<toml::Value>,
+    pub modes: Option<BTreeMap<String, ModeConfig>>,
 }
 
 impl Default for Config {
@@ -30,6 +35,7 @@ impl Default for Config {
             theme: None,
             keys: keymap::default(),
             editor: helix_view::editor::Config::default(),
+            modes: BTreeMap::new(),
         }
     }
 }
@@ -84,10 +90,14 @@ impl Config {
                         .map_err(ConfigLoadError::BadConfig)?,
                 };
 
+                // The workspace's modes replace the user's of the same name.
+                let mut modes = global.modes.unwrap_or_default();
+                modes.extend(local.modes.unwrap_or_default());
                 Config {
                     theme: local.theme.or(global.theme),
                     keys,
                     editor,
+                    modes,
                 }
             }
             // if any configs are invalid return that first
@@ -102,6 +112,7 @@ impl Config {
                 }
                 Config {
                     theme: config.theme,
+                    modes: config.modes.unwrap_or_default(),
                     keys,
                     editor: config.editor.map_or_else(
                         || Ok(helix_view::editor::Config::default()),
@@ -117,7 +128,33 @@ impl Config {
         Ok(res)
     }
 
+    /// [`Self::load_default_files`] with the modes of `modes/*.toml` in the
+    /// runtime directories and the config directory added (the config
+    /// directory's, then `config.toml`'s of the same name win). Bad mode
+    /// files are logged and skipped.
     pub fn load_default() -> Result<Config, ConfigLoadError> {
+        let mut config = Self::load_default_files()?;
+        // The runtime's (lowest priority first), then the user's.
+        let mut dirs: Vec<_> = helix_loader::runtime_dirs()
+            .iter()
+            .rev()
+            .map(|dir| dir.join("modes"))
+            .collect();
+        dirs.push(helix_loader::config_dir().join("modes"));
+        let mut modes = BTreeMap::new();
+        for dir in dirs {
+            let (found, errors) = keymap::modes::read_mode_files(&dir);
+            for error in errors {
+                log::error!("mode file {error}");
+            }
+            modes.extend(found);
+        }
+        modes.extend(std::mem::take(&mut config.modes));
+        config.modes = modes;
+        Ok(config)
+    }
+
+    fn load_default_files() -> Result<Config, ConfigLoadError> {
         let global_config =
             fs::read_to_string(helix_loader::config_file()).map_err(ConfigLoadError::Error)?;
         let local_config = fs::read_to_string(helix_loader::workspace_config_file())

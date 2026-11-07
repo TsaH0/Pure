@@ -1,0 +1,137 @@
+# Emacs keys on Pure: you stay in insert mode and edit with Ctrl and Alt.
+# Turn on with `:mode emacs`. C-SPC sets the mark: motions then extend the
+# region (the `emacs-mark` mode, `Mark` in the statusline) until C-g, C-w
+# or M-w. Esc still goes to Pure's normal mode (`i` comes back).
+# Copy to ~/.config/pure/modes/ and edit it: your copy wins.
+#
+# Not here, because Pure has nothing to bind them to: C-u universal
+# argument, C-q quoted insert, C-t / M-t transpose, rectangles (C-x r),
+# registers and bookmarks (C-x r), C-x C-q read-only, C-x 4/5 other
+# window/frame commands, M-g g (use `:goto N`), the kill ring's M-y (yank
+# history is the `yank-history` plugin).
+
+[modes.emacs]
+description = "Emacs keys in insert mode: moving, killing and yanking, the mark and region, search, C-x and M-g prefixes, windows, macros"
+lighter = "Emacs"
+global = true
+conflicts = ["vim", "ki"]
+on-enable = ["insert_mode"]
+on-disable = [":mode emacs-mark off", "normal_mode"]
+
+[modes.emacs.keys.insert]
+# Moving
+"C-f" = "move_char_right"
+"C-b" = "move_char_left"
+"C-n" = "move_visual_line_down"
+"C-p" = "move_visual_line_up"
+"C-a" = "goto_line_start"
+"C-e" = "goto_line_end_newline"
+"A-f" = ["move_next_word_end", "collapse_selection", "move_char_right"]
+"A-b" = ["move_prev_word_start", "collapse_selection"]
+"A-m" = "goto_first_nonwhitespace"
+"A-lt" = "goto_file_start"
+"A-gt" = "goto_last_line"
+"A-{" = ["goto_prev_paragraph", "flip_selections", "collapse_selection"]
+"A-}" = ["goto_next_paragraph", "collapse_selection"]
+"C-A-f" = "select_next_sibling"
+"C-A-b" = "select_prev_sibling"
+"C-A-u" = "expand_selection"
+"C-A-d" = "shrink_selection"
+"C-v" = "page_cursor_down"
+"A-v" = "page_cursor_up"
+"C-l" = "align_view_center"
+"A-r" = "goto_window_center"
+# Killing, yanking, editing
+"C-d" = "delete_char_forward"
+"A-d" = "delete_word_forward"
+"A-backspace" = "delete_word_backward"
+"C-backspace" = "delete_word_backward"
+"C-k" = "kill_to_line_end"
+"C-y" = "paste_before"
+"C-w" = ["yank", "delete_selection"]
+"A-w" = ["yank", "collapse_selection"]
+"C-o" = ["insert_newline", "move_char_left"]
+"C-j" = "insert_newline"
+"A-^" = "join_selections"
+"A-u" = ["move_next_word_end", "switch_to_uppercase", "collapse_selection", "move_char_right"]
+"A-l" = ["move_next_word_end", "switch_to_lowercase", "collapse_selection", "move_char_right"]
+"A-c" = ["move_next_word_end", "switch_case", "collapse_selection", "move_char_right"]
+"A-z" = ["find_next_char", "yank", "delete_selection"]
+"A-;" = "toggle_comments"
+"A-q" = ":reflow"
+"A-%" = "substitute_very_magic"
+"A-/" = "completion"
+"A-|" = "shell_pipe"
+"A-!" = "shell_insert_output"
+# Undo, search, cancel, commands
+"C-/" = "undo"
+"C-_" = "undo"
+"C-?" = "redo"
+"C-s" = "search"
+"C-r" = "rsearch"
+"C-g" = "collapse_selection"
+"A-x" = "command_palette"
+"C-space" = ":mode emacs-mark on"
+"C-z" = "suspend"
+
+[modes.emacs.keys.insert.C-x]
+"C-s" = ":write"
+"s" = ":write-all"
+"C-w" = "command_mode"
+"C-f" = "file_picker"
+"d" = "file_explorer"
+"C-b" = "buffer_picker"
+"b" = "buffer_picker"
+"k" = ":buffer-close"
+"left" = "goto_previous_buffer"
+"right" = "goto_next_buffer"
+"C-c" = ":quit-all"
+"u" = "undo"
+"h" = "select_all"
+"C-x" = "flip_selections"
+"tab" = "indent"
+"2" = "hsplit"
+"3" = "vsplit"
+"o" = "rotate_view"
+"0" = "wclose"
+"1" = "wonly"
+"(" = "record_macro"
+")" = "record_macro"
+"e" = "replay_macro"
+"z" = "repeat_last_motion"
+"C-u" = "switch_to_uppercase"
+"C-l" = "switch_to_lowercase"
+"C-e" = "command_mode"
+
+[modes.emacs.keys.insert.A-g]
+"n" = "goto_next_diag"
+"p" = "goto_prev_diag"
+"g" = "command_mode"
+
+[modes.emacs.keys.insert.C-h]
+"m" = ":describe-mode"
+"k" = "command_palette"
+"f" = "command_palette"
+
+[modes.emacs-mark]
+description = "The Emacs region: after C-SPC, motions extend it; C-w kills it, M-w copies it, C-g drops it"
+lighter = "Mark"
+global = true
+requires = ["emacs"]
+
+[modes.emacs-mark.keys.insert]
+"C-f" = "extend_char_right"
+"C-b" = "extend_char_left"
+"C-n" = "extend_visual_line_down"
+"C-p" = "extend_visual_line_up"
+"C-a" = "extend_to_line_start"
+"C-e" = "extend_to_line_end"
+"A-f" = "extend_next_word_end"
+"A-b" = "extend_prev_word_start"
+"A-lt" = "extend_to_file_start"
+"A-gt" = "extend_to_file_end"
+"C-w" = ["yank", "delete_selection", ":mode emacs-mark off"]
+"A-w" = ["yank", "collapse_selection", ":mode emacs-mark off"]
+"C-g" = ["collapse_selection", ":mode emacs-mark off"]
+"C-space" = ["collapse_selection", ":mode emacs-mark off"]
+"C-x" = { "C-x" = "flip_selections" }

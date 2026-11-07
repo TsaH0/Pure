@@ -510,6 +510,26 @@ pub mod completers {
             .collect()
     }
 
+    /// Key mode names (`:mode`).
+    pub fn key_mode(_editor: &Editor, input: &str) -> Vec<Completion> {
+        let names: Vec<String> = crate::keymap::modes::all()
+            .iter()
+            .map(|mode| mode.name.clone())
+            .collect();
+        fuzzy_match(input, names, false)
+            .into_iter()
+            .map(|(name, _)| ((0..), name.into()))
+            .collect()
+    }
+
+    /// `on`, `off`, `toggle`.
+    pub fn mode_switch(_editor: &Editor, input: &str) -> Vec<Completion> {
+        fuzzy_match(input, ["on", "off", "toggle"], false)
+            .into_iter()
+            .map(|(name, _)| ((0..), name.to_string().into()))
+            .collect()
+    }
+
     pub fn theme(_editor: &Editor, input: &str) -> Vec<Completion> {
         let mut names = theme::Loader::read_names(&helix_loader::config_dir().join("themes"));
         for rt_dir in helix_loader::runtime_dirs() {

@@ -81,6 +81,16 @@ pub struct Application {
     theme_mode: Option<theme::Mode>,
     /// Notices files changed on disk (`editor.auto-reload`).
     auto_reload: crate::auto_reload::AutoReload,
+    /// Whether key modes asked for key releases (for their chords).
+    key_releases: bool,
+}
+
+/// The terminal's settings for `config`: also key releases while a key
+/// mode with chords is on.
+fn terminal_config(config: &helix_view::editor::Config) -> tui::terminal::Config {
+    let mut terminal: tui::terminal::Config = config.into();
+    terminal.report_key_releases |= crate::keymap::modes::wants_key_releases();
+    terminal
 }
 
 #[cfg(feature = "integration")]
@@ -115,10 +125,10 @@ impl Application {
         let theme_loader = theme::Loader::new(&theme_parent_dirs);
 
         #[cfg(all(not(windows), not(feature = "integration")))]
-        let backend = TerminaBackend::new((&config.editor).into())
+        let backend = TerminaBackend::new(terminal_config(&config.editor))
             .context("failed to create terminal backend")?;
         #[cfg(all(windows, not(feature = "integration")))]
-        let backend = CrosstermBackend::new(std::io::stdout(), (&config.editor).into());
+        let backend = CrosstermBackend::new(std::io::stdout(), terminal_config(&config.editor));
 
         #[cfg(feature = "integration")]
         let backend = TestBackend::new(120, 150);
@@ -141,6 +151,9 @@ impl Application {
         );
         Self::load_configured_theme(&mut editor, &config.load(), &mut terminal, theme_mode);
 
+        for error in crate::keymap::modes::set_config_modes(&config.load().modes) {
+            editor.set_error(format!("config: {error}"));
+        }
         let keys = Box::new(Map::new(Arc::clone(&config), |config: &Config| {
             &config.keys
         }));
@@ -272,12 +285,25 @@ impl Application {
             lsp_progress: LspProgressMap::new(),
             theme_mode,
             auto_reload: crate::auto_reload::AutoReload::new(),
+            key_releases: false,
         };
 
         Ok(app)
     }
 
     async fn render(&mut self) {
+        // A key mode with chords went on or off: key releases are wanted
+        // or not.
+        let releases = crate::keymap::modes::wants_key_releases();
+        if releases != self.key_releases {
+            self.key_releases = releases;
+            if let Err(err) = self
+                .terminal
+                .reconfigure(terminal_config(&self.editor.config()))
+            {
+                log::warn!("terminal: {err}");
+            }
+        }
         if self.compositor.full_redraw {
             self.terminal.clear().expect("Cannot clear the terminal");
             self.compositor.full_redraw = false;
@@ -449,7 +475,10 @@ impl Application {
             ConfigEvent::Update(editor_config) => {
                 let mut app_config = (*self.config.load().clone()).clone();
                 app_config.editor = *editor_config;
-                if let Err(err) = self.terminal.reconfigure((&app_config.editor).into()) {
+                if let Err(err) = self
+                    .terminal
+                    .reconfigure(terminal_config(&app_config.editor))
+                {
                     self.editor.set_error(err.to_string());
                 };
                 self.config.store(Arc::new(app_config));
@@ -513,7 +542,12 @@ impl Application {
                 document.replace_diagnostics(diagnostics, &[], None);
             }
 
-            self.terminal.reconfigure((&default_config.editor).into())?;
+            self.terminal
+                .reconfigure(terminal_config(&default_config.editor))?;
+            let errors = crate::keymap::modes::set_config_modes(&default_config.modes);
+            if let Some(error) = errors.first() {
+                anyhow::bail!("{error}");
+            }
             // Store new config
             self.config.store(Arc::new(default_config));
             Ok(())
@@ -777,7 +811,7 @@ impl Application {
         // Keys held for chords wait; chords run in their place.
         #[cfg(not(windows))]
         if let Ok(termina::Event::Key(key)) = &event {
-            if !self.editor.config().chords.is_empty() {
+            if crate::chords::any(&self.editor) {
                 let keys = crate::chords::filter(
                     &mut self.editor,
                     &mut self.compositor,

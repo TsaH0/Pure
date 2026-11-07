@@ -21,6 +21,7 @@ mod test {
     mod chords;
     mod command_line;
     mod commands;
+    mod key_modes;
     mod long_lines;
     mod movement;
     #[cfg(feature = "plugins")]
