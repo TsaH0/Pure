@@ -17,9 +17,12 @@ There are three kinds of commands that can be used in keymaps:
   the source code at [`helix-term/src/commands/typed.rs`](https://github.com/helix-editor/helix/blob/master/helix-term/src/commands/typed.rs).
 * Macros: sequences of keys that are executed in order. These keybindings
   start with `@` and then list any number of keys to be executed. For example
-  `@miw` can be used to select the surrounding word. For now, macro keybindings
-  are not allowed in keybinding sequences due to limitations in the way that
-  command sequences are executed. Modifier keys (e.g. Alt+o) can be used
+  `@miw` can be used to select the surrounding word. In a sequence, a macro
+  types keys for the command before it that waits for one:
+  `["select_textobject_inner", "@w", "yank"]`. A command that waits for a
+  key in a sequence without a macro after it (`["find_till_char",
+  "delete_selection"]`) runs the rest of the sequence once the key is typed.
+  Modifier keys (e.g. Alt+o) can be used
   like `"<A-o>"`, e.g. `"@miw<A-o>"`
 
 To remap keys, create a `config.toml` file in your `helix` configuration

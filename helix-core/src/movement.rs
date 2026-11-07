@@ -2201,3 +2201,145 @@ mod test {
         }
     }
 }
+
+/// Vim's word motions (`w`, `e`, `b`, `ge` and their WORD forms), which
+/// move a cursor rather than select a word: from `cursor`, the char the
+/// motion lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VimWord {
+    NextStart,
+    NextEnd,
+    PrevStart,
+    PrevEnd,
+}
+
+/// Where Vim's word motion `motion` lands from `cursor`, `count` times.
+/// `long` is the WORD form (only whitespace separates). An empty line is a
+/// word, as in Vim.
+pub fn vim_word(
+    slice: RopeSlice,
+    cursor: usize,
+    motion: VimWord,
+    long: bool,
+    count: usize,
+) -> usize {
+    use crate::chars::{categorize_char, CharCategory};
+    let len = slice.len_chars();
+    if len == 0 {
+        return 0;
+    }
+    let last = len - 1;
+    let class = |i: usize| -> u8 {
+        match categorize_char(slice.char(i)) {
+            CharCategory::Whitespace => 0,
+            CharCategory::Eol => 1,
+            _ if long => 2,
+            CharCategory::Word => 2,
+            _ => 3,
+        }
+    };
+    let blank = |i: usize| class(i) <= 1;
+    // An empty line: a line ending right after another (or at the start).
+    let empty_line = |i: usize| class(i) == 1 && (i == 0 || class(i - 1) == 1);
+    let mut i = cursor.min(last);
+    for _ in 0..count.max(1) {
+        match motion {
+            VimWord::NextStart => {
+                let start = i;
+                if !blank(i) {
+                    let c = class(i);
+                    while i < len && class(i) == c {
+                        i += 1;
+                    }
+                }
+                while i < len && blank(i) {
+                    if i != start && empty_line(i) {
+                        break;
+                    }
+                    i += 1;
+                }
+                i = i.min(last);
+            }
+            VimWord::NextEnd => {
+                if i >= last {
+                    break;
+                }
+                i += 1;
+                while i < last && blank(i) {
+                    i += 1;
+                }
+                let c = class(i);
+                while i < last && class(i + 1) == c {
+                    i += 1;
+                }
+            }
+            VimWord::PrevStart => {
+                if i == 0 {
+                    break;
+                }
+                i -= 1;
+                while i > 0 && blank(i) && !empty_line(i) {
+                    i -= 1;
+                }
+                if !blank(i) {
+                    let c = class(i);
+                    while i > 0 && class(i - 1) == c {
+                        i -= 1;
+                    }
+                }
+            }
+            VimWord::PrevEnd => {
+                if !blank(i) {
+                    let c = class(i);
+                    while i > 0 && class(i) == c {
+                        i -= 1;
+                    }
+                    if class(i) == c {
+                        break;
+                    }
+                } else {
+                    i = i.saturating_sub(1);
+                }
+                while i > 0 && blank(i) && !empty_line(i) {
+                    i -= 1;
+                }
+            }
+        }
+    }
+    i
+}
+
+#[cfg(test)]
+mod vim_word_test {
+    use super::*;
+    use crate::Rope;
+
+    fn go(text: &str, cursor: usize, motion: VimWord, long: bool) -> usize {
+        vim_word(Rope::from(text).slice(..), cursor, motion, long, 1)
+    }
+
+    #[test]
+    fn vim_word_motions() {
+        use VimWord::*;
+        let t = "call(one, two) end\n";
+        assert_eq!(go(t, 0, NextStart, false), 4);
+        assert_eq!(go(t, 4, NextStart, false), 5);
+        assert_eq!(go(t, 5, NextStart, false), 8);
+        assert_eq!(go(t, 8, NextStart, false), 10);
+        assert_eq!(go(t, 0, NextStart, true), 10);
+        assert_eq!(go(t, 0, NextEnd, false), 3);
+        assert_eq!(go(t, 3, NextEnd, false), 4);
+        assert_eq!(go(t, 10, PrevStart, false), 8);
+        assert_eq!(go(t, 9, PrevStart, false), 8);
+        assert_eq!(go(t, 15, PrevStart, true), 10);
+        assert_eq!(go(t, 10, PrevStart, true), 0);
+        assert_eq!(go(t, 10, PrevEnd, false), 8);
+        assert_eq!(go(t, 15, PrevEnd, false), 13);
+        // Across lines, stopping on an empty one.
+        let t = "foo\n\nbar\n";
+        assert_eq!(go(t, 0, NextStart, false), 4);
+        assert_eq!(go(t, 4, NextStart, false), 5);
+        assert_eq!(go(t, 5, PrevStart, false), 4);
+        assert_eq!(go("foo bar\nbaz\n", 4, NextStart, false), 8);
+    }
+}

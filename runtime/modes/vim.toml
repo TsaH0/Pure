@@ -1,0 +1,358 @@
+# Vim keys on Pure. Turn on with `:mode vim` (off: `:mode vim off`).
+# Copy to ~/.config/pure/modes/ and edit: your copy wins over this one.
+#
+# Motions move the cursor as Vim's do (they don't leave a selection), and
+# every operator (d c y gu gU g~ > < =) takes every motion and text object:
+# dw, d3w, dt), ci", da(, yi{, gUiw, >j, d%, dG, dgg... Counts work.
+#
+# Not here, because Pure has nothing to bind them to:
+#   Ctrl-v block selection, R replace mode, U line undo, gv reselect,
+#   m{a-z} / '{a-z} / `{a-z} marks, Ctrl-o in insert mode, Ctrl-a/x on
+#   words (Ctrl-a/x work on numbers), :g//, and . repeats Pure's last
+#   insert rather than any change.
+# Different from Vim:
+#   , has no reverse find (; repeats the last one); / ? n N select the match;
+#   q toggles recording into the @ register ("aq records into a), @ then a
+#   register replays it.
+
+[modes.vim]
+description = "Vim keys: motions, operators with every motion and text object, visual and line modes, Vim's insert keys"
+lighter = "Vim"
+global = true
+conflicts = ["emacs", "ki"]
+on-enable = ["normal_mode", "collapse_selection"]
+
+[modes.vim.keys.normal]
+w = "vim_next_word_start"
+W = "vim_next_long_word_start"
+e = "vim_next_word_end"
+E = "vim_next_long_word_end"
+b = "vim_prev_word_start"
+B = "vim_prev_long_word_start"
+"0" = "goto_line_start"
+"^" = "goto_first_nonwhitespace"
+"$" = "goto_line_end"
+G = "goto_last_line"
+H = "goto_window_top"
+M = "goto_window_center"
+L = "goto_window_bottom"
+"%" = "match_brackets"
+"}" = ["goto_next_paragraph", "collapse_selection"]
+"{" = ["goto_prev_paragraph", "flip_selections", "collapse_selection"]
+f = ["find_next_char", "collapse_selection"]
+t = ["find_till_char", "collapse_selection"]
+F = ["find_prev_char", "collapse_selection"]
+T = ["till_prev_char", "collapse_selection"]
+";" = ["repeat_last_motion", "collapse_selection"]
+"*" = ["select_textobject_inner", "@w", "search_selection_detect_word_boundaries", "search_next", "flip_selections", "collapse_selection"]
+"#" = ["select_textobject_inner", "@w", "search_selection_detect_word_boundaries", "search_prev", "flip_selections", "collapse_selection"]
+n = ["search_next", "flip_selections", "collapse_selection"]
+N = ["search_prev", "flip_selections", "collapse_selection"]
+x = "delete_selection"
+X = ["move_char_left", "delete_selection"]
+s = "change_selection"
+S = ["goto_first_nonwhitespace", "extend_to_line_end", "change_selection"]
+D = ["extend_to_line_end", "delete_selection"]
+C = ["extend_to_line_end", "change_selection"]
+Y = ["extend_to_line_bounds", "yank", "collapse_selection"]
+"~" = ["switch_case", "move_char_right"]
+J = ["extend_line_below", "join_selections", "collapse_selection"]
+v = "select_mode"
+V = ["extend_to_line_bounds", "select_mode"]
+K = "hover"
+q = "record_macro"
+"@" = ["select_register", "replay_macro"]
+"C-r" = "redo"
+"C-e" = "scroll_down"
+"C-y" = "scroll_up"
+"C-a" = "increment"
+"C-x" = "decrement"
+
+[modes.vim.keys.normal."d"]
+"d" = ["extend_to_line_bounds", "delete_selection"]
+"w" = ["vim_select_next_word_start", "delete_selection"]
+"W" = ["vim_select_next_long_word_start", "delete_selection"]
+"e" = ["vim_select_next_word_end", "delete_selection"]
+"E" = ["vim_select_next_long_word_end", "delete_selection"]
+"b" = ["vim_select_prev_word_start", "delete_selection"]
+"B" = ["vim_select_prev_long_word_start", "delete_selection"]
+"$" = ["extend_to_line_end", "delete_selection"]
+"0" = ["extend_to_line_start", "delete_selection"]
+"^" = ["extend_to_first_nonwhitespace", "delete_selection"]
+"h" = ["move_char_left", "delete_selection"]
+"l" = ["delete_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "delete_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "delete_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "delete_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "delete_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "delete_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "delete_selection"]
+"f" = ["find_next_char", "delete_selection"]
+"t" = ["find_till_char", "delete_selection"]
+"F" = ["find_prev_char", "delete_selection"]
+"T" = ["till_prev_char", "delete_selection"]
+"i" = ["select_textobject_inner", "delete_selection"]
+"a" = ["select_textobject_around", "delete_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "delete_selection"], e = ["vim_select_prev_word_end", "delete_selection"], E = ["vim_select_prev_long_word_end", "delete_selection"] }
+
+[modes.vim.keys.normal."c"]
+"c" = ["goto_first_nonwhitespace", "extend_to_line_end", "change_selection"]
+"w" = ["vim_select_change_word", "change_selection"]
+"W" = ["vim_select_change_long_word", "change_selection"]
+"e" = ["vim_select_next_word_end", "change_selection"]
+"E" = ["vim_select_next_long_word_end", "change_selection"]
+"b" = ["vim_select_prev_word_start", "change_selection"]
+"B" = ["vim_select_prev_long_word_start", "change_selection"]
+"$" = ["extend_to_line_end", "change_selection"]
+"0" = ["extend_to_line_start", "change_selection"]
+"^" = ["extend_to_first_nonwhitespace", "change_selection"]
+"h" = ["move_char_left", "change_selection"]
+"l" = ["change_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "change_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "change_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "change_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "change_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "change_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "change_selection"]
+"f" = ["find_next_char", "change_selection"]
+"t" = ["find_till_char", "change_selection"]
+"F" = ["find_prev_char", "change_selection"]
+"T" = ["till_prev_char", "change_selection"]
+"i" = ["select_textobject_inner", "change_selection"]
+"a" = ["select_textobject_around", "change_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "change_selection"], e = ["vim_select_prev_word_end", "change_selection"], E = ["vim_select_prev_long_word_end", "change_selection"] }
+
+[modes.vim.keys.normal."y"]
+"y" = ["extend_to_line_bounds", "yank", "collapse_selection"]
+"w" = ["vim_select_next_word_start", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"W" = ["vim_select_next_long_word_start", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"e" = ["vim_select_next_word_end", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"E" = ["vim_select_next_long_word_end", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"b" = ["vim_select_prev_word_start", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"B" = ["vim_select_prev_long_word_start", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"$" = ["extend_to_line_end", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"0" = ["extend_to_line_start", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"^" = ["extend_to_first_nonwhitespace", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"h" = ["move_char_left", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"l" = ["yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"f" = ["find_next_char", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"t" = ["find_till_char", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"F" = ["find_prev_char", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"T" = ["till_prev_char", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"i" = ["select_textobject_inner", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+"a" = ["select_textobject_around", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"], e = ["vim_select_prev_word_end", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"], E = ["vim_select_prev_long_word_end", "yank", "ensure_selections_forward", "flip_selections", "collapse_selection"] }
+
+[modes.vim.keys.normal."g"]
+e = "vim_prev_word_end"
+E = "vim_prev_long_word_end"
+
+[modes.vim.keys.normal."g"."u"]
+"u" = ["extend_to_line_bounds", "switch_to_lowercase", "collapse_selection"]
+"w" = ["vim_select_next_word_start", "switch_to_lowercase", "collapse_selection"]
+"W" = ["vim_select_next_long_word_start", "switch_to_lowercase", "collapse_selection"]
+"e" = ["vim_select_next_word_end", "switch_to_lowercase", "collapse_selection"]
+"E" = ["vim_select_next_long_word_end", "switch_to_lowercase", "collapse_selection"]
+"b" = ["vim_select_prev_word_start", "switch_to_lowercase", "collapse_selection"]
+"B" = ["vim_select_prev_long_word_start", "switch_to_lowercase", "collapse_selection"]
+"$" = ["extend_to_line_end", "switch_to_lowercase", "collapse_selection"]
+"0" = ["extend_to_line_start", "switch_to_lowercase", "collapse_selection"]
+"^" = ["extend_to_first_nonwhitespace", "switch_to_lowercase", "collapse_selection"]
+"h" = ["move_char_left", "switch_to_lowercase", "collapse_selection"]
+"l" = ["switch_to_lowercase", "collapse_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "switch_to_lowercase", "collapse_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "switch_to_lowercase", "collapse_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "switch_to_lowercase", "collapse_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "switch_to_lowercase", "collapse_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "switch_to_lowercase", "collapse_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "switch_to_lowercase", "collapse_selection"]
+"f" = ["find_next_char", "switch_to_lowercase", "collapse_selection"]
+"t" = ["find_till_char", "switch_to_lowercase", "collapse_selection"]
+"F" = ["find_prev_char", "switch_to_lowercase", "collapse_selection"]
+"T" = ["till_prev_char", "switch_to_lowercase", "collapse_selection"]
+"i" = ["select_textobject_inner", "switch_to_lowercase", "collapse_selection"]
+"a" = ["select_textobject_around", "switch_to_lowercase", "collapse_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "switch_to_lowercase", "collapse_selection"], e = ["vim_select_prev_word_end", "switch_to_lowercase", "collapse_selection"], E = ["vim_select_prev_long_word_end", "switch_to_lowercase", "collapse_selection"] }
+
+[modes.vim.keys.normal."g"."U"]
+"U" = ["extend_to_line_bounds", "switch_to_uppercase", "collapse_selection"]
+"w" = ["vim_select_next_word_start", "switch_to_uppercase", "collapse_selection"]
+"W" = ["vim_select_next_long_word_start", "switch_to_uppercase", "collapse_selection"]
+"e" = ["vim_select_next_word_end", "switch_to_uppercase", "collapse_selection"]
+"E" = ["vim_select_next_long_word_end", "switch_to_uppercase", "collapse_selection"]
+"b" = ["vim_select_prev_word_start", "switch_to_uppercase", "collapse_selection"]
+"B" = ["vim_select_prev_long_word_start", "switch_to_uppercase", "collapse_selection"]
+"$" = ["extend_to_line_end", "switch_to_uppercase", "collapse_selection"]
+"0" = ["extend_to_line_start", "switch_to_uppercase", "collapse_selection"]
+"^" = ["extend_to_first_nonwhitespace", "switch_to_uppercase", "collapse_selection"]
+"h" = ["move_char_left", "switch_to_uppercase", "collapse_selection"]
+"l" = ["switch_to_uppercase", "collapse_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "switch_to_uppercase", "collapse_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "switch_to_uppercase", "collapse_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "switch_to_uppercase", "collapse_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "switch_to_uppercase", "collapse_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "switch_to_uppercase", "collapse_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "switch_to_uppercase", "collapse_selection"]
+"f" = ["find_next_char", "switch_to_uppercase", "collapse_selection"]
+"t" = ["find_till_char", "switch_to_uppercase", "collapse_selection"]
+"F" = ["find_prev_char", "switch_to_uppercase", "collapse_selection"]
+"T" = ["till_prev_char", "switch_to_uppercase", "collapse_selection"]
+"i" = ["select_textobject_inner", "switch_to_uppercase", "collapse_selection"]
+"a" = ["select_textobject_around", "switch_to_uppercase", "collapse_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "switch_to_uppercase", "collapse_selection"], e = ["vim_select_prev_word_end", "switch_to_uppercase", "collapse_selection"], E = ["vim_select_prev_long_word_end", "switch_to_uppercase", "collapse_selection"] }
+
+[modes.vim.keys.normal."g"."~"]
+"~" = ["extend_to_line_bounds", "switch_case", "collapse_selection"]
+"w" = ["vim_select_next_word_start", "switch_case", "collapse_selection"]
+"W" = ["vim_select_next_long_word_start", "switch_case", "collapse_selection"]
+"e" = ["vim_select_next_word_end", "switch_case", "collapse_selection"]
+"E" = ["vim_select_next_long_word_end", "switch_case", "collapse_selection"]
+"b" = ["vim_select_prev_word_start", "switch_case", "collapse_selection"]
+"B" = ["vim_select_prev_long_word_start", "switch_case", "collapse_selection"]
+"$" = ["extend_to_line_end", "switch_case", "collapse_selection"]
+"0" = ["extend_to_line_start", "switch_case", "collapse_selection"]
+"^" = ["extend_to_first_nonwhitespace", "switch_case", "collapse_selection"]
+"h" = ["move_char_left", "switch_case", "collapse_selection"]
+"l" = ["switch_case", "collapse_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "switch_case", "collapse_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "switch_case", "collapse_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "switch_case", "collapse_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "switch_case", "collapse_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "switch_case", "collapse_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "switch_case", "collapse_selection"]
+"f" = ["find_next_char", "switch_case", "collapse_selection"]
+"t" = ["find_till_char", "switch_case", "collapse_selection"]
+"F" = ["find_prev_char", "switch_case", "collapse_selection"]
+"T" = ["till_prev_char", "switch_case", "collapse_selection"]
+"i" = ["select_textobject_inner", "switch_case", "collapse_selection"]
+"a" = ["select_textobject_around", "switch_case", "collapse_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "switch_case", "collapse_selection"], e = ["vim_select_prev_word_end", "switch_case", "collapse_selection"], E = ["vim_select_prev_long_word_end", "switch_case", "collapse_selection"] }
+
+[modes.vim.keys.normal."gt"]
+"gt" = ["indent"]
+"w" = ["vim_select_next_word_start", "indent"]
+"W" = ["vim_select_next_long_word_start", "indent"]
+"e" = ["vim_select_next_word_end", "indent"]
+"E" = ["vim_select_next_long_word_end", "indent"]
+"b" = ["vim_select_prev_word_start", "indent"]
+"B" = ["vim_select_prev_long_word_start", "indent"]
+"$" = ["extend_to_line_end", "indent"]
+"0" = ["extend_to_line_start", "indent"]
+"^" = ["extend_to_first_nonwhitespace", "indent"]
+"h" = ["move_char_left", "indent"]
+"l" = ["indent"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "indent"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "indent"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "indent"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "indent"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "indent"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "indent"]
+"f" = ["find_next_char", "indent"]
+"t" = ["find_till_char", "indent"]
+"F" = ["find_prev_char", "indent"]
+"T" = ["till_prev_char", "indent"]
+"i" = ["select_textobject_inner", "indent"]
+"a" = ["select_textobject_around", "indent"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "indent"], e = ["vim_select_prev_word_end", "indent"], E = ["vim_select_prev_long_word_end", "indent"] }
+
+[modes.vim.keys.normal."lt"]
+"lt" = ["unindent"]
+"w" = ["vim_select_next_word_start", "unindent"]
+"W" = ["vim_select_next_long_word_start", "unindent"]
+"e" = ["vim_select_next_word_end", "unindent"]
+"E" = ["vim_select_next_long_word_end", "unindent"]
+"b" = ["vim_select_prev_word_start", "unindent"]
+"B" = ["vim_select_prev_long_word_start", "unindent"]
+"$" = ["extend_to_line_end", "unindent"]
+"0" = ["extend_to_line_start", "unindent"]
+"^" = ["extend_to_first_nonwhitespace", "unindent"]
+"h" = ["move_char_left", "unindent"]
+"l" = ["unindent"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "unindent"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "unindent"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "unindent"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "unindent"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "unindent"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "unindent"]
+"f" = ["find_next_char", "unindent"]
+"t" = ["find_till_char", "unindent"]
+"F" = ["find_prev_char", "unindent"]
+"T" = ["till_prev_char", "unindent"]
+"i" = ["select_textobject_inner", "unindent"]
+"a" = ["select_textobject_around", "unindent"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "unindent"], e = ["vim_select_prev_word_end", "unindent"], E = ["vim_select_prev_long_word_end", "unindent"] }
+
+[modes.vim.keys.normal."="]
+"=" = ["extend_to_line_bounds", "format_selections", "collapse_selection"]
+"w" = ["vim_select_next_word_start", "format_selections", "collapse_selection"]
+"W" = ["vim_select_next_long_word_start", "format_selections", "collapse_selection"]
+"e" = ["vim_select_next_word_end", "format_selections", "collapse_selection"]
+"E" = ["vim_select_next_long_word_end", "format_selections", "collapse_selection"]
+"b" = ["vim_select_prev_word_start", "format_selections", "collapse_selection"]
+"B" = ["vim_select_prev_long_word_start", "format_selections", "collapse_selection"]
+"$" = ["extend_to_line_end", "format_selections", "collapse_selection"]
+"0" = ["extend_to_line_start", "format_selections", "collapse_selection"]
+"^" = ["extend_to_first_nonwhitespace", "format_selections", "collapse_selection"]
+"h" = ["move_char_left", "format_selections", "collapse_selection"]
+"l" = ["format_selections", "collapse_selection"]
+"j" = ["extend_to_line_bounds", "extend_line_below", "format_selections", "collapse_selection"]
+"k" = ["extend_to_line_bounds", "extend_line_above", "format_selections", "collapse_selection"]
+"G" = ["select_mode", "goto_last_line", "extend_to_line_bounds", "normal_mode", "format_selections", "collapse_selection"]
+"%" = ["select_mode", "match_brackets", "normal_mode", "format_selections", "collapse_selection"]
+"}" = ["select_mode", "goto_next_paragraph", "normal_mode", "format_selections", "collapse_selection"]
+"{" = ["select_mode", "goto_prev_paragraph", "normal_mode", "format_selections", "collapse_selection"]
+"f" = ["find_next_char", "format_selections", "collapse_selection"]
+"t" = ["find_till_char", "format_selections", "collapse_selection"]
+"F" = ["find_prev_char", "format_selections", "collapse_selection"]
+"T" = ["till_prev_char", "format_selections", "collapse_selection"]
+"i" = ["select_textobject_inner", "format_selections", "collapse_selection"]
+"a" = ["select_textobject_around", "format_selections", "collapse_selection"]
+g = { g = ["select_mode", "goto_file_start", "extend_to_line_bounds", "normal_mode", "format_selections", "collapse_selection"], e = ["vim_select_prev_word_end", "format_selections", "collapse_selection"], E = ["vim_select_prev_long_word_end", "format_selections", "collapse_selection"] }
+
+[modes.vim.keys.normal.Z]
+Z = ":write-quit"
+Q = ":quit!"
+
+[modes.vim.keys.insert]
+"C-h" = "delete_char_backward"
+"C-t" = "indent"
+"C-d" = "unindent"
+"C-n" = "completion"
+"C-p" = "completion"
+"C-[" = "normal_mode"
+
+[modes.vim.keys.select]
+w = "vim_next_word_start"
+W = "vim_next_long_word_start"
+e = "vim_next_word_end"
+E = "vim_next_long_word_end"
+b = "vim_prev_word_start"
+B = "vim_prev_long_word_start"
+g = { e = "vim_prev_word_end", E = "vim_prev_long_word_end" }
+"0" = "goto_line_start"
+"^" = "goto_first_nonwhitespace"
+"$" = "goto_line_end"
+G = "goto_last_line"
+"%" = "match_brackets"
+d = ["delete_selection", "normal_mode"]
+x = ["delete_selection", "normal_mode"]
+y = ["yank", "normal_mode", "ensure_selections_forward", "flip_selections", "collapse_selection"]
+c = "change_selection"
+s = "change_selection"
+p = ["replace_with_yanked", "normal_mode"]
+o = "flip_selections"
+i = "select_textobject_inner"
+a = "select_textobject_around"
+u = ["switch_to_lowercase", "normal_mode"]
+U = ["switch_to_uppercase", "normal_mode"]
+"~" = ["switch_case", "normal_mode"]
+J = ["join_selections", "normal_mode"]
+gt = ["indent", "normal_mode"]
+lt = ["unindent", "normal_mode"]
+V = "extend_to_line_bounds"

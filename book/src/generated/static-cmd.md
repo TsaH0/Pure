@@ -23,6 +23,24 @@
 | `move_prev_long_word_start` | Move to start of previous long word | normal: `` B `` |
 | `move_next_long_word_end` | Move to end of next long word | normal: `` E `` |
 | `move_prev_long_word_end` | Move to end of previous long word |  |
+| `vim_next_word_start` | Vim: move to start of next word |  |
+| `vim_next_word_end` | Vim: move to end of next word |  |
+| `vim_prev_word_start` | Vim: move to start of previous word |  |
+| `vim_prev_word_end` | Vim: move to end of previous word |  |
+| `vim_next_long_word_start` | Vim: move to start of next WORD |  |
+| `vim_next_long_word_end` | Vim: move to end of next WORD |  |
+| `vim_prev_long_word_start` | Vim: move to start of previous WORD |  |
+| `vim_prev_long_word_end` | Vim: move to end of previous WORD |  |
+| `vim_select_change_word` | Vim: select what cw takes (to the end of the word under the cursor) |  |
+| `vim_select_change_long_word` | Vim: select what cW takes (to the end of the WORD under the cursor) |  |
+| `vim_select_next_word_start` | Vim: select what an operator takes to start of next word |  |
+| `vim_select_next_word_end` | Vim: select what an operator takes to end of next word |  |
+| `vim_select_prev_word_start` | Vim: select what an operator takes to start of previous word |  |
+| `vim_select_prev_word_end` | Vim: select what an operator takes to end of previous word |  |
+| `vim_select_next_long_word_start` | Vim: select what an operator takes to start of next WORD |  |
+| `vim_select_next_long_word_end` | Vim: select what an operator takes to end of next WORD |  |
+| `vim_select_prev_long_word_start` | Vim: select what an operator takes to start of previous WORD |  |
+| `vim_select_prev_long_word_end` | Vim: select what an operator takes to end of previous WORD |  |
 | `move_next_sub_word_start` | Move to start of next sub word |  |
 | `move_prev_sub_word_start` | Move to start of previous sub word |  |
 | `move_next_sub_word_end` | Move to end of next sub word |  |
@@ -265,17 +283,17 @@
 | `grow_view_height` | Make the split taller | normal: `` <C-w>+ ``, `` <space>w+ ``, select: `` <C-w>+ ``, `` <space>w+ `` |
 | `shrink_view_height` | Make the split shorter | normal: `` <C-w><minus> ``, `` <space>w<minus> ``, select: `` <C-w><minus> ``, `` <space>w<minus> `` |
 | `equalize_views` | Make all splits the same size | normal: `` <C-w>= ``, `` <space>w= ``, select: `` <C-w>= ``, `` <space>w= `` |
-| `fold` | Fold the selected lines, or the syntax node (or indented block) around the cursor | normal: `` zc ``, `` zf ``, select: `` zc ``, `` zf `` |
-| `unfold` | Unfold the folds on the selected lines | normal: `` zo ``, select: `` zo `` |
-| `toggle_fold` | Fold or unfold at the cursor | normal: `` za ``, select: `` za `` |
-| `fold_all` | Fold every top-level block | normal: `` zM ``, select: `` zM `` |
-| `unfold_all` | Unfold everything | normal: `` zR ``, select: `` zR `` |
+| `fold` | Fold the selected lines, or the syntax node (or indented block) around the cursor | normal: `` Zc ``, `` Zf ``, `` zc ``, `` zf ``, select: `` Zc ``, `` Zf ``, `` zc ``, `` zf `` |
+| `unfold` | Unfold the folds on the selected lines | normal: `` Zo ``, `` zo ``, select: `` Zo ``, `` zo `` |
+| `toggle_fold` | Fold or unfold at the cursor | normal: `` Za ``, `` za ``, select: `` Za ``, `` za `` |
+| `fold_all` | Fold every top-level block | normal: `` ZM ``, `` zM ``, select: `` ZM ``, `` zM `` |
+| `unfold_all` | Unfold everything | normal: `` ZR ``, `` zR ``, select: `` ZR ``, `` zR `` |
 | `select_register` | Select register | normal: `` " ``, select: `` " `` |
 | `insert_register` | Insert register | insert: `` <C-r> `` |
 | `copy_between_registers` | Copy between two registers |  |
 | `align_view_middle` | Align view middle | normal: `` Zm ``, `` zm ``, select: `` Zm ``, `` zm `` |
 | `align_view_top` | Align view top | normal: `` Zt ``, `` zt ``, select: `` Zt ``, `` zt `` |
-| `align_view_center` | Align view center | normal: `` Zc ``, `` Zz ``, `` zz ``, select: `` Zc ``, `` Zz ``, `` zz `` |
+| `align_view_center` | Align view center | normal: `` Zz ``, `` zz ``, select: `` Zz ``, `` zz `` |
 | `align_view_bottom` | Align view bottom | normal: `` Zb ``, `` zb ``, select: `` Zb ``, `` zb `` |
 | `scroll_up` | Scroll view up | normal: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> ``, select: `` Zk ``, `` zk ``, `` Z<up> ``, `` z<up> `` |
 | `scroll_down` | Scroll view down | normal: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> ``, select: `` Zj ``, `` zj ``, `` Z<down> ``, `` z<down> `` |

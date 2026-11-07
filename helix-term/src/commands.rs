@@ -1,6 +1,7 @@
 pub(crate) mod compilation;
 pub(crate) mod dap;
 pub(crate) mod lsp;
+pub(crate) mod modes;
 pub(crate) mod quickfix;
 pub mod substitute_preview;
 pub(crate) mod syntax;
@@ -98,6 +99,56 @@ use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
 use ignore::{DirEntry, WalkBuilder, WalkState};
 
 pub type OnKeyCallback = Box<dyn FnOnce(&mut Context, KeyEvent)>;
+
+/// Run `commands` (a `[keys]` sequence) in order with [`MappableCommand::execute`].
+pub fn execute_sequence(cx: &mut Context, commands: &[MappableCommand]) {
+    run_sequence(cx, commands, &mut |cx, command| command.execute(cx));
+}
+
+/// Run `commands` in order with `execute`. A command that waits for a key
+/// (`find_next_char`, `replace`, `select_textobject_inner`...) gets it from
+/// a key macro right after it (`["select_textobject_inner", "@w"]`), or
+/// else from the user, and the commands after it run once that key is
+/// typed: `["find_till_char", "delete_selection"]` is Vim's `dt<char>`.
+pub fn run_sequence(
+    cx: &mut Context,
+    commands: &[MappableCommand],
+    execute: &mut dyn FnMut(&mut Context, &MappableCommand),
+) {
+    let mut next = 0;
+    while next < commands.len() {
+        let command = &commands[next];
+        next += 1;
+        if let MappableCommand::Macro { keys, .. } = command {
+            if cx.on_next_key_callback.is_some() {
+                // The keys go to the command waiting for them.
+                for key in keys {
+                    match cx.on_next_key_callback.take() {
+                        Some((callback, _)) => callback(cx, *key),
+                        None => break,
+                    }
+                }
+                continue;
+            }
+        }
+        execute(cx, command);
+        let waits = cx.on_next_key_callback.is_some()
+            && next < commands.len()
+            && !matches!(commands[next], MappableCommand::Macro { .. });
+        if waits {
+            let (callback, kind) = cx.on_next_key_callback.take().expect("waits");
+            let rest = commands[next..].to_vec();
+            cx.on_next_key_callback = Some((
+                Box::new(move |cx, key| {
+                    callback(cx, key);
+                    execute_sequence(cx, &rest);
+                }),
+                kind,
+            ));
+            return;
+        }
+    }
+}
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum OnKeyCallbackKind {
     PseudoPending,
@@ -346,6 +397,24 @@ impl MappableCommand {
         move_prev_long_word_start, "Move to start of previous long word",
         move_next_long_word_end, "Move to end of next long word",
         move_prev_long_word_end, "Move to end of previous long word",
+        vim_next_word_start, "Vim: move to start of next word",
+        vim_next_word_end, "Vim: move to end of next word",
+        vim_prev_word_start, "Vim: move to start of previous word",
+        vim_prev_word_end, "Vim: move to end of previous word",
+        vim_next_long_word_start, "Vim: move to start of next WORD",
+        vim_next_long_word_end, "Vim: move to end of next WORD",
+        vim_prev_long_word_start, "Vim: move to start of previous WORD",
+        vim_prev_long_word_end, "Vim: move to end of previous WORD",
+        vim_select_change_word, "Vim: select what cw takes (to the end of the word under the cursor)",
+        vim_select_change_long_word, "Vim: select what cW takes (to the end of the WORD under the cursor)",
+        vim_select_next_word_start, "Vim: select what an operator takes to start of next word",
+        vim_select_next_word_end, "Vim: select what an operator takes to end of next word",
+        vim_select_prev_word_start, "Vim: select what an operator takes to start of previous word",
+        vim_select_prev_word_end, "Vim: select what an operator takes to end of previous word",
+        vim_select_next_long_word_start, "Vim: select what an operator takes to start of next WORD",
+        vim_select_next_long_word_end, "Vim: select what an operator takes to end of next WORD",
+        vim_select_prev_long_word_start, "Vim: select what an operator takes to start of previous WORD",
+        vim_select_prev_long_word_end, "Vim: select what an operator takes to end of previous WORD",
         move_next_sub_word_start, "Move to start of next sub word",
         move_prev_sub_word_start, "Move to start of previous sub word",
         move_next_sub_word_end, "Move to end of next sub word",
@@ -1256,6 +1325,167 @@ where
         .clone()
         .transform(|range| move_fn(text, range, count));
     doc.set_selection(view.id, selection);
+}
+
+/// Vim's word motions: the cursor moves to the word's char (in select
+/// mode the selection extends to it).
+fn vim_word_move(cx: &mut Context, motion: movement::VimWord, long: bool) {
+    let count = cx.count();
+    let extend = cx.editor.mode == Mode::Select;
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let cursor = range.cursor(text);
+        let target = movement::vim_word(text, cursor, motion, long, count);
+        range.put_cursor(text, target, extend)
+    });
+    doc.set_selection(view.id, selection);
+}
+
+/// What a Vim operator takes with a word motion: `w` up to the next word
+/// (not past the line's end), `e` through the word's end, `b` back to the
+/// word's start, `ge` back through the previous word's end.
+fn vim_word_select(cx: &mut Context, motion: movement::VimWord, long: bool) {
+    use movement::VimWord;
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let cursor = range.cursor(text);
+        let target = movement::vim_word(text, cursor, motion, long, count);
+        let (from, to) = match motion {
+            VimWord::NextStart => {
+                let line = text.char_to_line(cursor);
+                let line_end = line_end_char_index(&text, line);
+                if text.char_to_line(target) != line || target <= cursor {
+                    (cursor, line_end.max(cursor + 1))
+                } else {
+                    (cursor, target)
+                }
+            }
+            VimWord::NextEnd => (cursor, target + 1),
+            VimWord::PrevStart => (target, cursor),
+            VimWord::PrevEnd => (target, cursor + 1),
+        };
+        Range::new(from, to.min(text.len_chars()))
+    });
+    doc.set_selection(view.id, selection);
+}
+
+/// `cw`: in Vim it changes to the end of the word under the cursor, not
+/// to the next word (on blanks, it is like `dw`).
+fn vim_select_change(cx: &mut Context, long: bool) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let on_blank = doc.selection(view.id).primary().cursor(text);
+    let on_blank = text.get_char(on_blank).is_none_or(char::is_whitespace);
+    if on_blank {
+        return vim_word_select(cx, movement::VimWord::NextStart, long);
+    }
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text().slice(..);
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let cursor = range.cursor(text);
+        // The end of this word: one step back from the next word end of
+        // the char before it, or simply the run of its class.
+        let target = if count > 1 {
+            movement::vim_word(text, cursor, movement::VimWord::NextEnd, long, count - 1)
+        } else {
+            cursor
+        };
+        let start_class = |c: char| {
+            if long {
+                0
+            } else {
+                helix_core::chars::categorize_char(c) as u8 + 1
+            }
+        };
+        let mut end = target;
+        if let Some(c) = text.get_char(end) {
+            let class = start_class(c);
+            while text
+                .get_char(end + 1)
+                .is_some_and(|next| !next.is_whitespace() && start_class(next) == class)
+            {
+                end += 1;
+            }
+        }
+        Range::new(cursor, (end + 1).min(text.len_chars()))
+    });
+    doc.set_selection(view.id, selection);
+}
+
+fn vim_select_change_word(cx: &mut Context) {
+    vim_select_change(cx, false)
+}
+
+fn vim_select_change_long_word(cx: &mut Context) {
+    vim_select_change(cx, true)
+}
+
+fn vim_next_word_start(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::NextStart, false)
+}
+
+fn vim_next_word_end(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::NextEnd, false)
+}
+
+fn vim_prev_word_start(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::PrevStart, false)
+}
+
+fn vim_prev_word_end(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::PrevEnd, false)
+}
+
+fn vim_next_long_word_start(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::NextStart, true)
+}
+
+fn vim_next_long_word_end(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::NextEnd, true)
+}
+
+fn vim_prev_long_word_start(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::PrevStart, true)
+}
+
+fn vim_prev_long_word_end(cx: &mut Context) {
+    vim_word_move(cx, movement::VimWord::PrevEnd, true)
+}
+
+fn vim_select_next_word_start(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::NextStart, false)
+}
+
+fn vim_select_next_word_end(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::NextEnd, false)
+}
+
+fn vim_select_prev_word_start(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::PrevStart, false)
+}
+
+fn vim_select_prev_word_end(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::PrevEnd, false)
+}
+
+fn vim_select_next_long_word_start(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::NextStart, true)
+}
+
+fn vim_select_next_long_word_end(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::NextEnd, true)
+}
+
+fn vim_select_prev_long_word_start(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::PrevStart, true)
+}
+
+fn vim_select_prev_long_word_end(cx: &mut Context) {
+    vim_word_select(cx, movement::VimWord::PrevEnd, true)
 }
 
 fn move_next_word_start(cx: &mut Context) {

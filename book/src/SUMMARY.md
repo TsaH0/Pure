@@ -25,6 +25,7 @@
   - [Editor](./editor.md)
   - [Themes](./themes.md)
   - [Key remapping](./remapping.md)
+  - [Key modes](./key-modes.md)
   - [Languages](./languages.md)
   - [Plugins](./plugins.md)
 - [Guides](./guides/README.md)

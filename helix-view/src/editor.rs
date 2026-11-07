@@ -765,6 +765,8 @@ impl Default for StatusLineConfig {
         Self {
             left: vec![
                 E::Mode,
+                // Empty unless a key mode is on.
+                E::Modes,
                 E::Spinner,
                 E::FileName,
                 E::ReadOnlyIndicator,
@@ -883,6 +885,10 @@ pub enum StatusLineElement {
 
     /// Text plugins put in the statusline (`set-statusline`)
     Plugins,
+
+    /// The key modes on in the buffer (`[modes]`, `:mode`), by their
+    /// lighters; nothing while none is
+    Modes,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs

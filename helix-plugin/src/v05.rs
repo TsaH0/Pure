@@ -121,6 +121,32 @@ pub enum Step {
 /// Reads a terminal's screen rows and exit status (if it ended).
 pub type TerminalReader = Arc<dyn Fn() -> Option<(Vec<String>, Option<i32>)> + Send + Sync>;
 
+/// A key mode a plugin defines (API 0.5 `key-modes`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyModeDef {
+    pub name: String,
+    pub description: String,
+    pub lighter: Option<String>,
+    pub global: bool,
+    pub enabled: bool,
+    pub languages: Vec<String>,
+    pub conflicts: Vec<String>,
+    pub requires: Vec<String>,
+    /// `(mode, keys, command)`: keys as in `[keys]` ("C-x C-s"), the
+    /// command as a `[keys]` value ("save", ":write").
+    pub bindings: Vec<(crate::Mode, String, String)>,
+    pub on_enable: Vec<String>,
+    pub on_disable: Vec<String>,
+}
+
+/// What `key-modes.switch` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyModeSwitch {
+    On,
+    Off,
+    Toggle,
+}
+
 /// A terminal a plugin opened, as snapshots carry it: its screen is read
 /// when asked for.
 #[derive(Clone)]
@@ -1288,6 +1314,35 @@ impl State {
             fold,
         });
         Ok(())
+    }
+    pub(crate) fn key_mode_define(&mut self, def: KeyModeDef) -> Result<(), String> {
+        if def.name.is_empty() || def.name.len() > 64 {
+            return Err("a mode name of 1 to 64 characters".into());
+        }
+        if def.bindings.len() > 2000 {
+            return Err("at most 2000 bindings a mode".into());
+        }
+        self.actions.push(crate::Action::KeyModeDefine {
+            plugin: self.plugin.clone(),
+            def,
+        });
+        Ok(())
+    }
+    pub(crate) fn key_mode_switch(
+        &mut self,
+        name: String,
+        doc: Option<DocumentId>,
+        how: KeyModeSwitch,
+    ) -> Result<(), String> {
+        if let Some(doc) = doc {
+            self.document(doc)?;
+        }
+        self.actions
+            .push(crate::Action::KeyModeSwitch { name, doc, how });
+        Ok(())
+    }
+    pub(crate) fn key_modes_active(&mut self, doc: DocumentId) -> Result<Vec<String>, String> {
+        Ok(self.document(doc)?.key_modes.clone())
     }
     pub(crate) fn terminal_open(
         &mut self,

@@ -422,6 +422,37 @@ pub mod lsp {
     }
 }
 
+/// Key modes (Emacs-style minor modes): define, switch, list.
+pub mod key_modes {
+    pub use super::plugin::key_modes::*;
+
+    /// A binding: `keys` and `command` written as in config.toml's [keys].
+    pub fn bind(mode: crate::Mode, keys: &str, command: &str) -> Binding {
+        Binding {
+            mode,
+            keys: keys.into(),
+            command: command.into(),
+        }
+    }
+
+    /// A buffer-local mode with no keys yet.
+    pub fn mode(name: &str, description: &str) -> Definition {
+        Definition {
+            name: name.into(),
+            description: description.into(),
+            lighter: None,
+            global: false,
+            enabled: false,
+            languages: Vec::new(),
+            conflicts: Vec::new(),
+            requires: Vec::new(),
+            bindings: Vec::new(),
+            on_enable: Vec::new(),
+            on_disable: Vec::new(),
+        }
+    }
+}
+
 /// Terminals: open one running a program, write to it, read its screen.
 pub mod terminal {
     pub use super::plugin::terminal::*;

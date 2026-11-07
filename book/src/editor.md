@@ -210,6 +210,7 @@ The following statusline elements can be configured:
 | `register` | The current selected register |
 | `code-action-hint` | Indicator for when code actions are available |
 | `plugins` | Text plugins put in the statusline |
+| `modes` | The [key modes](./key-modes.md) on in the buffer, by their lighters (`[Vim]`); nothing while none is. In the default layout, after `mode` |
 
 ### `[editor.lsp]` Section
 

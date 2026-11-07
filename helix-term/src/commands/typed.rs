@@ -3182,6 +3182,63 @@ fn plugin_trace(
     Ok(())
 }
 
+/// `:mode NAME [on|off|toggle]`; without a name, the `:modes` picker.
+fn key_mode(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let Some(name) = args.first() else {
+        return key_modes(cx, args, event);
+    };
+    let how = match args.get(1) {
+        None | Some("toggle") => crate::keymap::modes::Switch::Toggle,
+        Some("on") => crate::keymap::modes::Switch::On,
+        Some("off") => crate::keymap::modes::Switch::Off,
+        Some(other) => anyhow::bail!("'{other}': on, off or toggle"),
+    };
+    super::modes::switch(cx, name, how)
+}
+
+/// `:modes`: every key mode, on or off here; Enter toggles one.
+fn key_modes(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                compositor.push(Box::new(super::modes::picker(editor)));
+            },
+        )))
+    });
+    Ok(())
+}
+
+/// `:describe-mode [NAME]`: the key modes on here (or one) and their keys.
+fn describe_mode(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let name = args.first().map(|name| name.to_string());
+    if let Some(name) = &name {
+        if crate::keymap::modes::find(name).is_none() {
+            anyhow::bail!("no mode '{name}'");
+        }
+    }
+    cx.jobs.callback(async move {
+        Ok(Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                super::modes::describe(editor, compositor, name.as_deref());
+            },
+        )))
+    });
+    Ok(())
+}
+
 fn plugin_keys(
     cx: &mut compositor::Context,
     _args: Args,
@@ -4874,6 +4931,39 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::positional(&[completers::plugin_name]),
         signature: Signature {
             positionals: (0, Some(2)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "mode",
+        aliases: &[],
+        doc: "Turn a key mode on, off or toggle it (the default) in this buffer, or everywhere for a global mode. Without a name, list the modes.",
+        fun: key_mode,
+        completer: CommandCompleter::positional(&[completers::key_mode, completers::mode_switch]),
+        signature: Signature {
+            positionals: (0, Some(2)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "modes",
+        aliases: &[],
+        doc: "List the key modes, on or off here; Enter toggles one.",
+        fun: key_modes,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "describe-mode",
+        aliases: &[],
+        doc: "Show the key modes on here (or the one named) and the keys each binds.",
+        fun: describe_mode,
+        completer: CommandCompleter::positional(&[completers::key_mode]),
+        signature: Signature {
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

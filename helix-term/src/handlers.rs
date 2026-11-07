@@ -30,6 +30,7 @@ mod workspace_trust;
 pub fn setup(config: Arc<ArcSwap<Config>>) -> Handlers {
     events::register();
     crate::plugins::register_hooks();
+    crate::keymap::modes::register_hooks();
     #[cfg(unix)]
     crate::terminal::register_hooks();
 

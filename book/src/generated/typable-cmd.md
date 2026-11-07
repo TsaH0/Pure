@@ -105,6 +105,9 @@
 | `:plugin-list` | Show the loaded plugins and their commands. |
 | `:plugin-doctor` | Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times. |
 | `:plugin-trace` | Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on|off]`. |
+| `:mode` | Turn a key mode on, off or toggle it (the default) in this buffer, or everywhere for a global mode. Without a name, list the modes. |
+| `:modes` | List the key modes, on or off here; Enter toggles one. |
+| `:describe-mode` | Show the key modes on here (or the one named) and the keys each binds. |
 | `:plugin-keys` | Show the plugins' key bindings, their layers and conflicts. |
 | `:plugin-key` | Run a plugin's key binding: <plugin> <binding>. |
 | `:plugin-install` | Install a plugin from a git URL or a directory (it must have a committed component); asks first. |

@@ -1351,6 +1351,57 @@ interface terminal {
   close: func(id: u32) -> result<_, string>;
 }
 
+/// API 0.5: key modes, like Emacs' minor modes (`:mode`, `:modes`): named
+/// sets of key bindings turned on and off while editing, in one buffer or
+/// everywhere, shown in the statusline. Users define them in config.toml
+/// (`[modes.<name>]`); plugins here. While on, a mode's keys go over all
+/// others; of several, the last turned on wins. A plugin's modes go when it
+/// is disabled.
+interface key-modes {
+  use types.{document-id, mode};
+
+  record binding {
+    mode: mode,
+    /// As in config.toml's [keys]: "x", "C-x C-s", "space f".
+    keys: string,
+    /// A [keys] value: a command ("goto_line_end"), a typed command
+    /// (":write", ":mode ki-word on") or a plugin's (":plugin-run p/cmd").
+    command: string,
+  }
+
+  record definition {
+    name: string,
+    description: string,
+    /// Shown in the statusline while on; the name when none.
+    lighter: option<string>,
+    /// On in every buffer at once, instead of one.
+    global: bool,
+    /// On from the start.
+    enabled: bool,
+    /// On in buffers of these languages.
+    languages: list<string>,
+    /// Turned off when this one goes on.
+    conflicts: list<string>,
+    /// Turned on with this one.
+    requires: list<string>,
+    bindings: list<binding>,
+    /// Commands run when it goes on and off ([keys] values).
+    on-enable: list<string>,
+    on-disable: list<string>,
+  }
+
+  enum switch-to { on, off, toggle }
+
+  /// Define (or redefine) a mode; after the call. Bad keys or commands
+  /// are reported in the editor's status.
+  define: func(def: definition) -> result<_, string>;
+  /// Turn a mode on or off in `doc` (the focused document when none;
+  /// everywhere for a global mode), after the call.
+  switch: func(name: string, doc: option<document-id>, to: switch-to) -> result<_, string>;
+  /// The modes on in `doc`, lowest precedence first.
+  active: func(doc: document-id) -> result<list<string>, string>;
+}
+
 world helix-plugin {
   import host;
   import process;
@@ -1390,6 +1441,7 @@ world helix-plugin {
   import bars;
   import debug;
   import terminal;
+  import key-modes;
   export plugin;
   export callbacks;
   export events;

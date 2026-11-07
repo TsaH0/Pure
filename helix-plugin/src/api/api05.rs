@@ -289,6 +289,51 @@ mod folds_impl {
     }
 }
 
+mod key_modes_impl {
+    use super::*;
+    use crate::v05::{KeyModeDef, KeyModeSwitch};
+    use v0_5::helix::plugin::key_modes::{Definition, Host, SwitchTo};
+
+    impl Host for State {
+        fn define(&mut self, def: Definition) -> std::result::Result<(), String> {
+            let def = KeyModeDef {
+                name: def.name,
+                description: def.description,
+                lighter: def.lighter,
+                global: def.global,
+                enabled: def.enabled,
+                languages: def.languages,
+                conflicts: def.conflicts,
+                requires: def.requires,
+                bindings: def
+                    .bindings
+                    .into_iter()
+                    .map(|b| (mode(b.mode), b.keys, b.command))
+                    .collect(),
+                on_enable: def.on_enable,
+                on_disable: def.on_disable,
+            };
+            self.key_mode_define(def)
+        }
+        fn switch(
+            &mut self,
+            name: String,
+            doc: Option<u32>,
+            to: SwitchTo,
+        ) -> std::result::Result<(), String> {
+            let how = match to {
+                SwitchTo::On => KeyModeSwitch::On,
+                SwitchTo::Off => KeyModeSwitch::Off,
+                SwitchTo::Toggle => KeyModeSwitch::Toggle,
+            };
+            self.key_mode_switch(name, doc, how)
+        }
+        fn active(&mut self, doc: u32) -> std::result::Result<Vec<String>, String> {
+            self.key_modes_active(doc)
+        }
+    }
+}
+
 mod terminal_impl {
     use super::*;
     use v0_5::helix::plugin::terminal::Host;

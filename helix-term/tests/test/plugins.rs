@@ -5421,3 +5421,23 @@ async fn toggleterm_example_opens_closes_and_sends() -> anyhow::Result<()> {
     assert_eq!(app.editor.tree.views().count(), 1);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_define_and_switch_key_modes() -> anyhow::Result<()> {
+    let (mut app, _dir) = app_v5("#[o|]#ne two\n", None, "");
+    keys(&mut app, ":plugin-run testplugin3/keymode define pm<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/keymode on pm<ret>").await;
+    keys(&mut app, ":plugin-run testplugin3/keymode active<ret>").await;
+    assert_eq!(status(&app).0, "keymodes:pm");
+    assert!(screen_rows(&app).iter().any(|row| row.contains("[PM]")));
+    keys(&mut app, "x").await;
+    assert_eq!(cursor(&app), 6, "the mode's x: to the line's end");
+    keys(&mut app, "<C-x><C-x>").await;
+    assert_eq!(status(&app).0, "plugin chord");
+    // The plugin's modes go when it is unloaded (here, reloaded).
+    keys(&mut app, ":plugin-reload<ret>").await;
+    assert!(!screen_rows(&app).iter().any(|row| row.contains("[PM]")));
+    keys(&mut app, ":mode pm<ret>").await;
+    assert!(app.editor.get_status().unwrap().0.contains("no mode 'pm'"));
+    Ok(())
+}

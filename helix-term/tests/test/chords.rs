@@ -44,6 +44,14 @@ async fn keys_held_together_run_chords() -> anyhow::Result<()> {
         .with_input_text("#[a|]#\nb\nc\nd\ne\n")
         .build()?;
 
+    // Before a terminal has reported a release, chords are off (on one
+    // that never does, keys would wait for nothing): j moves at once.
+    send(&mut app, &[('j', Press)]).await;
+    assert_eq!(line(&app), 1);
+    // The terminal reports releases (its first one).
+    send(&mut app, &[('j', Release), ('k', Press), ('k', Release)]).await;
+    assert_eq!(line(&app), 0);
+
     send(
         &mut app,
         &[('j', Press), ('k', Press), ('k', Release), ('j', Release)],

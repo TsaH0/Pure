@@ -1,5 +1,6 @@
 pub mod default;
 pub mod macros;
+pub mod modes;
 pub mod plugin_layers;
 
 pub use crate::commands::MappableCommand;
@@ -171,15 +172,12 @@ impl<'de> serde::de::Visitor<'de> for KeyTrieVisitor {
             )
         }
 
-        // Prevent macro keybindings from being used in command sequences.
-        // This is meant to be a temporary restriction pending a larger
-        // refactor of how command sequences are executed.
-        if commands
-            .iter()
-            .any(|cmd| matches!(cmd, MappableCommand::Macro { .. }))
-        {
+        // A key macro in a sequence gives its keys to the command before it
+        // that waits for one (`["select_textobject_inner", "@w"]`, see
+        // `commands::run_sequence`); it can't start one.
+        if matches!(commands.first(), Some(MappableCommand::Macro { .. })) {
             return Err(serde::de::Error::custom(
-                "macro keybindings may not be used in command sequences",
+                "a key macro in a command sequence must follow a command that waits for a key",
             ));
         }
 
@@ -338,6 +336,7 @@ pub fn forget_filled_keymap() {
     *FILLED.lock() = None;
     *IN_BUFFER.lock() = None;
     plugin_layers::forget_composed();
+    modes::forget_composed();
 }
 
 /// `keymaps` with the plugin keys filled in, or `None` without plugin keys
@@ -438,6 +437,10 @@ impl Keymaps {
         let keymaps = filled.as_deref().unwrap_or(&base);
         let layered = plugin_layers::compose(&base, keymaps, scope, None);
         let keymaps = layered.as_deref().unwrap_or(keymaps);
+        // Key modes on in the document go over the rest (not a plugin's
+        // own buffer keys).
+        let moded = modes::compose(keymaps, scope.document, scope.language);
+        let keymaps = moded.as_deref().unwrap_or(keymaps);
         let in_buffer = scope
             .owner
             .and_then(|owner| with_buffer_keys(keymaps, owner));
@@ -507,6 +510,8 @@ impl Keymaps {
         let keymaps = filled.as_deref().unwrap_or(&base);
         let layered = plugin_layers::compose(&base, keymaps, scope, Some(exclude));
         let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let moded = modes::compose(keymaps, scope.document, scope.language);
+        let keymaps = moded.as_deref().unwrap_or(keymaps);
         let in_buffer = scope
             .owner
             .and_then(|owner| with_buffer_keys(keymaps, owner));
@@ -530,6 +535,8 @@ impl Keymaps {
         let keymaps = filled.as_deref().unwrap_or(&base);
         let layered = plugin_layers::compose(&base, keymaps, scope, None);
         let keymaps = layered.as_deref().unwrap_or(keymaps);
+        let moded = modes::compose(keymaps, scope.document, scope.language);
+        let keymaps = moded.as_deref().unwrap_or(keymaps);
         let mut keys = self.state.clone();
         keys.push(key);
         let trie = match &self.sticky {

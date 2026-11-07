@@ -208,6 +208,7 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                 "canvas",
                 "fold",
                 "history",
+                "keymode",
                 "term",
                 "debug",
                 "layers",
@@ -754,6 +755,44 @@ impl exports::helix::plugin::plugin::Guest for TestPlugin {
                     _ => return Err("which?".into()),
                 }
                 Ok(())
+            }
+            // `keymode define NAME`, `keymode on|off|toggle NAME`,
+            // `keymode active`.
+            "keymode" => {
+                use helix::plugin::key_modes::{self, Binding, Definition, SwitchTo};
+                let name = args.get(1).cloned().unwrap_or_default();
+                match args.first().map(String::as_str) {
+                    Some("define") => key_modes::define(&Definition {
+                        name,
+                        description: "A plugin's keys".into(),
+                        lighter: Some("PM".into()),
+                        global: false,
+                        enabled: false,
+                        languages: vec![],
+                        conflicts: vec![],
+                        requires: vec![],
+                        bindings: vec![
+                            Binding { mode: types::Mode::Normal, keys: "x".into(), command: "goto_line_end".into() },
+                            Binding { mode: types::Mode::Normal, keys: "C-x C-x".into(), command: ":echo plugin chord".into() },
+                        ],
+                        on_enable: vec![],
+                        on_disable: vec![],
+                    }),
+                    Some(how @ ("on" | "off" | "toggle")) => {
+                        let to = match how {
+                            "on" => SwitchTo::On,
+                            "off" => SwitchTo::Off,
+                            _ => SwitchTo::Toggle,
+                        };
+                        key_modes::switch(&name, None, to)
+                    }
+                    Some("active") => {
+                        let doc = host::current_document().ok_or("no document")?;
+                        host::set_status(&format!("keymodes:{}", key_modes::active(doc)?.join(",")));
+                        Ok(())
+                    }
+                    _ => Err("which?".into()),
+                }
             }
             // `history` (the tree, in the status) or `history N` (jump).
             "history" => {

@@ -543,6 +543,9 @@ pub struct DocumentSnapshot {
     pub layers: Option<std::sync::Arc<Vec<SyntaxLayer>>>,
     /// Its folds, `(first, last)` lines (API 0.5 `folds`).
     pub folds: Vec<(u32, u32)>,
+    /// The key modes on in it, lowest precedence first (API 0.5
+    /// `key-modes`).
+    pub key_modes: Vec<String>,
     /// Its undo history (API 0.5 `history`), filled in only while an API
     /// 0.5 plugin is loaded. Shared between snapshots until it changes.
     pub history: Option<std::sync::Arc<History>>,
@@ -693,6 +696,18 @@ pub enum Action {
     },
     /// Language servers (API 0.5 `lsp.serve`, `listen`, `filter`, `start`).
     LanguageServer(v05::LspAction),
+    /// Define a key mode (API 0.5 `key-modes`).
+    KeyModeDefine {
+        plugin: String,
+        def: v05::KeyModeDef,
+    },
+    /// Turn a key mode on or off in a document (the focused one when
+    /// `None`; everywhere for a global mode).
+    KeyModeSwitch {
+        name: String,
+        doc: Option<DocumentId>,
+        how: v05::KeyModeSwitch,
+    },
     /// Open a terminal running `argv` (API 0.5 `terminal.open`), in a split
     /// (`below`, or to the right) or in place of the focused view.
     TerminalOpen {

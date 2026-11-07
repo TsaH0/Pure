@@ -1172,10 +1172,11 @@ impl EditorView {
         sequence.push(event);
         let (owner, document, language) = {
             let doc = doc!(cxt.editor);
-            // Languages only matter to plugin bindings.
-            let language = crate::keymap::plugin_layers::has_bindings()
-                .then(|| doc.language_name().map(str::to_string))
-                .flatten();
+            // Languages only matter to plugin bindings and key modes.
+            let language = (crate::keymap::plugin_layers::has_bindings()
+                || crate::keymap::modes::need_language())
+            .then(|| doc.language_name().map(str::to_string))
+            .flatten();
             (doc.plugin_owner.clone(), doc.id(), language)
         };
         let scope = crate::keymap::plugin_layers::KeyScope {
@@ -1222,51 +1223,48 @@ impl EditorView {
             }
         }
 
-        let mut execute_command = |command: &commands::MappableCommand| {
-            command.execute(cxt);
-            helix_event::dispatch(PostCommand { command, cx: cxt });
+        let mut execute_command =
+            |cxt: &mut commands::Context, command: &commands::MappableCommand| {
+                command.execute(cxt);
+                helix_event::dispatch(PostCommand { command, cx: cxt });
 
-            let current_mode = cxt.editor.mode();
-            if current_mode != last_mode {
-                helix_event::dispatch(OnModeSwitch {
-                    old_mode: last_mode,
-                    new_mode: current_mode,
-                    cx: cxt,
-                });
+                let current_mode = cxt.editor.mode();
+                if current_mode != last_mode {
+                    helix_event::dispatch(OnModeSwitch {
+                        old_mode: last_mode,
+                        new_mode: current_mode,
+                        cx: cxt,
+                    });
 
-                // HAXX: if we just entered insert mode from normal, clear key buf
-                // and record the command that got us into this mode.
-                if current_mode == Mode::Insert {
-                    // how we entered insert mode is important, and we should track that so
-                    // we can repeat the side effect.
-                    self.last_insert.0 = command.clone();
-                    self.last_insert.1.clear();
+                    // HAXX: if we just entered insert mode from normal, clear key buf
+                    // and record the command that got us into this mode.
+                    if current_mode == Mode::Insert {
+                        // how we entered insert mode is important, and we should track that so
+                        // we can repeat the side effect.
+                        self.last_insert.0 = command.clone();
+                        self.last_insert.1.clear();
+                    }
                 }
-            }
 
-            last_mode = current_mode;
-        };
+                last_mode = current_mode;
+            };
 
         match &key_result {
             KeymapResult::Matched(command) => match &plugin_binding {
                 // A plugin binding the plugin passed through: what the keys
                 // do without it.
                 Some(_) => match passed_through {
-                    Some(KeyTrie::MappableCommand(command)) => execute_command(&command),
+                    Some(KeyTrie::MappableCommand(command)) => execute_command(cxt, &command),
                     Some(KeyTrie::Sequence(commands)) => {
-                        for command in &commands {
-                            execute_command(command);
-                        }
+                        commands::run_sequence(cxt, &commands, &mut execute_command)
                     }
                     _ => {}
                 },
-                None => execute_command(command),
+                None => execute_command(cxt, command),
             },
             KeymapResult::Pending(node) => cxt.editor.autoinfo = Some(node.infobox()),
             KeymapResult::MatchedSequence(commands) => {
-                for command in commands {
-                    execute_command(command);
-                }
+                commands::run_sequence(cxt, commands, &mut execute_command)
             }
             KeymapResult::NotFound | KeymapResult::Cancelled(_) => return Some(key_result),
         }
