@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2116a520.js";
+            window.path_to_searchindex_js = "searchindex-f6b6951e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-41a81a43.js"></script>
+        <script src="toc-c7f75167.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -199,9 +199,11 @@ list of available typeable commands or the <code>TypableCommandList</code> decla
 the source code at <a href="https://github.com/helix-editor/helix/blob/master/helix-term/src/commands/typed.rs"><code>helix-term/src/commands/typed.rs</code></a>.</li>
 <li>Macros: sequences of keys that are executed in order. These keybindings
 start with <code>@</code> and then list any number of keys to be executed. For example
-<code>@miw</code> can be used to select the surrounding word. For now, macro keybindings
-are not allowed in keybinding sequences due to limitations in the way that
-command sequences are executed. Modifier keys (e.g. Alt+o) can be used
+<code>@miw</code> can be used to select the surrounding word. In a sequence, a macro
+types keys for the command before it that waits for one:
+<code>["select_textobject_inner", "@w", "yank"]</code>. A command that waits for a
+key in a sequence without a macro after it (<code>["find_till_char", "delete_selection"]</code>) runs the rest of the sequence once the key is typed.
+Modifier keys (e.g. Alt+o) can be used
 like <code>"&lt;A-o&gt;"</code>, e.g. <code>"@miw&lt;A-o&gt;"</code></li>
 </ul>
 <p>To remap keys, create a <code>config.toml</code> file in your <code>helix</code> configuration
@@ -303,7 +305,7 @@ Cmd-s = ":write" # Cmd or Win or Meta and 's' to write
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="languages.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="key-modes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -317,7 +319,7 @@ Cmd-s = ":write" # Cmd or Win or Meta and 's' to write
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="languages.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="key-modes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-2116a520.js";
+            window.path_to_searchindex_js = "searchindex-f6b6951e.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-41a81a43.js"></script>
+        <script src="toc-c7f75167.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -300,6 +300,9 @@
 <tr><td><code>:plugin-list</code></td><td>Show the loaded plugins and their commands.</td></tr>
 <tr><td><code>:plugin-doctor</code></td><td>Report on each plugin: state, permissions and grants (and what is missing), events, keys, services, settings and call times.</td></tr>
 <tr><td><code>:plugin-trace</code></td><td>Log every call of a plugin (or all) with its time: `:plugin-trace [plugin] [on</td></tr>
+<tr><td><code>:mode</code></td><td>Turn a key mode on, off or toggle it (the default) in this buffer, or everywhere for a global mode. Without a name, list the modes.</td></tr>
+<tr><td><code>:modes</code></td><td>List the key modes, on or off here; Enter toggles one.</td></tr>
+<tr><td><code>:describe-mode</code></td><td>Show the key modes on here (or the one named) and the keys each binds.</td></tr>
 <tr><td><code>:plugin-keys</code></td><td>Show the plugins’ key bindings, their layers and conflicts.</td></tr>
 <tr><td><code>:plugin-key</code></td><td>Run a plugin’s key binding: <plugin> <binding>.</binding></plugin></td></tr>
 <tr><td><code>:plugin-install</code></td><td>Install a plugin from a git URL or a directory (it must have a committed component); asks first.</td></tr>
@@ -358,6 +361,24 @@
 <tr><td><code>move_prev_long_word_start</code></td><td>Move to start of previous long word</td><td>normal: <code>B</code></td></tr>
 <tr><td><code>move_next_long_word_end</code></td><td>Move to end of next long word</td><td>normal: <code>E</code></td></tr>
 <tr><td><code>move_prev_long_word_end</code></td><td>Move to end of previous long word</td><td></td></tr>
+<tr><td><code>vim_next_word_start</code></td><td>Vim: move to start of next word</td><td></td></tr>
+<tr><td><code>vim_next_word_end</code></td><td>Vim: move to end of next word</td><td></td></tr>
+<tr><td><code>vim_prev_word_start</code></td><td>Vim: move to start of previous word</td><td></td></tr>
+<tr><td><code>vim_prev_word_end</code></td><td>Vim: move to end of previous word</td><td></td></tr>
+<tr><td><code>vim_next_long_word_start</code></td><td>Vim: move to start of next WORD</td><td></td></tr>
+<tr><td><code>vim_next_long_word_end</code></td><td>Vim: move to end of next WORD</td><td></td></tr>
+<tr><td><code>vim_prev_long_word_start</code></td><td>Vim: move to start of previous WORD</td><td></td></tr>
+<tr><td><code>vim_prev_long_word_end</code></td><td>Vim: move to end of previous WORD</td><td></td></tr>
+<tr><td><code>vim_select_change_word</code></td><td>Vim: select what cw takes (to the end of the word under the cursor)</td><td></td></tr>
+<tr><td><code>vim_select_change_long_word</code></td><td>Vim: select what cW takes (to the end of the WORD under the cursor)</td><td></td></tr>
+<tr><td><code>vim_select_next_word_start</code></td><td>Vim: select what an operator takes to start of next word</td><td></td></tr>
+<tr><td><code>vim_select_next_word_end</code></td><td>Vim: select what an operator takes to end of next word</td><td></td></tr>
+<tr><td><code>vim_select_prev_word_start</code></td><td>Vim: select what an operator takes to start of previous word</td><td></td></tr>
+<tr><td><code>vim_select_prev_word_end</code></td><td>Vim: select what an operator takes to end of previous word</td><td></td></tr>
+<tr><td><code>vim_select_next_long_word_start</code></td><td>Vim: select what an operator takes to start of next WORD</td><td></td></tr>
+<tr><td><code>vim_select_next_long_word_end</code></td><td>Vim: select what an operator takes to end of next WORD</td><td></td></tr>
+<tr><td><code>vim_select_prev_long_word_start</code></td><td>Vim: select what an operator takes to start of previous WORD</td><td></td></tr>
+<tr><td><code>vim_select_prev_long_word_end</code></td><td>Vim: select what an operator takes to end of previous WORD</td><td></td></tr>
 <tr><td><code>move_next_sub_word_start</code></td><td>Move to start of next sub word</td><td></td></tr>
 <tr><td><code>move_prev_sub_word_start</code></td><td>Move to start of previous sub word</td><td></td></tr>
 <tr><td><code>move_next_sub_word_end</code></td><td>Move to end of next sub word</td><td></td></tr>
@@ -600,17 +621,17 @@
 <tr><td><code>grow_view_height</code></td><td>Make the split taller</td><td>normal: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code>, select: <code>&lt;C-w&gt;+</code>, <code>&lt;space&gt;w+</code></td></tr>
 <tr><td><code>shrink_view_height</code></td><td>Make the split shorter</td><td>normal: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code>, select: <code>&lt;C-w&gt;&lt;minus&gt;</code>, <code>&lt;space&gt;w&lt;minus&gt;</code></td></tr>
 <tr><td><code>equalize_views</code></td><td>Make all splits the same size</td><td>normal: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code>, select: <code>&lt;C-w&gt;=</code>, <code>&lt;space&gt;w=</code></td></tr>
-<tr><td><code>fold</code></td><td>Fold the selected lines, or the syntax node (or indented block) around the cursor</td><td>normal: <code>zc</code>, <code>zf</code>, select: <code>zc</code>, <code>zf</code></td></tr>
-<tr><td><code>unfold</code></td><td>Unfold the folds on the selected lines</td><td>normal: <code>zo</code>, select: <code>zo</code></td></tr>
-<tr><td><code>toggle_fold</code></td><td>Fold or unfold at the cursor</td><td>normal: <code>za</code>, select: <code>za</code></td></tr>
-<tr><td><code>fold_all</code></td><td>Fold every top-level block</td><td>normal: <code>zM</code>, select: <code>zM</code></td></tr>
-<tr><td><code>unfold_all</code></td><td>Unfold everything</td><td>normal: <code>zR</code>, select: <code>zR</code></td></tr>
+<tr><td><code>fold</code></td><td>Fold the selected lines, or the syntax node (or indented block) around the cursor</td><td>normal: <code>Zc</code>, <code>Zf</code>, <code>zc</code>, <code>zf</code>, select: <code>Zc</code>, <code>Zf</code>, <code>zc</code>, <code>zf</code></td></tr>
+<tr><td><code>unfold</code></td><td>Unfold the folds on the selected lines</td><td>normal: <code>Zo</code>, <code>zo</code>, select: <code>Zo</code>, <code>zo</code></td></tr>
+<tr><td><code>toggle_fold</code></td><td>Fold or unfold at the cursor</td><td>normal: <code>Za</code>, <code>za</code>, select: <code>Za</code>, <code>za</code></td></tr>
+<tr><td><code>fold_all</code></td><td>Fold every top-level block</td><td>normal: <code>ZM</code>, <code>zM</code>, select: <code>ZM</code>, <code>zM</code></td></tr>
+<tr><td><code>unfold_all</code></td><td>Unfold everything</td><td>normal: <code>ZR</code>, <code>zR</code>, select: <code>ZR</code>, <code>zR</code></td></tr>
 <tr><td><code>select_register</code></td><td>Select register</td><td>normal: <code>"</code>, select: <code>"</code></td></tr>
 <tr><td><code>insert_register</code></td><td>Insert register</td><td>insert: <code>&lt;C-r&gt;</code></td></tr>
 <tr><td><code>copy_between_registers</code></td><td>Copy between two registers</td><td></td></tr>
 <tr><td><code>align_view_middle</code></td><td>Align view middle</td><td>normal: <code>Zm</code>, <code>zm</code>, select: <code>Zm</code>, <code>zm</code></td></tr>
 <tr><td><code>align_view_top</code></td><td>Align view top</td><td>normal: <code>Zt</code>, <code>zt</code>, select: <code>Zt</code>, <code>zt</code></td></tr>
-<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zc</code>, <code>Zz</code>, <code>zz</code>, select: <code>Zc</code>, <code>Zz</code>, <code>zz</code></td></tr>
+<tr><td><code>align_view_center</code></td><td>Align view center</td><td>normal: <code>Zz</code>, <code>zz</code>, select: <code>Zz</code>, <code>zz</code></td></tr>
 <tr><td><code>align_view_bottom</code></td><td>Align view bottom</td><td>normal: <code>Zb</code>, <code>zb</code>, select: <code>Zb</code>, <code>zb</code></td></tr>
 <tr><td><code>scroll_up</code></td><td>Scroll view up</td><td>normal: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code>, select: <code>Zk</code>, <code>zk</code>, <code>Z&lt;up&gt;</code>, <code>z&lt;up&gt;</code></td></tr>
 <tr><td><code>scroll_down</code></td><td>Scroll view down</td><td>normal: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code>, select: <code>Zj</code>, <code>zj</code>, <code>Z&lt;down&gt;</code>, <code>z&lt;down&gt;</code></td></tr>
