@@ -409,9 +409,14 @@ const BASE_WIDTH: u16 = 30;
 
 impl Prompt {
     pub fn render_prompt(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        // The statuslines can be below the command line.
+        let below = crate::ui::editor::cmdline_above_statusline(cx.editor, area);
+        let area = if below { area.clip_bottom(1) } else { area };
         match cx.editor.config().cmdline.style {
             helix_view::editor::CmdlineStyle::Popup => return self.render_popup(area, surface, cx),
-            helix_view::editor::CmdlineStyle::Panel => return self.render_panel(area, surface, cx),
+            helix_view::editor::CmdlineStyle::Panel => {
+                return self.render_panel(area, below, surface, cx)
+            }
             helix_view::editor::CmdlineStyle::Bottom => {}
         }
         let theme = &cx.editor.theme;
@@ -543,7 +548,13 @@ impl Prompt {
     /// The panel command line: the input on the last line like Helix's, the
     /// completions above the statusline in a box, one per row with what they
     /// do (like Runyte).
-    fn render_panel(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+    fn render_panel(
+        &mut self,
+        area: Rect,
+        statusline_below: bool,
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
         let config = cx.editor.config().cmdline;
         let theme = &cx.editor.theme;
         let panel = theme
@@ -556,11 +567,14 @@ impl Prompt {
             .try_get("ui.cmdline.title")
             .unwrap_or_else(|| theme.get("ui.text.focus"));
 
-        // Leave the last two lines: the statusline and the input.
+        // Leave the last two lines: the statusline and the input (only the
+        // input when the statuslines are below it, out of `area`).
         let rows = (self.completion.len() as u16)
             .min(config.popup_rows)
             .min(area.height.saturating_sub(5));
-        let mut bottom = area.bottom().saturating_sub(2);
+        let mut bottom = area
+            .bottom()
+            .saturating_sub(if statusline_below { 1 } else { 2 });
         if rows > 0 {
             let width =
                 ((area.width as u32 * config.popup_width.clamp(20, 100) as u32) / 100) as u16;
@@ -1036,6 +1050,11 @@ impl Component for Prompt {
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
+        let area = if crate::ui::editor::cmdline_above_statusline(editor, area) {
+            area.clip_bottom(1)
+        } else {
+            area
+        };
         let popup = editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup;
         let area = if popup {
             // Where `render_popup` put the input.

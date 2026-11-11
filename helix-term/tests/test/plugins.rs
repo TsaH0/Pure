@@ -5032,7 +5032,7 @@ async fn plugins_draw_statuslines_tablines_and_winbars() -> anyhow::Result<()> {
     let rows = |app: &Application| screen_rows(app);
     let statusline = |app: &Application| {
         let rows = rows(app);
-        rows[rows.len() - 2].clone()
+        rows[rows.len() - 1].clone()
     };
     keys(&mut app, ":plugin-run testplugin3/bar statusline<ret>l").await;
     let line = statusline(&app);
@@ -5090,7 +5090,7 @@ async fn statusbar_example_draws_a_statusline_and_buffer_tabs() -> anyhow::Resul
     let (mut app, _dir) = app_with_example("statusbar", "");
     keys(&mut app, "l").await;
     let rows = screen_rows(&app);
-    let statusline = &rows[rows.len() - 2];
+    let statusline = &rows[rows.len() - 1];
     assert!(statusline.starts_with(" NOR "), "{statusline:?}");
     assert!(statusline.trim_end().ends_with("1:2"), "{statusline:?}");
     assert!(
@@ -5105,9 +5105,9 @@ async fn statusbar_example_draws_a_statusline_and_buffer_tabs() -> anyhow::Resul
     keys(&mut app, "i").await;
     let rows = screen_rows(&app);
     assert!(
-        rows[rows.len() - 2].starts_with(" INS "),
+        rows[rows.len() - 1].starts_with(" INS "),
         "{:?}",
-        rows[rows.len() - 2]
+        rows[rows.len() - 1]
     );
     Ok(())
 }

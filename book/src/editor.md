@@ -85,7 +85,7 @@ and plugins) look.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above the statusline, one per row, like Runyte | `"bottom"` |
+| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte | `"bottom"` |
 | `popup-width` | Width of the popup or panel in percent of the screen (the panel is left-aligned) | `70` |
 | `popup-rows` | Most completions the popup or panel lists | `15` |
 | `descriptions` | In the popup and panel, show each command's category, what it does and its aliases (plugin commands too) | `true` |
@@ -147,7 +147,7 @@ For custom commands the contents of the yank/paste is communicated over stdin/st
 
 ### `[editor.statusline]` Section
 
-Allows configuring the statusline at the bottom of the editor.
+Allows configuring the statusline: where it goes (by default the bottom line of the screen, below the command line) and what it shows.
 
 The configuration distinguishes between three areas of the status line:
 
@@ -171,6 +171,7 @@ The `[editor.statusline]` key takes the following sub-keys:
 
 | Key           | Description | Default |
 | ---           | ---         | ---     |
+| `position`    | Where statuslines go: `"bottom"` (the screen's last line, below the command line), `"above-cmdline"` (each view's last line, above the command line, as in Helix) or `"top"` (each view's first line). In horizontal splits, `"bottom"` moves only the lowest views' statuslines; the others stay at their view's bottom. Change it while editing with `:set statusline.position top`. | `"bottom"` |
 | `left`        | A list of elements aligned to the left of the statusline | `["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]` |
 | `center`      | A list of elements aligned to the middle of the statusline | `[]` |
 | `right`       | A list of elements aligned to the right of the statusline | `["diagnostics", "selections", "register", "position", "file-encoding"]` |

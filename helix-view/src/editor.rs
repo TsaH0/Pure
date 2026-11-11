@@ -749,6 +749,8 @@ pub struct SearchConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct StatusLineConfig {
+    /// Where each view's statusline goes.
+    pub position: StatusLinePosition,
     pub left: Vec<StatusLineElement>,
     pub center: Vec<StatusLineElement>,
     pub right: Vec<StatusLineElement>,
@@ -763,6 +765,7 @@ impl Default for StatusLineConfig {
         use StatusLineElement as E;
 
         Self {
+            position: StatusLinePosition::default(),
             left: vec![
                 E::Mode,
                 // Empty unless a key mode is on.
@@ -806,6 +809,20 @@ impl Default for ModeConfig {
             select: String::from("SEL"),
         }
     }
+}
+
+/// Where statuslines are drawn (`editor.statusline.position`).
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatusLinePosition {
+    /// On the screen's last line, below the command line. Views above
+    /// others (in horizontal splits) keep theirs at their bottom.
+    #[default]
+    Bottom,
+    /// At the bottom of each view, above the command line (Helix's).
+    AboveCmdline,
+    /// On the first line of each view.
+    Top,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1791,6 +1808,10 @@ impl Editor {
     pub fn refresh_config(&mut self, old_config: &Config) {
         let config = self.config();
         self.auto_pairs = (&config.auto_pairs).into();
+        let top = config.statusline.position == StatusLinePosition::Top;
+        for (view, _) in self.tree.views_mut() {
+            view.statusline_top = top;
+        }
         self.reset_idle_timer();
         self._refresh();
         helix_event::dispatch(crate::events::ConfigDidChange {
@@ -2626,10 +2647,12 @@ impl Editor {
         }
         let bars = &self.plugin_bars;
         let mut changed = false;
+        let top = self.config().statusline.position == StatusLinePosition::Top;
         for (view, _) in self.tree.views_mut() {
             let winbar = bars.winbar(view.id).is_some();
-            changed |= view.winbar != winbar;
+            changed |= view.winbar != winbar || view.statusline_top != top;
             view.winbar = winbar;
+            view.statusline_top = top;
         }
         if self.tree.resize(area) {
             self._refresh();
