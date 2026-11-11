@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-f6b6951e.js";
+            window.path_to_searchindex_js = "searchindex-08a2033d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c7f75167.js"></script>
@@ -2910,7 +2910,7 @@ and plugins) look.</p>
 <tr><th>Key</th><th>Description</th><th>Default</th></tr>
 </thead>
 <tbody>
-<tr><td><code>style</code></td><td><code>"bottom"</code>: the last line, completions above it. <code>"popup"</code>: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. <code>"panel"</code>: the input on the last line, the completions in a box above the statusline, one per row, like Runyte</td><td><code>"bottom"</code></td></tr>
+<tr><td><code>style</code></td><td><code>"bottom"</code>: the last line, completions above it. <code>"popup"</code>: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. <code>"panel"</code>: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte</td><td><code>"bottom"</code></td></tr>
 <tr><td><code>popup-width</code></td><td>Width of the popup or panel in percent of the screen (the panel is left-aligned)</td><td><code>70</code></td></tr>
 <tr><td><code>popup-rows</code></td><td>Most completions the popup or panel lists</td><td><code>15</code></td></tr>
 <tr><td><code>descriptions</code></td><td>In the popup and panel, show each command’s category, what it does and its aliases (plugin commands too)</td><td><code>true</code></td></tr>
@@ -2959,7 +2959,7 @@ primary-paste = { command = "tee",  args = ["test-primary.txt"] } # optional
 </code></pre>
 <p>For custom commands the contents of the yank/paste is communicated over stdin/stdout.</p>
 <h3 id="editorstatusline-section"><a class="header" href="#editorstatusline-section"><code>[editor.statusline]</code> Section</a></h3>
-<p>Allows configuring the statusline at the bottom of the editor.</p>
+<p>Allows configuring the statusline: where it goes (by default the bottom line of the screen, below the command line) and what it shows.</p>
 <p>The configuration distinguishes between three areas of the status line:</p>
 <p><code>[ ... ... LEFT ... ... | ... ... ... CENTER ... ... ... | ... ... RIGHT ... ... ]</code></p>
 <p>Statusline elements can be defined as follows:</p>
@@ -2981,6 +2981,7 @@ workspace-diagnostics = ["warning", "error"]
 <tr><th>Key</th><th>Description</th><th>Default</th></tr>
 </thead>
 <tbody>
+<tr><td><code>position</code></td><td>Where statuslines go: <code>"bottom"</code> (the screen’s last line, below the command line), <code>"above-cmdline"</code> (each view’s last line, above the command line, as in Helix) or <code>"top"</code> (each view’s first line). In horizontal splits, <code>"bottom"</code> moves only the lowest views’ statuslines; the others stay at their view’s bottom. Change it while editing with <code>:set statusline.position top</code>.</td><td><code>"bottom"</code></td></tr>
 <tr><td><code>left</code></td><td>A list of elements aligned to the left of the statusline</td><td><code>["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]</code></td></tr>
 <tr><td><code>center</code></td><td>A list of elements aligned to the middle of the statusline</td><td><code>[]</code></td></tr>
 <tr><td><code>right</code></td><td>A list of elements aligned to the right of the statusline</td><td><code>["diagnostics", "selections", "register", "position", "file-encoding"]</code></td></tr>
