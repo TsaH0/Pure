@@ -31,6 +31,7 @@ mod test {
     #[cfg(unix)]
     mod remote;
     mod splits;
+    mod statusline;
     mod substitute;
     #[cfg(unix)]
     mod terminal;

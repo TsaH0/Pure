@@ -47,7 +47,8 @@ fn selection(app: &Application) -> String {
 
 fn statusline(app: &Application) -> String {
     let screen = app.terminal_buffer();
-    let y = screen.area.bottom() - 2;
+    // The statusline is on the last row by default.
+    let y = screen.area.bottom() - 1;
     (screen.area.x..screen.area.right())
         .map(|x| screen[(x, y)].symbol.to_string())
         .collect()

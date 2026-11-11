@@ -175,6 +175,9 @@ pub struct View {
     /// A plugin's bar takes the view's top row (`Tree::recalculate` leaves
     /// it out of `area`).
     pub winbar: bool,
+    /// The statusline is on the view's first row
+    /// (`editor.statusline.position = "top"`), not its last.
+    pub statusline_top: bool,
 }
 
 impl fmt::Debug for View {
@@ -212,6 +215,7 @@ impl View {
             doc_revisions: HashMap::new(),
             diagnostics_handler: DiagnosticsHandler::new(),
             winbar: false,
+            statusline_top: false,
         }
     }
 
@@ -223,7 +227,16 @@ impl View {
     }
 
     pub fn inner_area(&self, doc: &Document) -> Rect {
-        self.area.clip_left(self.gutter_offset(doc)).clip_bottom(1) // -1 for statusline
+        self.lines_area().clip_left(self.gutter_offset(doc))
+    }
+
+    /// The view without its statusline row.
+    pub fn lines_area(&self) -> Rect {
+        if self.statusline_top {
+            self.area.clip_top(1)
+        } else {
+            self.area.clip_bottom(1)
+        }
     }
 
     pub fn inner_height(&self) -> usize {

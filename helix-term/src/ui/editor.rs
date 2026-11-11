@@ -25,7 +25,7 @@ use helix_core::{
 use helix_view::{
     annotations::diagnostics::DiagnosticFilter,
     document::{Mode, SCRATCH_BUFFER_NAME},
-    editor::{CompleteAction, CursorShapeConfig},
+    editor::{CompleteAction, CursorShapeConfig, StatusLinePosition},
     graphics::{Color, CursorKind, Modifier, Rect, Style},
     input::{KeyEvent, MouseButton, MouseEvent, MouseEventKind},
     keyboard::{KeyCode, KeyModifiers},
@@ -113,22 +113,15 @@ impl EditorView {
         // A terminal.
         #[cfg(unix)]
         if let Some(id) = doc.terminal {
-            let lines_area = area.clip_bottom(1);
+            let lines_area = view.lines_area();
             let cursor = (is_focused && editor.mode() == Mode::Insert).then(|| {
                 theme
                     .get("ui.cursor.primary")
                     .add_modifier(helix_view::graphics::Modifier::REVERSED)
             });
             crate::terminal::render(id, lines_area, surface, theme.get("ui.background"), cursor);
-            if viewport.right() != view.area.right() {
-                let border_style = theme.get("ui.window");
-                for y in area.top()..area.bottom() {
-                    surface[(area.right(), y)]
-                        .set_symbol(tui::symbols::line::VERTICAL)
-                        .set_style(border_style);
-                }
-            }
-            let statusline_area = area.clip_top(area.height.saturating_sub(1)).clip_bottom(1);
+            Self::render_view_border(editor, view, viewport, surface);
+            let statusline_area = statusline_area(editor, view, viewport);
             let mut context =
                 statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
             statusline::render(&mut context, statusline_area, surface);
@@ -137,7 +130,7 @@ impl EditorView {
 
         // A plugin draws this buffer itself.
         if let Some(canvas) = &doc.plugin_canvas {
-            let lines_area = area.clip_bottom(1);
+            let lines_area = view.lines_area();
             surface.clear_with(lines_area, theme.get("ui.background"));
             for (row, line) in canvas.iter().take(lines_area.height as usize).enumerate() {
                 let y = lines_area.y + row as u16;
@@ -150,15 +143,8 @@ impl EditorView {
                     (x, _) = surface.set_stringn(x, y, text, left, theme.get(scope));
                 }
             }
-            if viewport.right() != view.area.right() {
-                let border_style = theme.get("ui.window");
-                for y in area.top()..area.bottom() {
-                    surface[(area.right(), y)]
-                        .set_symbol(tui::symbols::line::VERTICAL)
-                        .set_style(border_style);
-                }
-            }
-            let statusline_area = area.clip_top(area.height.saturating_sub(1)).clip_bottom(1);
+            Self::render_view_border(editor, view, viewport, surface);
+            let statusline_area = statusline_area(editor, view, viewport);
             let mut context =
                 statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
             statusline::render(&mut context, statusline_area, surface);
@@ -348,16 +334,7 @@ impl EditorView {
         );
 
         // if we're not at the edge of the screen, draw a right border
-        if viewport.right() != view.area.right() {
-            let x = area.right();
-            let border_style = theme.get("ui.window");
-            for y in area.top()..area.bottom() {
-                surface[(x, y)]
-                    .set_symbol(tui::symbols::line::VERTICAL)
-                    //.set_symbol(" ")
-                    .set_style(border_style);
-            }
-        }
+        Self::render_view_border(editor, view, viewport, surface);
 
         if config.inline_diagnostics.disabled()
             && config.end_of_line_diagnostics == DiagnosticFilter::Disable
@@ -365,15 +342,34 @@ impl EditorView {
             Self::render_diagnostics(doc, view, inner, surface, theme);
         }
 
-        let statusline_area = view
-            .area
-            .clip_top(view.area.height.saturating_sub(1))
-            .clip_bottom(1); // -1 from bottom to remove commandline
+        let statusline_area = statusline_area(editor, view, viewport);
 
         let mut context =
             statusline::RenderContext::new(editor, doc, view, is_focused, &self.spinners);
 
         statusline::render(&mut context, statusline_area, surface);
+    }
+
+    /// The border right of a view not at the screen's edge: down its rows,
+    /// and on its statusline when that is below the command line.
+    fn render_view_border(editor: &Editor, view: &View, viewport: Rect, surface: &mut Surface) {
+        if viewport.right() == view.area.right() {
+            return;
+        }
+        let area = view.area;
+        let style = editor.theme.get("ui.window");
+        let below = statusline_below_cmdline(editor, view, viewport);
+        let rows = area.top()..if below {
+            area.bottom() - 1
+        } else {
+            area.bottom()
+        };
+        let statusline = below.then(|| viewport.bottom() - 1);
+        for y in rows.chain(statusline) {
+            surface[(area.right(), y)]
+                .set_symbol(tui::symbols::line::VERTICAL)
+                .set_style(style);
+        }
     }
 
     pub fn render_rulers(
@@ -1618,6 +1614,35 @@ impl EditorView {
 
 /// Whether the focused doc's workspace is in restricted mode and running `trust` would
 /// change something visible at the workspace level.
+/// Whether `view`'s statusline is on the screen's last row, below the
+/// command line (`editor.statusline.position = "bottom"` and the view
+/// reaches the bottom).
+pub fn statusline_below_cmdline(editor: &Editor, view: &View, screen: Rect) -> bool {
+    editor.config().statusline.position == StatusLinePosition::Bottom
+        && view.area.height > 1
+        && view.area.bottom() + 1 == screen.bottom()
+}
+
+/// Whether the command line is one row up, above the statuslines below it.
+pub fn cmdline_above_statusline(editor: &Editor, screen: Rect) -> bool {
+    editor
+        .tree
+        .views()
+        .any(|(view, _)| statusline_below_cmdline(editor, view, screen))
+}
+
+/// Where `view`'s statusline is drawn (`editor.statusline.position`).
+pub fn statusline_area(editor: &Editor, view: &View, screen: Rect) -> Rect {
+    let y = if view.statusline_top {
+        view.area.y
+    } else if statusline_below_cmdline(editor, view, screen) {
+        screen.bottom() - 1
+    } else {
+        view.area.bottom().saturating_sub(1)
+    };
+    Rect::new(view.area.x, y, view.area.width, 1)
+}
+
 fn workspace_trust_indicator_visible(editor: &Editor) -> bool {
     if editor.workspace_trust.implicit_level()
         == helix_loader::workspace_trust::ImplicitTrustLevel::Insecure
@@ -2275,6 +2300,13 @@ impl Component for EditorView {
             }
         }
 
+        // The command line's row: above the statuslines when they are at
+        // the screen's bottom.
+        let area = if cmdline_above_statusline(cx.editor, area) {
+            area.clip_bottom(1)
+        } else {
+            area
+        };
         let key_width = 15u16; // for showing pending keys
         let mut status_msg_width = 0;
 
