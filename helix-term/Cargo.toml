@@ -92,7 +92,7 @@ serde = { version = "1.0", features = ["derive"] }
 dashmap = "6.2"
 
 parking_lot.workspace = true
-trash = { version = "5.2.9", default-features = false, optional = true }
+trash = { version = "5.2.9", default-features = false, features = ["coinit_apartmentthreaded"], optional = true }
 notify = "8"
 
 [target.'cfg(windows)'.dependencies]
