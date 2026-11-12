@@ -2073,7 +2073,7 @@ impl State {
         self.session(id)?.take();
         Ok(())
     }
-    /// Progress is a statusline segment ("progress-<token>").
+    /// Progress is a statusline segment (`progress-<token>`).
     fn show_progress(&mut self, token: u32, text: String) {
         let _ = self.set_statusline(format!("progress-{token}"), text);
     }

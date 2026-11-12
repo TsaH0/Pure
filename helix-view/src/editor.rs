@@ -1332,6 +1332,14 @@ pub enum CmdlineStyle {
     /// On the last line like `bottom`, completions in a box above the
     /// statusline, one per row with their category and what they do.
     Panel,
+    /// A bar across the top of the screen, completions in a box under it
+    /// (like a command palette).
+    Top,
+    /// A box at the cursor, completions in a list below the input.
+    Cursor,
+    /// On the last line, completions side by side on the line above it
+    /// (like Vim's wildmenu).
+    Wildmenu,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
