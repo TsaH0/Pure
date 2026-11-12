@@ -336,7 +336,7 @@ mod test {
         let texts = |open: &BTreeSet<PathBuf>, hidden| {
             rows(&root, open, hidden)
                 .into_iter()
-                .map(|(item, _)| (item.text, item.depth))
+                .map(|(item, ..)| (item.text, item.depth))
                 .collect::<Vec<_>>()
         };
         let mut open = BTreeSet::new();
@@ -355,7 +355,7 @@ mod test {
             ]
         );
         assert_eq!(texts(&BTreeSet::new(), true).len(), 3);
-        let (row, path) = rows(&root, &open, false).swap_remove(2);
+        let (row, path, _) = rows(&root, &open, false).swap_remove(2);
         assert_eq!(row.command.as_deref(), Some("open"));
         assert_eq!(path, root.join("src/main.rs"));
         std::fs::remove_dir_all(&root).unwrap();
