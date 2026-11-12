@@ -339,6 +339,15 @@ These scopes are used for theming the editor interface:
 | `ui.cmdline.popup`                | The popup and panel command lines (`editor.cmdline.style`), falls back to `ui.popup`           |
 | `ui.cmdline.border`               | Its border, falls back to `ui.window`                                                          |
 | `ui.cmdline.title`                | Its title, falls back to `ui.text.focus`                                                       |
+| `ui.cmdline.hint`                 | The keys hint in its title, falls back to `ui.cmdline.border`                                  |
+| `ui.cmdline`                      | The command line row, falls back to `ui.background`                                            |
+| `ui.cmdline.prompt`               | The prompt (`:`, `search:`) or its icon, falls back to `ui.text` (`ui.text.focus` in the popup) |
+| `ui.cmdline.input`                | What is typed, falls back to `ui.text`                                                         |
+| `ui.cmdline.suggestion`           | The last entry shown before typing, falls back to `ui.text.inactive`                           |
+| `ui.cmdline.menu`                 | Completions, falls back to `ui.menu` (`ui.text` in the popup and panel)                        |
+| `ui.cmdline.menu.selected`        | The selected completion, falls back to `ui.menu.selected`                                      |
+| `ui.cmdline.category`             | Commands' categories in the popup and panel, falls back to `ui.text.inactive`                  |
+| `ui.cmdline.description`          | What commands do, in the popup and panel, falls back to `ui.text.inactive`                     |
 | `ui.picker.header`                | Header row area in pickers with multiple columns                                               |
 | `ui.picker.header.column`         | Column names in pickers with multiple columns                                                  |
 | `ui.picker.header.column.active`  | The column name in pickers with multiple columns where the cursor is entering into.            |

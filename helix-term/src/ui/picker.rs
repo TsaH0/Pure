@@ -383,7 +383,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             None,
             ui::completers::none,
             |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
-        );
+        )
+        .embedded();
 
         let widths = columns
             .iter()

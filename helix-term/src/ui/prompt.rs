@@ -9,7 +9,22 @@ use std::sync::Arc;
 use std::{borrow::Cow, ops::RangeFrom};
 use tui::buffer::Buffer as Surface;
 use tui::text::Span;
-use tui::widgets::{Block, Widget};
+use tui::widgets::{Block, BorderType, Widget};
+
+/// `key` from the theme, or `fallback` when the theme doesn't set it.
+fn scope(theme: &helix_view::Theme, key: &str, fallback: &str) -> helix_view::graphics::Style {
+    theme.try_get(key).unwrap_or_else(|| theme.get(fallback))
+}
+
+fn border_type(border: helix_view::editor::CmdlineBorder) -> BorderType {
+    use helix_view::editor::CmdlineBorder as B;
+    match border {
+        B::Plain => BorderType::Plain,
+        B::Rounded => BorderType::Rounded,
+        B::Double => BorderType::Double,
+        B::Thick => BorderType::Thick,
+    }
+}
 
 use helix_core::{
     unicode::segmentation::{GraphemeCursor, UnicodeSegmentation},
@@ -53,6 +68,9 @@ pub struct Prompt {
     pub describe_fn: Option<DescribeFn>,
     next_char_handler: Option<PromptCharHandler>,
     language: Option<(&'static str, Arc<ArcSwap<syntax::Loader>>)>,
+    /// Drawn inside another component (a picker's search line): always a
+    /// plain line in the area it gets, whatever `editor.cmdline` says.
+    embedded: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -110,7 +128,41 @@ impl Prompt {
             describe_fn: None,
             next_char_handler: None,
             language: None,
+            embedded: false,
         }
+    }
+
+    /// The prompt as shown: its icon (`editor.cmdline.icons`) if it has one.
+    fn shown_prompt(&self, editor: &Editor) -> Cow<'_, str> {
+        if self.embedded {
+            return Cow::Borrowed(&self.prompt);
+        }
+        let config = editor.config();
+        let icons = &config.cmdline.icons;
+        match icons
+            .get(&*self.prompt)
+            .or_else(|| icons.get(self.prompt.trim()))
+        {
+            Some(icon) => Cow::Owned(icon.clone()),
+            None => Cow::Borrowed(&self.prompt),
+        }
+    }
+
+    /// The style for `key` in the command line (falling back to
+    /// `fallback`); a picker's search line keeps `fallback`.
+    fn style(&self, editor: &Editor, key: &str, fallback: &str) -> helix_view::graphics::Style {
+        if self.embedded {
+            editor.theme.get(fallback)
+        } else {
+            scope(&editor.theme, key, fallback)
+        }
+    }
+
+    /// A prompt drawn inside another component, as a picker's search line:
+    /// not styled as the command line.
+    pub fn embedded(mut self) -> Self {
+        self.embedded = true;
+        self
     }
 
     /// Gets the byte index in the input representing the current cursor location.
@@ -409,7 +461,12 @@ const BASE_WIDTH: u16 = 30;
 
 impl Prompt {
     pub fn render_prompt(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        // The statuslines can be below the command line.
+        if self.embedded {
+            return self.render_bottom_style(area, surface, cx);
+        }
+        // Rows can be left empty below the command line, and the
+        // statuslines can be below it.
+        let area = area.clip_bottom(cx.editor.config().statusline.position.empty_rows());
         let below = crate::ui::editor::cmdline_above_statusline(cx.editor, area);
         let area = if below { area.clip_bottom(1) } else { area };
         match cx.editor.config().cmdline.style {
@@ -419,9 +476,19 @@ impl Prompt {
             }
             helix_view::editor::CmdlineStyle::Bottom => {}
         }
-        let theme = &cx.editor.theme;
-        let completion_color = theme.get("ui.menu");
-        let selected_color = theme.get("ui.menu.selected");
+        self.render_bottom_style(area, surface, cx);
+    }
+
+    /// Helix's command line: the input on the last line of `area`, the
+    /// completions above it.
+    fn render_bottom_style(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        let completion_color = self.style(cx.editor, "ui.cmdline.menu", "ui.menu");
+        let selected_color = self.style(cx.editor, "ui.cmdline.menu.selected", "ui.menu.selected");
+        let max_rows = if self.embedded {
+            10
+        } else {
+            cx.editor.config().cmdline.bottom_rows
+        };
         // completion
 
         let max_len = self
@@ -437,7 +504,7 @@ impl Prompt {
 
         let height = (self.completion.len() as u16)
             .div_ceil(cols)
-            .min(10) // at most 10 rows (or less)
+            .min(max_rows)
             .min(area.height.saturating_sub(1));
 
         let completion_area = Rect::new(
@@ -449,7 +516,7 @@ impl Prompt {
 
         if completion_area.height > 0 && !self.completion.is_empty() {
             let area = completion_area;
-            let background = theme.get("ui.menu");
+            let background = completion_color;
 
             let items = height as usize * cols as usize;
 
@@ -531,17 +598,16 @@ impl Prompt {
 
     /// The prompt and the input on the last line.
     fn render_bottom_line(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        let prompt_color = cx.editor.theme.get("ui.text");
-        let background = cx.editor.theme.get("ui.background");
+        let prompt_color = self.style(cx.editor, "ui.cmdline.prompt", "ui.text");
+        let background = self.style(cx.editor, "ui.cmdline", "ui.background");
         let line = area.height - 1;
         surface.clear_with(area.clip_top(line), background);
         // render buffer text
-        surface.set_string(area.x, area.y + line, &self.prompt, prompt_color);
+        let prompt = self.shown_prompt(cx.editor);
+        let prompt_width = prompt.width() as u16;
+        surface.set_string(area.x, area.y + line, &prompt, prompt_color);
 
-        self.line_area = area
-            .clip_left(self.prompt.len() as u16)
-            .clip_top(line)
-            .clip_right(2);
+        self.line_area = area.clip_left(prompt_width).clip_top(line).clip_right(2);
         self.render_input(surface, cx);
     }
 
@@ -555,17 +621,12 @@ impl Prompt {
         surface: &mut Surface,
         cx: &mut Context,
     ) {
-        let config = cx.editor.config().cmdline;
+        let config = cx.editor.config().cmdline.clone();
         let theme = &cx.editor.theme;
-        let panel = theme
-            .try_get("ui.cmdline.popup")
-            .unwrap_or_else(|| theme.get("ui.popup"));
-        let border = theme
-            .try_get("ui.cmdline.border")
-            .unwrap_or_else(|| theme.get("ui.window"));
-        let title_style = theme
-            .try_get("ui.cmdline.title")
-            .unwrap_or_else(|| theme.get("ui.text.focus"));
+        let panel = scope(theme, "ui.cmdline.popup", "ui.popup");
+        let border = scope(theme, "ui.cmdline.border", "ui.window");
+        let title_style = scope(theme, "ui.cmdline.title", "ui.text.focus");
+        let hint_style = theme.try_get("ui.cmdline.hint").unwrap_or(border);
 
         // Leave the last two lines: the statusline and the input (only the
         // input when the statuslines are below it, out of `area`).
@@ -589,12 +650,24 @@ impl Prompt {
                 other => format!(" {}", other.trim_end_matches(':')),
             };
             surface.clear_with(frame, panel);
+            let mut spans = Vec::new();
+            if config.title {
+                spans.push(Span::styled(title, title_style));
+            }
+            if config.hints {
+                spans.push(Span::styled(
+                    if config.title {
+                        " · ↑/↓ select · Tab complete "
+                    } else {
+                        " ↑/↓ select · Tab complete "
+                    },
+                    hint_style,
+                ));
+            }
             Block::bordered()
                 .border_style(border)
-                .title(tui::text::Spans::from(vec![
-                    Span::styled(title, title_style),
-                    Span::styled(" · ↑/↓ select · Tab complete ", border),
-                ]))
+                .border_type(border_type(config.border))
+                .title(tui::text::Spans::from(spans))
                 .render(frame, surface);
             self.render_list(frame.inner(Margin::all(1)), surface, cx.editor);
             bottom = frame.y;
@@ -608,18 +681,13 @@ impl Prompt {
     /// The popup command line: a box in the middle with the input, then the
     /// completions as a list (with what they do), like noice.nvim.
     fn render_popup(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
-        let config = cx.editor.config().cmdline;
+        let config = cx.editor.config().cmdline.clone();
         let theme = &cx.editor.theme;
-        let popup = theme
-            .try_get("ui.cmdline.popup")
-            .unwrap_or_else(|| theme.get("ui.popup"));
-        let border = theme
-            .try_get("ui.cmdline.border")
-            .unwrap_or_else(|| theme.get("ui.window"));
-        let title_style = theme
-            .try_get("ui.cmdline.title")
-            .unwrap_or_else(|| theme.get("ui.text.focus"));
-        let prompt_style = theme.get("ui.text.focus");
+        let popup = scope(theme, "ui.cmdline.popup", "ui.popup");
+        let border = scope(theme, "ui.cmdline.border", "ui.window");
+        let title_style = scope(theme, "ui.cmdline.title", "ui.text.focus");
+        let hint_style = theme.try_get("ui.cmdline.hint").unwrap_or(border);
+        let prompt_style = scope(theme, "ui.cmdline.prompt", "ui.text.focus");
 
         let width = ((area.width as u32 * config.popup_width.clamp(20, 100) as u32) / 100) as u16;
         let width = width
@@ -629,8 +697,10 @@ impl Prompt {
             .min(config.popup_rows)
             .min(area.height.saturating_sub(8));
         let height = 3 + if rows > 0 { rows + 1 } else { 0 };
-        let x = area.x + (area.width - width) / 2;
-        let y = area.y + (area.height / 5).min(area.height.saturating_sub(height + 1));
+        let free = (area.width - width) as u32;
+        let x = area.x + (free * config.popup_left.min(100) as u32 / 100) as u16;
+        let top = (area.height as u32 * config.popup_top.min(100) as u32 / 100) as u16;
+        let y = area.y + top.min(area.height.saturating_sub(height + 1));
         let frame = Rect::new(x, y, width, height.min(area.height));
 
         let title = match self.prompt.trim() {
@@ -638,27 +708,29 @@ impl Prompt {
             "/" | "?" => " Search".to_string(),
             other => format!(" {}", other.trim_end_matches(':')),
         };
-        let hints = if rows > 0 {
-            " · ↑/↓ select · Tab complete "
-        } else {
-            " "
+        let hints = match (rows > 0 && config.hints, config.title) {
+            (true, true) => " · ↑/↓ select · Tab complete ",
+            (true, false) => " ↑/↓ select · Tab complete ",
+            (false, true) => " ",
+            (false, false) => "",
         };
         surface.clear_with(frame, popup);
+        let mut spans = Vec::new();
+        if config.title {
+            spans.push(Span::styled(title, title_style));
+        }
+        spans.push(Span::styled(hints, hint_style));
+        let border_type = border_type(config.border);
         Block::bordered()
             .border_style(border)
-            .title(tui::text::Spans::from(vec![
-                Span::styled(title, title_style),
-                Span::styled(hints, border),
-            ]))
+            .border_type(border_type)
+            .title(tui::text::Spans::from(spans))
             .render(frame, surface);
         let inner = frame.inner(Margin::all(1));
 
         // The input line.
-        let prompt = if self.prompt.is_empty() {
-            "> "
-        } else {
-            &*self.prompt
-        };
+        let shown = self.shown_prompt(cx.editor);
+        let prompt = if shown.is_empty() { "> " } else { &*shown };
         surface.set_string(inner.x + 1, inner.y, prompt, prompt_style);
         self.line_area = Rect::new(
             inner.x + 1 + prompt.width() as u16,
@@ -670,13 +742,14 @@ impl Prompt {
         // The completions, one per row.
         if rows > 0 {
             let separator = inner.y + 1;
+            let lines = BorderType::line_symbols(border_type);
             for col in frame.left()..frame.right() {
                 let symbol = if col == frame.left() {
-                    "├"
+                    lines.vertical_right
                 } else if col == frame.right() - 1 {
-                    "┤"
+                    lines.vertical_left
                 } else {
-                    "─"
+                    lines.horizontal
                 };
                 surface[(col, separator)]
                     .set_symbol(symbol)
@@ -710,15 +783,15 @@ impl Prompt {
     /// The completions in `list`, one per row: category, name and what it
     /// does (`editor.cmdline.descriptions`).
     fn render_list(&self, list: Rect, surface: &mut Surface, editor: &Editor) {
-        let config = editor.config().cmdline;
+        let config = editor.config().cmdline.clone();
         let theme = &editor.theme;
-        let border = theme
-            .try_get("ui.cmdline.border")
-            .unwrap_or_else(|| theme.get("ui.window"));
-        let selected_style = theme.get("ui.menu.selected");
-        let category_style = theme.get("ui.text.inactive");
-        let name_style = theme.get("ui.text");
-        let doc_style = theme.get("ui.text.inactive");
+        let border = scope(theme, "ui.cmdline.border", "ui.window");
+        let selected_style = scope(theme, "ui.cmdline.menu.selected", "ui.menu.selected");
+        let category_style = scope(theme, "ui.cmdline.category", "ui.text.inactive");
+        let name_style = scope(theme, "ui.cmdline.menu", "ui.text");
+        let doc_style = scope(theme, "ui.cmdline.description", "ui.text.inactive");
+        let marker_width = config.selected_marker.width() as u16;
+        let blank_marker = " ".repeat(marker_width as usize);
         let rows = list.height;
         let offset = self
             .selection
@@ -751,9 +824,13 @@ impl Prompt {
             let index = offset + row;
             let selected = Some(index) == self.selection;
             let mut col = list.x;
-            let marker = if selected { "▸ " } else { "  " };
+            let marker = if selected {
+                config.selected_marker.as_str()
+            } else {
+                blank_marker.as_str()
+            };
             surface.set_string(col, y, marker, border);
-            col += 2;
+            col += marker_width;
             let end = list.right();
             if let Some((category, doc, aliases)) = description {
                 if category_width > 0 {
@@ -797,9 +874,8 @@ impl Prompt {
 
     /// The text typed so far, in `self.line_area`.
     fn render_input(&mut self, surface: &mut Surface, cx: &mut Context) {
-        let theme = &cx.editor.theme;
-        let prompt_color = theme.get("ui.text");
-        let suggestion_color = theme.get("ui.text.inactive");
+        let prompt_color = self.style(cx.editor, "ui.cmdline.input", "ui.text");
+        let suggestion_color = self.style(cx.editor, "ui.cmdline.suggestion", "ui.text.inactive");
         if self.line.is_empty() {
             self.anchor = 0;
             // Show the most recently entered value as a suggestion.
@@ -1050,18 +1126,25 @@ impl Component for Prompt {
     }
 
     fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
-        let area = if crate::ui::editor::cmdline_above_statusline(editor, area) {
+        let area = if self.embedded {
+            area
+        } else {
+            area.clip_bottom(editor.config().statusline.position.empty_rows())
+        };
+        let area = if !self.embedded && crate::ui::editor::cmdline_above_statusline(editor, area) {
             area.clip_bottom(1)
         } else {
             area
         };
-        let popup = editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup;
+        let popup = !self.embedded
+            && editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup;
         let area = if popup {
             // Where `render_popup` put the input.
             self.line_area.with_height(1)
         } else {
-            area.clip_left(self.prompt.len() as u16)
-                .clip_right(if self.prompt.is_empty() { 2 } else { 0 })
+            let prompt = self.shown_prompt(editor);
+            area.clip_left(prompt.width() as u16)
+                .clip_right(if prompt.is_empty() { 2 } else { 0 })
         };
 
         let mut col = area.left() as usize + self.line[self.anchor..self.cursor].width();

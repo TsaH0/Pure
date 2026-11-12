@@ -88,11 +88,32 @@ and plugins) look.
 | `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte | `"bottom"` |
 | `popup-width` | Width of the popup or panel in percent of the screen (the panel is left-aligned) | `70` |
 | `popup-rows` | Most completions the popup or panel lists | `15` |
+| `popup-top` | Where the popup's top is, in percent of the screen's height (`0` the top line) | `20` |
+| `popup-left` | Where the popup is across, in percent: `0` at the left edge, `50` in the middle, `100` at the right edge | `50` |
+| `bottom-rows` | Most completion rows the `bottom` command line shows | `10` |
 | `descriptions` | In the popup and panel, show each command's category, what it does and its aliases (plugin commands too) | `true` |
+| `border` | The popup's and panel's border: `"plain"`, `"rounded"`, `"double"` or `"thick"` | `"plain"` |
+| `title` | Show the box's title (`Command`, `Search`...) | `true` |
+| `hints` | Show the keys hint (`↑/↓ select · Tab complete`) in the box's title | `true` |
+| `icons` | Shown in place of a prompt, by prompt: `{ ":" = "λ ", "search:" = "/ " }` | `{}` |
+| `selected-marker` | Marks the selected completion in the popup and panel | `"▸ "` |
+
+Pickers' search lines (`space f`, `space /`...) are part of the picker and
+keep their look whatever the style.
+
+Colours come from the theme: `ui.cmdline.popup`, `ui.cmdline.border`,
+`ui.cmdline.title`, `ui.cmdline.hint`, `ui.cmdline.prompt`,
+`ui.cmdline.input`, `ui.cmdline.suggestion`, `ui.cmdline.menu`,
+`ui.cmdline.menu.selected`, `ui.cmdline.category`,
+`ui.cmdline.description` and `ui.cmdline` (the command line row); see
+[Themes](./themes.md).
 
 ```toml
 [editor.cmdline]
 style = "popup"
+border = "rounded"
+popup-top = 10
+icons = { ":" = "λ ", "search:" = "/ " }
 ```
 
 A Runyte-like editor: the panel across the whole width, and a statusline
@@ -171,7 +192,7 @@ The `[editor.statusline]` key takes the following sub-keys:
 
 | Key           | Description | Default |
 | ---           | ---         | ---     |
-| `position`    | Where statuslines go: `"bottom"` (the screen's last line, below the command line), `"above-cmdline"` (each view's last line, above the command line, as in Helix) or `"top"` (each view's first line). In horizontal splits, `"bottom"` moves only the lowest views' statuslines; the others stay at their view's bottom. Change it while editing with `:set statusline.position top`. | `"bottom"` |
+| `position`    | Where statuslines go: `"bottom"` (the screen's last line, below the command line), `"above-cmdline"` (each view's last line, above the command line, as in Helix) or `"top"` (each view's first line), or a number of rows above the screen's last line: `0` is `"bottom"`, `1` is `"above-cmdline"`, and `2` or more lifts the statusline and the command line under it, leaving the rows below them empty (for terminals whose bottom rows are hidden). In horizontal splits, `"bottom"` moves only the lowest views' statuslines; the others stay at their view's bottom. Change it while editing with `:set statusline.position top` or `:set statusline.position 2`. | `"bottom"` |
 | `left`        | A list of elements aligned to the left of the statusline | `["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]` |
 | `center`      | A list of elements aligned to the middle of the statusline | `[]` |
 | `right`       | A list of elements aligned to the right of the statusline | `["diagnostics", "selections", "register", "position", "file-encoding"]` |
