@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-08a2033d.js";
+            window.path_to_searchindex_js = "searchindex-d437bd1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c7f75167.js"></script>
@@ -618,6 +618,15 @@ See also <a href="https://github.com/helix-editor/helix/issues/2380">#2380</a></
 <tr><td><code>ui.cmdline.popup</code></td><td>The popup and panel command lines (<code>editor.cmdline.style</code>), falls back to <code>ui.popup</code></td></tr>
 <tr><td><code>ui.cmdline.border</code></td><td>Its border, falls back to <code>ui.window</code></td></tr>
 <tr><td><code>ui.cmdline.title</code></td><td>Its title, falls back to <code>ui.text.focus</code></td></tr>
+<tr><td><code>ui.cmdline.hint</code></td><td>The keys hint in its title, falls back to <code>ui.cmdline.border</code></td></tr>
+<tr><td><code>ui.cmdline</code></td><td>The command line row, falls back to <code>ui.background</code></td></tr>
+<tr><td><code>ui.cmdline.prompt</code></td><td>The prompt (<code>:</code>, <code>search:</code>) or its icon, falls back to <code>ui.text</code> (<code>ui.text.focus</code> in the popup)</td></tr>
+<tr><td><code>ui.cmdline.input</code></td><td>What is typed, falls back to <code>ui.text</code></td></tr>
+<tr><td><code>ui.cmdline.suggestion</code></td><td>The last entry shown before typing, falls back to <code>ui.text.inactive</code></td></tr>
+<tr><td><code>ui.cmdline.menu</code></td><td>Completions, falls back to <code>ui.menu</code> (<code>ui.text</code> in the popup and panel)</td></tr>
+<tr><td><code>ui.cmdline.menu.selected</code></td><td>The selected completion, falls back to <code>ui.menu.selected</code></td></tr>
+<tr><td><code>ui.cmdline.category</code></td><td>Commands’ categories in the popup and panel, falls back to <code>ui.text.inactive</code></td></tr>
+<tr><td><code>ui.cmdline.description</code></td><td>What commands do, in the popup and panel, falls back to <code>ui.text.inactive</code></td></tr>
 <tr><td><code>ui.picker.header</code></td><td>Header row area in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column</code></td><td>Column names in pickers with multiple columns</td></tr>
 <tr><td><code>ui.picker.header.column.active</code></td><td>The column name in pickers with multiple columns where the cursor is entering into.</td></tr>

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "colibri";
             const default_dark_theme = "colibri";
-            window.path_to_searchindex_js = "searchindex-08a2033d.js";
+            window.path_to_searchindex_js = "searchindex-d437bd1f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-c7f75167.js"></script>
@@ -280,12 +280,31 @@ and plugins) look.</p>
 <tr><td><code>style</code></td><td><code>"bottom"</code>: the last line, completions above it. <code>"popup"</code>: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. <code>"panel"</code>: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte</td><td><code>"bottom"</code></td></tr>
 <tr><td><code>popup-width</code></td><td>Width of the popup or panel in percent of the screen (the panel is left-aligned)</td><td><code>70</code></td></tr>
 <tr><td><code>popup-rows</code></td><td>Most completions the popup or panel lists</td><td><code>15</code></td></tr>
+<tr><td><code>popup-top</code></td><td>Where the popup’s top is, in percent of the screen’s height (<code>0</code> the top line)</td><td><code>20</code></td></tr>
+<tr><td><code>popup-left</code></td><td>Where the popup is across, in percent: <code>0</code> at the left edge, <code>50</code> in the middle, <code>100</code> at the right edge</td><td><code>50</code></td></tr>
+<tr><td><code>bottom-rows</code></td><td>Most completion rows the <code>bottom</code> command line shows</td><td><code>10</code></td></tr>
 <tr><td><code>descriptions</code></td><td>In the popup and panel, show each command’s category, what it does and its aliases (plugin commands too)</td><td><code>true</code></td></tr>
+<tr><td><code>border</code></td><td>The popup’s and panel’s border: <code>"plain"</code>, <code>"rounded"</code>, <code>"double"</code> or <code>"thick"</code></td><td><code>"plain"</code></td></tr>
+<tr><td><code>title</code></td><td>Show the box’s title (<code>Command</code>, <code>Search</code>…)</td><td><code>true</code></td></tr>
+<tr><td><code>hints</code></td><td>Show the keys hint (<code>↑/↓ select · Tab complete</code>) in the box’s title</td><td><code>true</code></td></tr>
+<tr><td><code>icons</code></td><td>Shown in place of a prompt, by prompt: <code>{ ":" = "λ ", "search:" = "/ " }</code></td><td><code>{}</code></td></tr>
+<tr><td><code>selected-marker</code></td><td>Marks the selected completion in the popup and panel</td><td><code>"▸ "</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>Pickers’ search lines (<code>space f</code>, <code>space /</code>…) are part of the picker and
+keep their look whatever the style.</p>
+<p>Colours come from the theme: <code>ui.cmdline.popup</code>, <code>ui.cmdline.border</code>,
+<code>ui.cmdline.title</code>, <code>ui.cmdline.hint</code>, <code>ui.cmdline.prompt</code>,
+<code>ui.cmdline.input</code>, <code>ui.cmdline.suggestion</code>, <code>ui.cmdline.menu</code>,
+<code>ui.cmdline.menu.selected</code>, <code>ui.cmdline.category</code>,
+<code>ui.cmdline.description</code> and <code>ui.cmdline</code> (the command line row); see
+<a href="./themes.html">Themes</a>.</p>
 <pre><code class="language-toml">[editor.cmdline]
 style = "popup"
+border = "rounded"
+popup-top = 10
+icons = { ":" = "λ ", "search:" = "/ " }
 </code></pre>
 <p>A Runyte-like editor: the panel across the whole width, and a statusline
 with the mode as a coloured block, then the file and the workspace:</p>
@@ -348,7 +367,7 @@ workspace-diagnostics = ["warning", "error"]
 <tr><th>Key</th><th>Description</th><th>Default</th></tr>
 </thead>
 <tbody>
-<tr><td><code>position</code></td><td>Where statuslines go: <code>"bottom"</code> (the screen’s last line, below the command line), <code>"above-cmdline"</code> (each view’s last line, above the command line, as in Helix) or <code>"top"</code> (each view’s first line). In horizontal splits, <code>"bottom"</code> moves only the lowest views’ statuslines; the others stay at their view’s bottom. Change it while editing with <code>:set statusline.position top</code>.</td><td><code>"bottom"</code></td></tr>
+<tr><td><code>position</code></td><td>Where statuslines go: <code>"bottom"</code> (the screen’s last line, below the command line), <code>"above-cmdline"</code> (each view’s last line, above the command line, as in Helix) or <code>"top"</code> (each view’s first line), or a number of rows above the screen’s last line: <code>0</code> is <code>"bottom"</code>, <code>1</code> is <code>"above-cmdline"</code>, and <code>2</code> or more lifts the statusline and the command line under it, leaving the rows below them empty (for terminals whose bottom rows are hidden). In horizontal splits, <code>"bottom"</code> moves only the lowest views’ statuslines; the others stay at their view’s bottom. Change it while editing with <code>:set statusline.position top</code> or <code>:set statusline.position 2</code>.</td><td><code>"bottom"</code></td></tr>
 <tr><td><code>left</code></td><td>A list of elements aligned to the left of the statusline</td><td><code>["mode", "spinner", "file-name", "read-only-indicator", "file-modification-indicator"]</code></td></tr>
 <tr><td><code>center</code></td><td>A list of elements aligned to the middle of the statusline</td><td><code>[]</code></td></tr>
 <tr><td><code>right</code></td><td>A list of elements aligned to the right of the statusline</td><td><code>["diagnostics", "selections", "register", "position", "file-encoding"]</code></td></tr>
