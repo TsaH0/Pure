@@ -2243,6 +2243,9 @@ impl Component for EditorView {
                 _ => false,
             };
 
+        // Rows left empty below everything (`editor.statusline.position`
+        // as a number).
+        let area = area.clip_bottom(config.statusline.position.empty_rows());
         // -1 for commandline and -1 for bufferline
         let mut editor_area = area.clip_bottom(1);
         if use_bufferline {

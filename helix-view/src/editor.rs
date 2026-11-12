@@ -811,18 +811,76 @@ impl Default for ModeConfig {
     }
 }
 
-/// Where statuslines are drawn (`editor.statusline.position`).
+/// Where statuslines are drawn (`editor.statusline.position`): a name, or
+/// a number of rows above the screen's last row.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(try_from = "StatusLinePositionRepr", into = "StatusLinePositionRepr")]
 pub enum StatusLinePosition {
-    /// On the screen's last line, below the command line. Views above
-    /// others (in horizontal splits) keep theirs at their bottom.
+    /// On the screen's last line, below the command line (`0`). Views
+    /// above others (in horizontal splits) keep theirs at their bottom.
     #[default]
     Bottom,
-    /// At the bottom of each view, above the command line (Helix's).
+    /// At the bottom of each view, above the command line (Helix's, `1`).
     AboveCmdline,
     /// On the first line of each view.
     Top,
+    /// This many rows above the screen's last row (2 or more): the
+    /// statusline, the command line under it, then empty rows.
+    Rows(u16),
+}
+
+impl StatusLinePosition {
+    /// Rows left empty at the bottom of the screen, below the command line.
+    pub fn empty_rows(self) -> u16 {
+        match self {
+            Self::Rows(rows) => rows.saturating_sub(1),
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StatusLinePositionRepr {
+    Rows(u16),
+    /// A name, or a number written as text (`:set statusline.position 3`).
+    Text(String),
+}
+
+impl TryFrom<StatusLinePositionRepr> for StatusLinePosition {
+    type Error = String;
+
+    fn try_from(repr: StatusLinePositionRepr) -> Result<Self, String> {
+        let rows = match repr {
+            StatusLinePositionRepr::Rows(rows) => rows,
+            StatusLinePositionRepr::Text(text) => match text.trim() {
+                "bottom" => return Ok(Self::Bottom),
+                "above-cmdline" => return Ok(Self::AboveCmdline),
+                "top" => return Ok(Self::Top),
+                other => other.parse().map_err(|_| {
+                    format!(
+                        "statusline position '{other}': use bottom, above-cmdline, top or a number of rows"
+                    )
+                })?,
+            },
+        };
+        Ok(match rows {
+            0 => Self::Bottom,
+            1 => Self::AboveCmdline,
+            rows => Self::Rows(rows),
+        })
+    }
+}
+
+impl From<StatusLinePosition> for StatusLinePositionRepr {
+    fn from(position: StatusLinePosition) -> Self {
+        match position {
+            StatusLinePosition::Bottom => Self::Text("bottom".into()),
+            StatusLinePosition::AboveCmdline => Self::Text("above-cmdline".into()),
+            StatusLinePosition::Top => Self::Text("top".into()),
+            StatusLinePosition::Rows(rows) => Self::Rows(rows),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1276,17 +1334,34 @@ pub enum CmdlineStyle {
     Panel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CmdlineConfig {
     pub style: CmdlineStyle,
-    /// Width of the popup, in percent of the screen.
+    /// Width of the popup and panel boxes, in percent of the screen.
     pub popup_width: u16,
-    /// Most completion rows the popup shows.
+    /// Most completion rows the popup and the panel show.
     pub popup_rows: u16,
+    /// Where the popup's top is, in percent of the screen's height.
+    pub popup_top: u16,
+    /// Where the popup is across the screen, in percent: 0 at the left
+    /// edge, 50 in the middle, 100 at the right edge.
+    pub popup_left: u16,
+    /// Most completion rows the bottom command line shows.
+    pub bottom_rows: u16,
     /// Show what commands do (and their category and aliases) next to the
     /// completions, in the popup.
     pub descriptions: bool,
+    /// The popup's and panel's border.
+    pub border: CmdlineBorder,
+    /// Show the box's title (`Command`, `Search`...).
+    pub title: bool,
+    /// Show the keys hint (`↑/↓ select · Tab complete`) in the box's title.
+    pub hints: bool,
+    /// Shown in place of a prompt, by prompt: `{ ":" = " ", "/" = " " }`.
+    pub icons: HashMap<String, String>,
+    /// Marks the selected completion in the popup and the panel.
+    pub selected_marker: String,
 }
 
 impl Default for CmdlineConfig {
@@ -1295,9 +1370,28 @@ impl Default for CmdlineConfig {
             style: CmdlineStyle::Bottom,
             popup_width: 70,
             popup_rows: 15,
+            popup_top: 20,
+            popup_left: 50,
+            bottom_rows: 10,
             descriptions: true,
+            border: CmdlineBorder::Plain,
+            title: true,
+            hints: true,
+            icons: HashMap::new(),
+            selected_marker: "▸ ".to_string(),
         }
     }
+}
+
+/// The command line box's border (`editor.cmdline.border`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CmdlineBorder {
+    #[default]
+    Plain,
+    Rounded,
+    Double,
+    Thick,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3108,4 +3202,28 @@ fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
         ));
     }
     fs::rename(from, to)
+}
+
+#[cfg(test)]
+mod statusline_position_test {
+    use super::*;
+
+    #[test]
+    fn statusline_position_takes_names_and_numbers() {
+        let parse = |value: &str| {
+            toml::from_str::<StatusLineConfig>(&format!("position = {value}")).map(|c| c.position)
+        };
+        assert_eq!(parse("\"top\"").unwrap(), StatusLinePosition::Top);
+        assert_eq!(parse("\"bottom\"").unwrap(), StatusLinePosition::Bottom);
+        assert_eq!(
+            parse("\"above-cmdline\"").unwrap(),
+            StatusLinePosition::AboveCmdline
+        );
+        assert_eq!(parse("0").unwrap(), StatusLinePosition::Bottom);
+        assert_eq!(parse("1").unwrap(), StatusLinePosition::AboveCmdline);
+        assert_eq!(parse("3").unwrap(), StatusLinePosition::Rows(3));
+        assert_eq!(parse("\"4\"").unwrap(), StatusLinePosition::Rows(4));
+        assert!(parse("\"middle\"").is_err());
+        assert_eq!(StatusLinePosition::Rows(3).empty_rows(), 2);
+    }
 }
