@@ -181,3 +181,45 @@ async fn command_line_icons_borders_titles_and_placement() -> anyhow::Result<()>
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_line_top_cursor_and_wildmenu_styles() -> anyhow::Result<()> {
+    use helix_view::editor::{CmdlineConfig, CmdlineStyle};
+    let style = |style| CmdlineConfig {
+        style,
+        ..Default::default()
+    };
+
+    // Top: the input on the first line, the completions in a box under it.
+    let mut app = cmdline_app(style(CmdlineStyle::Top))?;
+    helpers::send_keys(&mut app, ":wri<tab>").await;
+    assert!(row(&app, 0).starts_with(" :write"), "{:?}", row(&app, 0));
+    assert!(row(&app, 1).starts_with("┌"), "{:?}", row(&app, 1));
+    assert!(row(&app, 2).contains(":write"), "{:?}", row(&app, 2));
+    helpers::send_keys(&mut app, "<esc>").await;
+    assert!(!row(&app, 0).contains(":write"));
+
+    // Cursor: a box right under the cursor's line, at its column (after
+    // the line numbers).
+    let mut app = cmdline_app(style(CmdlineStyle::Cursor))?;
+    helpers::send_keys(&mut app, ":wri").await;
+    assert!(
+        row(&app, 1).trim_start().starts_with("2  ┌"),
+        "{:?}",
+        row(&app, 1)
+    );
+    assert!(row(&app, 2).contains(":wri"), "{:?}", row(&app, 2));
+
+    // Wildmenu: completions side by side above the input.
+    let mut app = cmdline_app(style(CmdlineStyle::Wildmenu))?;
+    let last = app.terminal_buffer().area.bottom() - 1;
+    helpers::send_keys(&mut app, ":wri<tab>").await;
+    let menu = row(&app, last - 2);
+    assert!(menu.starts_with("write  write!  "), "{menu:?}");
+    assert!(
+        row(&app, last - 1).starts_with(":write"),
+        "{:?}",
+        row(&app, last - 1)
+    );
+    Ok(())
+}

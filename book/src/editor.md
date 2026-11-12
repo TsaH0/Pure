@@ -85,7 +85,7 @@ and plugins) look.
 
 | Key | Description | Default |
 | --- | --- | --- |
-| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte | `"bottom"` |
+| `style` | `"bottom"`: the last line, completions above it. `"popup"`: a box in the middle of the screen with the input and the completions in a list below it, like noice.nvim. `"panel"`: the input on the last line, the completions in a box above it and the statusline, one per row, like Runyte. `"top"`: a bar across the top of the screen, the completions in a box under it, like a command palette. `"cursor"`: a box by the cursor, the completions listed under the input. `"wildmenu"`: the input on the last line, the completions side by side on the line above it, like Vim's wildmenu | `"bottom"` |
 | `popup-width` | Width of the popup or panel in percent of the screen (the panel is left-aligned) | `70` |
 | `popup-rows` | Most completions the popup or panel lists | `15` |
 | `popup-top` | Where the popup's top is, in percent of the screen's height (`0` the top line) | `20` |

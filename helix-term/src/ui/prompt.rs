@@ -470,7 +470,21 @@ impl Prompt {
         let below = crate::ui::editor::cmdline_above_statusline(cx.editor, area);
         let area = if below { area.clip_bottom(1) } else { area };
         match cx.editor.config().cmdline.style {
-            helix_view::editor::CmdlineStyle::Popup => return self.render_popup(area, surface, cx),
+            helix_view::editor::CmdlineStyle::Popup => {
+                return self.render_popup(area, None, surface, cx)
+            }
+            helix_view::editor::CmdlineStyle::Cursor => {
+                let at = cx
+                    .editor
+                    .cursor()
+                    .0
+                    .map(|pos| (pos.col as u16, pos.row as u16));
+                return self.render_popup(area, Some(at.unwrap_or((area.x, area.y))), surface, cx);
+            }
+            helix_view::editor::CmdlineStyle::Top => return self.render_top(area, surface, cx),
+            helix_view::editor::CmdlineStyle::Wildmenu => {
+                return self.render_wildmenu(area, surface, cx)
+            }
             helix_view::editor::CmdlineStyle::Panel => {
                 return self.render_panel(area, below, surface, cx)
             }
@@ -680,7 +694,16 @@ impl Prompt {
 
     /// The popup command line: a box in the middle with the input, then the
     /// completions as a list (with what they do), like noice.nvim.
-    fn render_popup(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+    /// The popup command line: a box with the input, then the completions
+    /// as a list. In the middle of the screen (`popup-top`, `popup-left`),
+    /// or by the cursor at `at` (the `cursor` style).
+    fn render_popup(
+        &mut self,
+        area: Rect,
+        at: Option<(u16, u16)>,
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
         let config = cx.editor.config().cmdline.clone();
         let theme = &cx.editor.theme;
         let popup = scope(theme, "ui.cmdline.popup", "ui.popup");
@@ -697,10 +720,24 @@ impl Prompt {
             .min(config.popup_rows)
             .min(area.height.saturating_sub(8));
         let height = 3 + if rows > 0 { rows + 1 } else { 0 };
-        let free = (area.width - width) as u32;
-        let x = area.x + (free * config.popup_left.min(100) as u32 / 100) as u16;
-        let top = (area.height as u32 * config.popup_top.min(100) as u32 / 100) as u16;
-        let y = area.y + top.min(area.height.saturating_sub(height + 1));
+        let (x, y) = match at {
+            // Under the cursor's line, or above it when there's no room.
+            Some((col, row)) => {
+                let x = col.min(area.right().saturating_sub(width)).max(area.x);
+                let y = if row + 1 + height <= area.bottom() {
+                    row + 1
+                } else {
+                    row.saturating_sub(height).max(area.y)
+                };
+                (x, y)
+            }
+            None => {
+                let free = (area.width - width) as u32;
+                let x = area.x + (free * config.popup_left.min(100) as u32 / 100) as u16;
+                let top = (area.height as u32 * config.popup_top.min(100) as u32 / 100) as u16;
+                (x, area.y + top.min(area.height.saturating_sub(height + 1)))
+            }
+        };
         let frame = Rect::new(x, y, width, height.min(area.height));
 
         let title = match self.prompt.trim() {
@@ -761,23 +798,147 @@ impl Prompt {
 
         // The current command's documentation, under the box.
         if !config.descriptions || rows == 0 {
-            if let Some(doc) = (self.doc_fn)(&self.line) {
-                let mut text = ui::Text::new(doc.to_string());
-                let (_, doc_height) = ui::text::required_size(&text.contents, width - 4);
-                let doc_area =
-                    area.intersection(Rect::new(x, frame.bottom(), width, doc_height + 2));
-                if doc_area.height > 2 {
-                    let help = theme.get("ui.help");
-                    surface.clear_with(doc_area, help);
-                    let block = Block::bordered().border_style(help);
-                    let inner = block.inner(doc_area).inner(Margin::horizontal(1));
-                    block.render(doc_area, surface);
-                    text.render(inner, surface, cx);
-                }
-            }
+            self.render_doc_below(area, x, frame.bottom(), width, surface, cx);
         }
 
         self.render_input(surface, cx);
+    }
+
+    /// The current command's documentation in a box from row `y` down.
+    fn render_doc_below(
+        &self,
+        area: Rect,
+        x: u16,
+        y: u16,
+        width: u16,
+        surface: &mut Surface,
+        cx: &mut Context,
+    ) {
+        if let Some(doc) = (self.doc_fn)(&self.line) {
+            let mut text = ui::Text::new(doc.to_string());
+            let (_, doc_height) = ui::text::required_size(&text.contents, width.saturating_sub(4));
+            let doc_area = area.intersection(Rect::new(x, y, width, doc_height + 2));
+            if doc_area.height > 2 {
+                let help = cx.editor.theme.get("ui.help");
+                surface.clear_with(doc_area, help);
+                let block = Block::bordered().border_style(help);
+                let inner = block.inner(doc_area).inner(Margin::horizontal(1));
+                block.render(doc_area, surface);
+                text.render(inner, surface, cx);
+            }
+        }
+    }
+
+    /// The top command line: the input in a bar across the screen's first
+    /// line, the completions in a box under it, one per row.
+    fn render_top(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        let config = cx.editor.config().cmdline.clone();
+        let theme = &cx.editor.theme;
+        let bar = scope(theme, "ui.cmdline", "ui.statusline");
+        let panel = scope(theme, "ui.cmdline.popup", "ui.popup");
+        let border = scope(theme, "ui.cmdline.border", "ui.window");
+        let title_style = scope(theme, "ui.cmdline.title", "ui.text.focus");
+        let hint_style = theme.try_get("ui.cmdline.hint").unwrap_or(border);
+        let prompt_style = scope(theme, "ui.cmdline.prompt", "ui.text.focus");
+
+        let line = area.with_height(1);
+        surface.clear_with(line, bar);
+        let shown = self.shown_prompt(cx.editor);
+        let prompt = if shown.is_empty() { "> " } else { &*shown };
+        surface.set_string(line.x + 1, line.y, prompt, prompt_style);
+        let prompt_width = prompt.width() as u16;
+        self.line_area = line.clip_left(1 + prompt_width).clip_right(1);
+
+        let width = ((area.width as u32 * config.popup_width.clamp(20, 100) as u32) / 100) as u16;
+        let width = width.max(area.width.min(40)).min(area.width);
+        let rows = (self.completion.len() as u16)
+            .min(config.popup_rows)
+            .min(area.height.saturating_sub(4));
+        if rows > 0 {
+            let frame = Rect::new(area.x, area.y + 1, width, rows + 2);
+            surface.clear_with(frame, panel);
+            let mut spans = Vec::new();
+            if config.title {
+                spans.push(Span::styled(
+                    match self.prompt.trim() {
+                        ":" => " Commands".to_string(),
+                        other => format!(" {}", other.trim_end_matches(':')),
+                    },
+                    title_style,
+                ));
+            }
+            if config.hints {
+                spans.push(Span::styled(" ↑/↓ select · Tab complete ", hint_style));
+            }
+            Block::bordered()
+                .border_style(border)
+                .border_type(border_type(config.border))
+                .title(tui::text::Spans::from(spans))
+                .render(frame, surface);
+            self.render_list(frame.inner(Margin::all(1)), surface, cx.editor);
+            if !config.descriptions {
+                self.render_doc_below(area, area.x, frame.bottom(), width, surface, cx);
+            }
+        } else {
+            self.render_doc_below(area, area.x, area.y + 1, width, surface, cx);
+        }
+        self.render_input(surface, cx);
+    }
+
+    /// The wildmenu command line: the input on the last line, the
+    /// completions side by side on the line above it, the selected one
+    /// highlighted and kept in view.
+    fn render_wildmenu(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        let menu = self.style(cx.editor, "ui.cmdline.menu", "ui.statusline");
+        let selected = self.style(cx.editor, "ui.cmdline.menu.selected", "ui.menu.selected");
+        let row = area.bottom().saturating_sub(2);
+        if !self.completion.is_empty() && area.height > 1 {
+            let line = Rect::new(area.x, row, area.width, 1);
+            surface.clear_with(line, menu);
+            let separator = "  ";
+            let widths: Vec<u16> = self
+                .completion
+                .iter()
+                .map(|(_, c)| c.content.width() as u16)
+                .collect();
+            // The first item shown: as far left as keeps the selection in.
+            let room = area.width.saturating_sub(4);
+            let mut first = 0;
+            if let Some(selection) = self.selection {
+                let mut used = 0u16;
+                first = selection;
+                while first > 0 {
+                    let next = widths[first - 1] + separator.len() as u16;
+                    if used + widths[selection] + next > room {
+                        break;
+                    }
+                    used += next;
+                    first -= 1;
+                }
+            }
+            let mut x = area.x;
+            if first > 0 {
+                surface.set_string(x, row, "< ", menu);
+                x += 2;
+            }
+            for (i, (_, completion)) in self.completion.iter().enumerate().skip(first) {
+                let end = area.right().saturating_sub(2);
+                if x + widths[i] > end {
+                    surface.set_string(end, row, " >", menu);
+                    break;
+                }
+                let style = if Some(i) == self.selection {
+                    selected
+                } else {
+                    menu.patch(completion.style)
+                };
+                surface.set_string(x, row, &completion.content, style);
+                x += widths[i] + separator.len() as u16;
+            }
+        } else {
+            self.render_doc(area, area.bottom().saturating_sub(1), surface, cx);
+        }
+        self.render_bottom_line(area, surface, cx);
     }
 
     /// The completions in `list`, one per row: category, name and what it
@@ -1137,7 +1298,12 @@ impl Component for Prompt {
             area
         };
         let popup = !self.embedded
-            && editor.config().cmdline.style == helix_view::editor::CmdlineStyle::Popup;
+            && matches!(
+                editor.config().cmdline.style,
+                helix_view::editor::CmdlineStyle::Popup
+                    | helix_view::editor::CmdlineStyle::Cursor
+                    | helix_view::editor::CmdlineStyle::Top
+            );
         let area = if popup {
             // Where `render_popup` put the input.
             self.line_area.with_height(1)
