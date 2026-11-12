@@ -128,7 +128,7 @@ impl Config {
         Ok(res)
     }
 
-    /// [`Self::load_default_files`] with the modes of `modes/*.toml` in the
+    /// `load_default_files` with the modes of `modes/*.toml` in the
     /// runtime directories and the config directory added (the config
     /// directory's, then `config.toml`'s of the same name win). Bad mode
     /// files are logged and skipped.

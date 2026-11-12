@@ -179,3 +179,13 @@ pub fn pre_command_with(
 }
 
 pub fn lsp_notification(_server: &str, _method: &str, _params: &helix_lsp::jsonrpc::Params) {}
+
+pub fn mouse_event(
+    _editor: &mut Editor,
+    _jobs: &mut crate::job::Jobs,
+    _event: &helix_view::input::MouseEvent,
+) -> bool {
+    false
+}
+
+pub fn debug_event(_name: &str, _body: Option<&serde_json::Value>) {}

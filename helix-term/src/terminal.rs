@@ -154,7 +154,7 @@ pub fn spawn(
     };
     let mut master = -1;
     let mut slave = -1;
-    let size = libc::winsize {
+    let mut size = libc::winsize {
         ws_row: rows,
         ws_col: cols,
         ws_xpixel: 0,
@@ -167,7 +167,8 @@ pub fn spawn(
             &mut slave,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &size,
+            // `*mut` on macOS, `*const` on Linux.
+            &raw mut size,
         )
     };
     if opened != 0 {

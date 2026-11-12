@@ -573,6 +573,7 @@ pub mod menu_events {
     }
 
     /// The open menu, as of the last change.
+    #[cfg_attr(not(feature = "plugins"), allow(dead_code))]
     pub fn snapshot() -> Option<MenuSnapshot> {
         MENU.lock().clone()
     }

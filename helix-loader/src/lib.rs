@@ -129,21 +129,21 @@ fn pure_dir(base: PathBuf) -> PathBuf {
     }
 }
 
-/// `~/.config/pure` (or `~/.config/helix`, see [`pure_dir`]).
+/// `~/.config/pure` (or `~/.config/helix`, which it falls back to while only that exists).
 pub fn config_dir() -> PathBuf {
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the config directory!");
     pure_dir(strategy.config_dir())
 }
 
-/// `~/.cache/pure` (or `~/.cache/helix`, see [`pure_dir`]).
+/// `~/.cache/pure` (or `~/.cache/helix`, which it falls back to while only that exists).
 pub fn cache_dir() -> PathBuf {
     // TODO: allow env var override
     let strategy = choose_base_strategy().expect("Unable to find the cache directory!");
     pure_dir(strategy.cache_dir())
 }
 
-/// `~/.local/share/pure` (or `~/.local/share/helix`, see [`pure_dir`]).
+/// `~/.local/share/pure` (or `~/.local/share/helix`, which it falls back to while only that exists).
 pub fn data_dir() -> PathBuf {
     let strategy = choose_base_strategy().expect("Unable to find the data directory!");
     pure_dir(strategy.data_dir())
